@@ -12,6 +12,16 @@ export const maxDuration = 60;
 
 const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
 const arr = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? v.slice(0, n) : []);
+const num = (v: unknown) => (Number.isFinite(Number(v)) ? Math.max(0, Math.floor(Number(v))) : 0);
+// Trust boundary: only known numeric stats reach the prompt.
+const cleanStats = (s: Record<string, unknown> | undefined) => ({
+  fileCount: num(s?.fileCount),
+  totalLines: num(s?.totalLines),
+  todoCount: num(s?.todoCount),
+  maxNesting: num(s?.maxNesting),
+  hasTests: s?.hasTests === true,
+  biggestFile: { path: str((s?.biggestFile as { path?: unknown })?.path, 200), lines: num((s?.biggestFile as { lines?: unknown })?.lines) },
+});
 const obj = (properties: Record<string, object>) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
 const S = { type: 'string' };
 const CITE = obj({ path: S, startLine: { type: 'integer' }, endLine: { type: 'integer' } });
@@ -50,11 +60,11 @@ export async function POST(req: Request) {
 
   try {
     if (b.stage === 'suspects') {
-      const modules = arr<{ id: string; title: string; path: string; stats: object; filePaths: string[] }>(b.modules, 8).map((m) => ({
+      const modules = arr<{ id: string; title: string; path: string; stats: Record<string, unknown>; filePaths: string[] }>(b.modules, 8).map((m) => ({
         moduleId: str(m?.id, 200),
         title: str(m?.title, 100),
         path: str(m?.path, 200),
-        stats: m?.stats,
+        stats: cleanStats(m?.stats),
         files: arr<string>(m?.filePaths, 60).map((p) => str(p, 200)),
       }));
       const ids = modules.map((m) => m.moduleId);

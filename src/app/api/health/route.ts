@@ -1,9 +1,11 @@
+import { rateLimited } from '@/lib/gemini';
 import { llmStream } from '@/lib/llm';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-export async function GET() {
+export async function GET(req: Request) {
+  if (rateLimited(req)) return Response.json({ ok: false, error: 'rate limited' }, { status: 429 });
   try {
     const stream = await llmStream('health', {
       system: 'You are a dry, deadpan English speaker. No emojis, no exclamation marks.',
