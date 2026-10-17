@@ -1,6 +1,6 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmJSON } from '@/lib/llm';
-import { VOICE_GUIDE } from '@/lib/voice';
+import { levelBlock, levelReminder, VOICE_GUIDE } from '@/lib/voice';
 import { fallbackCharacter, toRaw, type RawCharacter } from '@/lib/characters';
 import type { Module, ModuleStats } from '@/lib/types';
 
@@ -17,7 +17,7 @@ ${VOICE_GUIDE}
 Hard rules:
 - Characters may only state facts present in the input (stats, file names, the code shown). Never invent numbers, functions or files.
 - Every line must contain at least one real fact from the input.
-- Write clean spice level (no swearing).
+- Never name or insult real people, including the repo's authors; aim everything at the code.
 - gossip: 4 lines per character, max 18 words each, dry, about other modules or itself, each with a real fact.
 - Across the whole cast, at least two gossip lines should hint at the most suspicious interaction between modules visible in the code shown (for example a timeout shorter than another module's processing time, or a retry with no safety check), without naming a bug.`;
 
@@ -98,8 +98,11 @@ export async function POST(req: Request) {
   let source: 'llm' | 'fallback' = 'llm';
   try {
     const out = await llmJSON<{ characters: unknown }>('characters', {
-      system: SYSTEM,
-      prompt: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values.\n\nModules:\n${JSON.stringify(input)}`,
+      system: `${levelBlock(body?.spice)}
+- The title stays printable; the attitude goes in the personality, catchphrase, greeting and gossip.
+
+${SYSTEM}`,
+      prompt: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values.\n\nModules:\n${JSON.stringify(input)}\n\n${levelReminder(body?.spice)}`,
       schema: SCHEMA,
       timeoutMs: 25_000,
     });

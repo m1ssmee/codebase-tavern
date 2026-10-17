@@ -22,9 +22,17 @@ function chain(): Provider[] {
 let oai: OpenAI | null = null;
 const openai = () => (oai ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
 
-// 429 / 503 / quota / missing key → try the next provider. Anything else is a real error.
+// 429 / 503 / quota / missing key / blocked or empty output → try the next provider. Anything else is a real error.
 const fallsThrough = (err: unknown) =>
-  /\b(429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|quota|insufficient_quota|rate.?limit|overloaded|is not set)\b/i.test(String(err));
+  /\b(429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|quota|insufficient_quota|rate.?limit|overloaded|is not set|blocked|empty)\b/i.test(String(err));
+
+// Gemini finish reasons that mean "the model refused / was filtered", not "the model finished".
+const BLOCKED = /SAFETY|BLOCKLIST|PROHIBITED|SPII|RECITATION/;
+class Blocked extends Error {
+  constructor(provider: string, why: string) {
+    super(`blocked or empty response from ${provider}: ${why}`);
+  }
+}
 
 async function run<T>(label: string, fn: (p: Provider) => Promise<T>): Promise<T> {
   let last: unknown;
@@ -54,7 +62,11 @@ export function llmStream(label: string, opts: { system: string; messages: Msg[]
         config: { ...FAST, systemInstruction: opts.system, temperature: 0.8, maxOutputTokens: opts.maxTokens ?? 2048 },
       });
       chunks = (async function* () {
-        for await (const c of res) if (c.text) yield c.text;
+        for await (const c of res) {
+          const why = c.promptFeedback?.blockReason ?? c.candidates?.[0]?.finishReason;
+          if (c.text) yield c.text;
+          else if (why && BLOCKED.test(String(why))) throw new Blocked(p.name, String(why));
+        }
       })();
     } else {
       const res = await openai().chat.completions.create({
@@ -65,13 +77,23 @@ export function llmStream(label: string, opts: { system: string; messages: Msg[]
         messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
       });
       chunks = (async function* () {
-        for await (const c of res) if (c.choices[0]?.delta?.content) yield c.choices[0].delta.content;
+        for await (const c of res) {
+          const ch = c.choices[0];
+          if (ch?.delta?.content) yield ch.delta.content;
+          else if (ch?.delta?.refusal || ch?.finish_reason === 'content_filter') throw new Blocked(p.name, ch.finish_reason ?? 'refusal');
+        }
       })();
     }
+    // Peek at the first text chunk before committing to this provider: a blocked or empty reply
+    // falls through to the next one instead of reaching the user as an empty message.
+    const it = chunks[Symbol.asyncIterator]();
+    const first = await it.next();
+    if (first.done) throw new Blocked(p.name, 'no text');
     return new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          for await (const t of chunks) controller.enqueue(enc.encode(t));
+          controller.enqueue(enc.encode(first.value));
+          for (let r = await it.next(); !r.done; r = await it.next()) controller.enqueue(enc.encode(r.value));
         } catch (err) {
           console.error(`[llm] ${label} stream failed:`, err);
         }
@@ -101,7 +123,9 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
           abortSignal: AbortSignal.timeout(timeout),
         },
       });
-      return JSON.parse(res.text ?? '') as T;
+      const why = res.promptFeedback?.blockReason ?? res.candidates?.[0]?.finishReason;
+      if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
+      return parseJSON<T>(res.text, p.name);
     }
     const res = await openai().chat.completions.create(
       {
@@ -115,6 +139,16 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
       },
       { timeout },
     );
-    return JSON.parse(res.choices[0].message.content ?? '') as T;
+    const ch = res.choices[0];
+    if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
+    return parseJSON<T>(ch.message.content, p.name);
   });
+}
+
+function parseJSON<T>(text: string, provider: string): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Blocked(provider, 'unparseable JSON'); // treat like an empty reply: next provider
+  }
 }

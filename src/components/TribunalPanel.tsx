@@ -85,6 +85,11 @@ export default function TribunalPanel() {
     }
     if (stop.current) return;
     airhorn(useTavern.getState().muted);
+    // nuclear: the whole screen shakes for the verdict (CSS; disabled for reduced motion).
+    if (useTavern.getState().spice === 'nuclear') {
+      document.body.classList.add('nuclear-shake');
+      setTimeout(() => document.body.classList.remove('nuclear-shake'), 650);
+    }
     mood(r.suspects, 'happy');
     mood(r.verdict.culprits, 'guilty');
     setVerdict(r.verdict);

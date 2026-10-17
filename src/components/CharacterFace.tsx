@@ -2,6 +2,7 @@
 import { motion, useReducedMotion, type TargetAndTransition, type Transition } from 'framer-motion';
 import { faceTraits, hash, PALETTE } from '@/lib/characters';
 import type { ModuleStats, Mood } from '@/lib/types';
+import { useTavern } from '@/lib/store';
 
 const INK = '#17110e';
 const loop = (duration: number, extra: Transition = {}): Transition => ({ duration, repeat: Infinity, ease: 'easeInOut', ...extra });
@@ -38,10 +39,16 @@ export default function CharacterFace({
   const ey = cy - ry * 0.12;
   const accessory = (h >> 3) % 4;
   const sweat = t.sweaty || mood === 'accused';
+  // Spice-driven extras: feral+ talking faces go red and steam; nuclear culprits burst into smoke.
+  const spice = useTavern((s) => s.spice);
+  const heated = mood === 'talking' && (spice === 'feral' || spice === 'nuclear');
+  const poof = mood === 'guilty' && spice === 'nuclear';
 
   // Body motion per mood (outer group), shiver for untested modules (inner group).
   const body: { animate: TargetAndTransition; transition: Transition } =
-    mood === 'guilty'
+    poof
+      ? { animate: { rotate: 0, x: 0, y: 0, scale: reduced ? 0 : [1, 1.25, 0] }, transition: reduced ? { duration: 0 } : { duration: 0.45, times: [0, 0.4, 1] } }
+      : mood === 'guilty'
       ? { animate: { rotate: 90, x: 0, y: 4 }, transition: reduced ? { duration: 0 } : { type: 'spring', stiffness: 120, damping: 9 } }
       : calm
         ? { animate: { rotate: 0, x: 0, y: 0 }, transition: { duration: 0.2 } }
@@ -149,6 +156,7 @@ export default function CharacterFace({
           {accessory === 3 &&
             [-1, 1].map((d) => <circle key={d} cx={50 + d * rx * 0.62} cy={cy - ry * 0.78} r={8} fill={fill} stroke={INK} strokeWidth={4} />)}
           <ellipse cx={50} cy={cy} rx={rx} ry={ry} fill={fill} stroke={INK} strokeWidth={5} />
+          {heated && <ellipse cx={50} cy={cy} rx={rx - 2.5} ry={ry - 2.5} fill="#ff2a1a" opacity={0.38} />}
           <ellipse cx={50 - rx * 0.45} cy={cy - ry * 0.5} rx={6} ry={3.5} fill="#fff" opacity={0.28} />
           {eyes()}
           {mouth()}
@@ -162,8 +170,38 @@ export default function CharacterFace({
               transition={calm ? {} : loop(1.3, { ease: 'easeIn' })}
             />
           )}
+          {heated &&
+            !calm &&
+            [-1, 1].map((d) => (
+              <motion.circle
+                key={d}
+                cx={50 + d * rx * 0.55}
+                cy={cy - ry + 2}
+                r={4.5}
+                fill="#f6efe6"
+                initial={{ opacity: 0 }}
+                animate={{ y: [0, -18], opacity: [0.85, 0], scale: [0.6, 1.7] }}
+                transition={loop(0.9, { ease: 'easeOut', delay: d > 0 ? 0.45 : 0 })}
+              />
+            ))}
         </motion.g>
       </motion.g>
+      {poof && (
+        // Cartoon smoke puff where the culprit used to be.
+        <motion.g
+          style={{ originX: 0.5, originY: 0.5 }}
+          initial={reduced ? false : { scale: 0.2, opacity: 0 }}
+          animate={{ scale: reduced ? 1 : [0.2, 1.3, 1.05], opacity: reduced ? 0.9 : [0, 1, 0.9] }}
+          transition={{ duration: 0.6, delay: reduced ? 0 : 0.3 }}
+        >
+          {[[-16, -4, 15], [0, -16, 16], [16, -4, 15], [-10, 12, 14], [10, 12, 14], [0, 2, 16]].map(([dx, dy, r], i) => (
+            <circle key={i} cx={50 + dx} cy={60 + dy} r={r} fill="#d8cfc4" stroke={INK} strokeWidth={3} />
+          ))}
+          {[[-16, -4, 15], [0, -16, 16], [16, -4, 15], [-10, 12, 14], [10, 12, 14], [0, 2, 16]].map(([dx, dy, r], i) => (
+            <circle key={`f${i}`} cx={50 + dx} cy={60 + dy} r={r - 3} fill="#d8cfc4" />
+          ))}
+        </motion.g>
+      )}
     </svg>
   );
 }

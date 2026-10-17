@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
 import { buildRepo, entryFile, nesting } from './analyze';
 import { toCharacters, toRaw, type RawCharacter } from './characters';
+import demoCharacters from '@/data/demoCharacters.json';
 
 type TavernState = {
   repo: Repo | null;
@@ -16,7 +17,7 @@ type TavernState = {
   muted: boolean;
   isLoading: boolean;
   tribunal: boolean;
-  // Code-smell reaction for the module whose file was just opened (spicy/unhinged only).
+  // Code-smell reaction for the module whose file was just opened (not in clean).
   smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
 
   loadRepo: (repo: Repo) => void;
@@ -54,7 +55,7 @@ export const useTavern = create<TavernState>()((set, get) => {
     openFilePath: null,
     highlight: null,
     chats: {},
-    spice: 'spicy',
+    spice: 'unhinged',
     mode: 'beginner',
     muted: false,
     isLoading: false,
@@ -152,17 +153,22 @@ export async function generateCharacters(repo: Repo): Promise<Character[]> {
       .map((p) => ({ path: p, head: byPath.get(p)!.split('\n', 40).join('\n') })),
   }));
   let raw: RawCharacter[] = [];
+  let live = false;
   try {
     const res = await fetch('/api/characters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repoName: repo.name, modules }),
+      body: JSON.stringify({ repoName: repo.name, modules, spice: useTavern.getState().spice }),
       signal: AbortSignal.timeout(45_000),
     });
-    raw = (await res.json()).characters ?? [];
+    const data = await res.json();
+    raw = data.characters ?? [];
+    live = data.source === 'llm';
   } catch {
     // network/timeout: toRaw below fills every module from templates
   }
+  // Demo safety: on the demo repo, a failed generation uses the saved cast instead of stat templates.
+  if (!live && repo.url?.includes('/quickcart') && demoCharacters.characters.length) raw = demoCharacters.characters as RawCharacter[];
   return toCharacters(repo.modules, toRaw(repo.modules, raw));
 }
 

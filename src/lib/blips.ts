@@ -1,4 +1,5 @@
 // Animal-Crossing-style gibberish: short square/triangle blips while a character's text streams.
+import { useTavern } from './store';
 let ctx: AudioContext | null = null;
 let next = 0; // audio-clock time of the next free blip slot
 
@@ -22,7 +23,9 @@ export function blipText(text: string, pitch: number, muted: boolean) {
     if (next > now + 0.6) break;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
-    osc.type = Math.random() < 0.5 ? 'square' : 'triangle';
+    // feral and nuclear sound harsher: sawtooth instead of square.
+    const harsh = ['feral', 'nuclear'].includes(useTavern.getState().spice);
+    osc.type = harsh ? (Math.random() < 0.5 ? 'sawtooth' : 'triangle') : Math.random() < 0.5 ? 'square' : 'triangle';
     osc.frequency.value = 260 * pitch * (0.85 + Math.random() * 0.3);
     const len = 0.04 + Math.random() * 0.02;
     gain.gain.setValueAtTime(0.035, next);

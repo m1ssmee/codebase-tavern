@@ -1,6 +1,6 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmJSON } from '@/lib/llm';
-import { VOICE_GUIDE } from '@/lib/voice';
+import { levelBlock, levelReminder, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
 import type { Citation } from '@/lib/types';
 
@@ -38,11 +38,6 @@ const TRIAL_SCHEMA = obj({
   }),
 });
 
-const SPICE: Record<string, string> = {
-  clean: 'clean = dry wit, no swearing.',
-  spicy: 'spicy = occasional swearing, sharper roasts.',
-  unhinged: 'unhinged = frequent swearing, brutal roasts of the code, still factual.',
-};
 
 type InSuspect = { id: string; title: string; personality: string; files: { path: string; content: string; truncated?: boolean }[]; allPaths: string[] };
 const numbered = (code: string) =>
@@ -111,9 +106,10 @@ export async function POST(req: Request) {
 
     const system = `You run the Incident Tribunal in Codebase Tavern: code modules, played as characters, argue about who caused a bug.
 
-${VOICE_GUIDE}
+${levelBlock(b.spice)}
+- In the turns, every module speaks at this level. The rootCause stays plain and professional; the judgeLine follows the level${b.spice === 'nuclear' ? ' (the judge swears too)' : ''}.
 
-Spice level: ${SPICE[b.spice] ?? SPICE.clean} Never slurs, hate speech or sexual content.
+${VOICE_GUIDE}
 
 Rules:
 - Find the real root cause from the code, comments and logs shown. Bugs often come from how modules interact: compare timeouts with processing times, look for retries without idempotency keys, check logs for duplicates.
@@ -133,7 +129,9 @@ ${suspects
 Files: ${s.allPaths.join(', ')}
 ${s.files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`,
   )
-  .join('\n\n')}`;
+  .join('\n\n')}
+
+${levelReminder(b.spice)}`;
 
     type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string } };
     const out = await llmJSON<Out>('tribunal-trial', { system, prompt, schema: TRIAL_SCHEMA, timeoutMs: 50_000 });

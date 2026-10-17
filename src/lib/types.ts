@@ -34,7 +34,7 @@ export type ChatMessage = {
   citations: Citation[];
 };
 
-export type SpiceLevel = 'clean' | 'spicy' | 'unhinged';
+export type SpiceLevel = 'clean' | 'unhinged' | 'feral' | 'nuclear'; // clean is hidden (Ctrl+Shift+C)
 export type ExplainMode = 'beginner' | 'expert';
 
 export type Repo = {

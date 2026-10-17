@@ -1,16 +1,11 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmStream, type Msg } from '@/lib/llm';
-import { VOICE_GUIDE } from '@/lib/voice';
+import { levelBlock, levelReminder, VOICE_GUIDE } from '@/lib/voice';
 import { CONTEXT_BUDGET } from '@/lib/context';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-const SPICE: Record<string, string> = {
-  clean: 'Spice: clean = dry wit, no swearing.',
-  spicy: 'Spice: spicy = occasional swearing, sharper roasts.',
-  unhinged: 'Spice: unhinged = frequent swearing, brutal roasts of the code, still factual.',
-};
 const MODE: Record<string, string> = {
   beginner: 'Mode: beginner. Plain language, define any technical term you use, at most one analogy.',
   expert: 'Mode: expert. Terse and technical; name the pattern or risk directly.',
@@ -49,6 +44,8 @@ export async function POST(req: Request) {
 Personality: ${str(b.character?.personality, 300)}
 Catchphrase: ${str(b.character?.catchphrase, 150)}
 
+${levelBlock(b.spice)}
+
 ${VOICE_GUIDE}
 
 Rules:
@@ -58,7 +55,6 @@ Rules:
 - Never invent code, files or behaviour. Only use the code below.
 - If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below.
 - If the answer is in a file marked [left out] or [truncated], say that file was left out of what you can see.
-- ${SPICE[b.spice] ?? SPICE.clean} Never slurs, hate speech or sexual content.
 - ${MODE[b.mode] ?? MODE.beginner}
 
 Other modules:
@@ -71,7 +67,9 @@ Lines elsewhere in the repo that import or mention you:
 ${arr<string>(b.dependents, 30).map((d) => '- ' + str(d, 300)).join('\n') || '- none found'}
 
 Your code:
-${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`;
+${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
+
+${levelReminder(b.spice)}`;
 
   // Providers want alternating turns starting with the user: map roles, drop leading assistant turns, merge repeats.
   const messages: Msg[] = [];

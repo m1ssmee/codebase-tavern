@@ -1,13 +1,15 @@
 'use client';
+import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Volume2, VolumeX } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
+// clean is deliberately missing: it's a hidden mode toggled with Ctrl+Shift+C.
 const SPICES: { value: SpiceLevel; label: string }[] = [
-  { value: 'clean', label: 'Clean' },
-  { value: 'spicy', label: 'Spicy' },
   { value: 'unhinged', label: 'Unhinged' },
+  { value: 'feral', label: 'Feral' },
+  { value: 'nuclear', label: 'Nuclear' },
 ];
 const MODES: ExplainMode[] = ['beginner', 'expert'];
 
@@ -32,6 +34,23 @@ function Segmented<T extends string>({ options, value, onChange }: { options: { 
 
 export default function TopBar() {
   const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal } = useTavern();
+  const before = useRef<SpiceLevel>('unhinged');
+
+  // Hidden clean mode: Ctrl+Shift+C toggles it, restoring whatever level was active before.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'c')) return;
+      e.preventDefault();
+      const s = useTavern.getState();
+      if (s.spice === 'clean') s.setSpice(before.current);
+      else {
+        before.current = s.spice;
+        s.setSpice('clean');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   return (
     <header className="flex flex-wrap items-center gap-3 border-b-2 border-edge bg-wood/80 px-4 py-2">
       <Link href="/" className="font-display text-2xl tracking-wide text-amber drop-shadow-[0_3px_0_#000]">
@@ -41,6 +60,11 @@ export default function TopBar() {
         <span className="truncate rounded-full bg-panel px-3 py-1 font-mono text-sm text-muted">{repo.name}</span>
       )}
       <div className="ml-auto flex flex-wrap items-center gap-3">
+        {spice === 'clean' && (
+          <span title="Hidden clean mode (Ctrl+Shift+C)" className="rounded-full border border-[#9be15d]/60 bg-[#9be15d]/15 px-2 py-0.5 text-xs font-bold text-[#9be15d]">
+            clean
+          </span>
+        )}
         <Segmented options={SPICES} value={spice} onChange={setSpice} />
         <Segmented options={MODES.map((m) => ({ value: m, label: m === 'beginner' ? 'Beginner' : 'Expert' }))} value={mode} onChange={setMode} />
         <button
