@@ -17,13 +17,17 @@ export function DomLayer() {
 
 const v = new Vector3();
 
-/** DOM pinned to a 3D point, centred on it. `worldSize`: scale so `px` pixels span that many world units (ortho zoom). */
-export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0, style }: {
+/**
+ * DOM pinned to a 3D point, centred on it. `worldSize`: scale so `px` pixels span that many world units (ortho zoom).
+ * `clamp`: slide sideways to stay inside the canvas (speech bubbles, tooltips).
+ */
+export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0, clamp = false, style }: {
   children: ReactNode;
   position?: [number, number, number];
   worldSize?: number;
   px?: number;
   z?: number;
+  clamp?: boolean;
   style?: CSSProperties;
 }) {
   const id = useId();
@@ -39,7 +43,12 @@ export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0
     if (!group.current || !el.current) return;
     v.setFromMatrixPosition(group.current.matrixWorld).project(camera);
     const s = worldSize && camera instanceof OrthographicCamera ? (camera.zoom * worldSize) / px : 1;
-    el.current.style.transform = `translate(${((v.x + 1) / 2) * size.width}px,${((1 - v.y) / 2) * size.height}px) translate(-50%,-50%) scale(${s})`;
+    let x = ((v.x + 1) / 2) * size.width;
+    if (clamp) {
+      const half = (el.current.offsetWidth * s) / 2 + 6;
+      x = Math.min(Math.max(x, half), Math.max(half, size.width - half));
+    }
+    el.current.style.transform = `translate(${x}px,${((1 - v.y) / 2) * size.height}px) translate(-50%,-50%) scale(${s})`;
     el.current.style.visibility = 'visible';
   });
   return <group ref={group} position={position} />;

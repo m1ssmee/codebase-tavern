@@ -1,0 +1,221 @@
+import { rateLimited } from '@/lib/gemini';
+import { llmJSON, llmStream, type Timing } from '@/lib/llm';
+import { levelBlock, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
+import { parseCitations } from '@/lib/citations';
+import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
+import { TurnScanner } from '@/lib/verdict';
+
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
+// "What if I change this?": at most two LLM calls. Stage "diff" (only when the change is a description) writes a
+// small unified diff, validated against the real file. The client then works out the impact list from the graph
+// (deterministic, the ground truth) and stage "assess" judges each module in it, streamed as NDJSON per item.
+
+const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
+const arr = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? v.slice(0, n) : []);
+const obj = (properties: Record<string, object>) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
+const S = { type: 'string' };
+const VERDICTS = ['breaks', 'at risk', 'fine', 'relieved'] as const;
+const DIFF_SCHEMA = obj({ title: S, diff: { type: 'string', description: 'Unified diff: ---/+++ headers, @@ hunks, then " "/-/+ lines.' } });
+const ASSESS_SCHEMA = obj({
+  items: { type: 'array', items: obj({ moduleId: S, verdict: { type: 'string', enum: [...VERDICTS] }, reason: S, reaction: S }) },
+  summary: obj({ update: S, check: S }),
+});
+
+const numbered = (lines: string[], first = 1) => lines.map((l, i) => `${first + i}| ${l}`).join('\n');
+const publicTimings = (ts: Timing[]) => ts.map((t) => ({ label: t.label, provider: t.provider, ok: t.ok, ms: t.ms, firstChunkMs: t.firstChunkMs, totalMs: t.totalMs }));
+
+export function GET(req: Request) {
+  if (new URL(req.url).searchParams.get('warm') !== '1') return new Response('Method Not Allowed', { status: 405 });
+  return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+}
+
+export async function POST(req: Request) {
+  if (rateLimited(req)) return Response.json({ error: 'busy' }, { status: 429 });
+  const b = await req.json().catch(() => null);
+  if (b?.stage === 'diff') return writeDiff(b);
+  if (b?.stage === 'assess') return assess(b);
+  return Response.json({ error: 'bad request' }, { status: 400 });
+}
+
+/** Call 1: description → one small diff to one file, checked against the real file before anyone sees it. */
+async function writeDiff(b: Record<string, unknown>) {
+  const path = str(b.path, 300);
+  const content = str(b.content, 400_000);
+  const description = str(b.description, 400).trim();
+  if (!path || !content || !description) return Response.json({ error: 'bad request' }, { status: 400 });
+  const lines = content.split('\n');
+  const start = Math.max(1, Math.min(Number(b.startLine) || 1, lines.length));
+  const end = Math.max(start, Math.min(Number(b.endLine) || start, lines.length));
+  // A window around the selection keeps the prompt small; hunks are located by context, so numbers needn't match.
+  const from = Math.max(1, start - 120);
+  const window = lines.slice(from - 1, Math.min(lines.length, end + 120));
+  try {
+    const out = await llmJSON<{ title: string; diff: string }>('whatif-diff', {
+      system: `You write one small unified diff for a change a developer wants to preview. Nothing is applied.
+- Change only ${path}, as few lines as possible, in the file's own style. Do not fix other problems.
+- Context lines start with a space and are copied exactly from the file, without the line numbers. Use "--- a/${path}" and "+++ b/${path}" headers and @@ hunks.
+- If the request is unclear, make the smallest change that matches it.
+- title: under 10 plain words naming the change with real names and values, e.g. "Raise UPSTREAM_TIMEOUT_MS to 5000".`,
+      prompt: `Request: ${description}\nSelected lines: ${path}:${start}-${end}\n\n=== ${path} (lines ${from}-${from + window.length - 1}) ===\n${numbered(window, from)}`,
+      schema: DIFF_SCHEMA,
+      timeoutMs: 30_000,
+    });
+    const fd = parseDiff(str(out?.diff, 8000), path).find((f) => f.path === path || path.endsWith('/' + f.path) || !f.path);
+    const applied = fd && applyDiff(content, { ...fd, path });
+    if (!applied || 'error' in applied || applied.added + applied.removed === 0) {
+      console.warn('[whatif] diff did not apply:', applied && 'error' in applied ? applied.error : 'no change for this file');
+      return Response.json({ error: 'unusable' }, { status: 422 });
+    }
+    return Response.json({ title: str(out.title, 120).trim() || description.slice(0, 80), diff: makeDiff(path, content, applied.text) });
+  } catch (err) {
+    console.error('[whatif] diff failed:', err);
+    return Response.json({ error: 'llm failed' }, { status: 502 });
+  }
+}
+
+type InItem = { moduleId: string; name: string; role: string; hops: number; via?: string; why: string; lines: Cite[]; usages: (Cite & { symbol: string })[] };
+type Cite = { path: string; line: number; endLine: number; code?: string };
+
+/** Call 2: one verdict per module in the deterministic list, streamed as each one closes. */
+async function assess(b: Record<string, unknown>) {
+  const cite = (c: Cite) => `[${str(c?.path, 300)}:${Number(c?.line) || 1}${Number(c?.endLine) > Number(c?.line) ? `-${Number(c.endLine)}` : ''}]`;
+  const items = arr<InItem>(b.items, 12).map((i) => ({
+    moduleId: str(i?.moduleId, 200),
+    name: str(i?.name, 100),
+    role: ['changed', 'upstream', 'downstream'].includes(i?.role) ? i.role : 'upstream',
+    hops: Math.max(0, Math.min(9, Number(i?.hops) || 0)),
+    via: str(i?.via, 200),
+    why: str(i?.why, 200),
+    lines: arr<Cite>(i?.lines, 8),
+    usages: arr<Cite & { symbol: string }>(i?.usages, 16),
+  }));
+  const ids = items.map((i) => i.moduleId).filter(Boolean);
+  // Models sometimes answer with the module's plain name ("root" for "(root)"): map those back to the id.
+  const alias = new Map(items.flatMap((i) => [[i.moduleId, i.moduleId], [i.moduleId.replace(/[()]/g, ''), i.moduleId], [i.name.split(',')[0].trim(), i.moduleId]]).map(([k, v]) => [k.toLowerCase(), v]));
+  const diff = str(b.diff, 8000);
+  if (!ids.length || !diff) return Response.json({ error: 'bad request' }, { status: 400 });
+
+  let budget = 110_000; // trust boundary: the code we show is re-capped here
+  const files = arr<{ path: string; content: string }>(b.files, 40).flatMap((f) => {
+    const content = str(f?.content, Math.max(0, budget));
+    budget -= content.length;
+    return content ? [{ path: str(f?.path, 300), lines: content.replace(/\n$/, '').split('\n'), truncated: content.length < (f?.content?.length ?? 0) }] : [];
+  });
+  const lineCount = new Map(files.map((f) => [f.path, f.lines.length]));
+  // Keep only citations to code the model was shown.
+  const clean = (text: string, keepCites = true) =>
+    parseCitations(text)
+      .map((seg) =>
+        typeof seg === 'string'
+          ? seg
+          : keepCites && seg.startLine >= 1 && seg.endLine <= (lineCount.get(seg.path) ?? 0)
+            ? `[${seg.path}:${seg.startLine}${seg.endLine !== seg.startLine ? `-${seg.endLine}` : ''}]`
+            : '',
+      )
+      .join('')
+      .replace(/ +([.,;])/g, '$1')
+      .trim();
+  const beginner = b.mode !== 'expert';
+  const level = typeof b.spice === 'string' && ['clean', 'unhinged', 'feral', 'nuclear'].includes(b.spice) ? b.spice : 'unhinged';
+
+  const system = `You narrate "What if I change this?" in Codebase Tavern: code modules are characters, and a developer is previewing a change. Nothing has been applied.
+
+${levelBlock(b.spice)}
+- Here the reaction is the only place for swearing and attitude: at this level each reaction carries it. The reason and summary sentences stay plain, clear and free of swearing at every level.
+
+${VOICE_GUIDE}
+
+Rules:
+- Return exactly one item per module in the impact list, with the same moduleId, in the same order. Never add a module. Code from other modules is evidence only: cite it, but never give those modules a verdict.
+- verdict:
+  - "breaks": after the change this module's code fails or misbehaves (it still uses a renamed or deleted symbol, reads a field that is gone, gets input it rejects).
+  - "at risk": it still works, but an assumption it relies on becomes fragile (timing, a missing check, a problem now hidden instead of fixed).
+  - "fine": nothing it does changes in practice.
+  - "relieved": the change removes a problem it had or makes its job safer, even if follow-up work remains (say what).
+  - A module whose problem is only made rarer, not removed, is "at risk", never "relieved".
+- reason: 1-2 plain sentences${beginner ? ' a beginner can follow (define technical terms in parentheses on first use, never square brackets)' : ''}, citing [path:line] or [path:start-end] from the numbered code below. Use the lines listed for that module where they apply. Never invent code.
+- reaction: one line in that module's own voice, first person, under 25 words, at the active spice level, built on a real fact (a number, a name, a line). No citations in the reaction.
+- If the change makes a failure rarer without removing its cause (for example a longer timeout while a retry without an idempotency key still exists), say it hides the problem rather than fixing it, and name the failure that remains and when it still happens (e.g. "a charge slower than 5000ms is still sent twice"). Say this in the affected modules' reasons, in at least one reaction, and in the first sentence of summary.update. Check the numbers in the code (timeouts, typical and worst-case times) before saying a change makes something more or less likely.
+- Remember how timeouts work across services: when a caller stops waiting, the service it called may still finish the work. A caller that then retries without an idempotency key (a unique ID that lets the receiver spot a repeat) can make the work happen twice, e.g. a second charge. Use this when a change touches timeouts or retries.
+- summary.update: 1-3 sentences: what else must change for this to be complete (files and functions), with citations.
+- summary.check: 1-3 sentences: which tests to run or add and which behaviours to verify.${beginner ? `\n- ${PLAIN_WORDS}` : ''}`;
+
+  const prompt = `Repo: ${str(b.repoName, 200)}
+Change: ${str(b.title, 200)}
+Diff (a preview, not applied):
+${diff}
+
+Impact list (from the import graph; comment on these modules only):
+${items
+  .map((i) => {
+    const role = i.role === 'changed' ? 'changed by this diff' : i.role === 'upstream' ? `upstream, ${i.hops} hop${i.hops === 1 ? '' : 's'}: ${i.why}` : `downstream: ${i.why}`;
+    const lines = i.lines.map((c) => `    ${cite(c)} ${str(c.code, 160)}`).join('\n');
+    const uses = i.usages.map((u) => `    uses ${str(u.symbol, 80)} at ${cite(u)} ${str(u.code, 160)}`).join('\n');
+    return `- ${i.moduleId} ("${i.name}"): ${role}\n${lines}${uses ? '\n' + uses : ''}`;
+  })
+  .join('\n')}
+
+Code (line numbers before "|"):
+${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.lines)}`).join('\n\n')}
+
+Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No swearing anywhere.' : 'Swear only in the reactions, at this level; the reason and summary sentences stay plain, with no swearing.'} Cite every claim in reasons and summary. Aim it at the code, never at people.`;
+
+  const started = Date.now();
+  const timings: Timing[] = [];
+  try {
+    const llm = await llmStream('whatif-assess', { system, messages: [{ role: 'user', text: prompt }], schema: ASSESS_SCHEMA, maxTokens: 4000, timeoutMs: 45_000, timings });
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (o: object) => controller.enqueue(enc.encode(JSON.stringify(o) + '\n'));
+        const scanner = new TurnScanner('items');
+        const seen = new Set<string>();
+        let full = '';
+        let firstItemMs: number | undefined;
+        const emit = (raw: unknown) => {
+          const x = raw as { moduleId?: string; verdict?: string; reason?: string; reaction?: string };
+          const id = alias.get(str(x?.moduleId, 200).trim().toLowerCase()) ?? '';
+          if (!ids.includes(id) || seen.has(id)) return; // only modules in the deterministic list, once each
+          seen.add(id);
+          firstItemMs ??= Date.now() - started;
+          send({
+            type: 'item',
+            item: {
+              moduleId: id,
+              verdict: (VERDICTS as readonly string[]).includes(x.verdict ?? '') ? x.verdict : 'at risk',
+              reason: clean(str(x.reason, 600)),
+              reaction: clean(str(x.reaction, 240), false),
+            },
+          });
+        };
+        try {
+          const reader = llm.getReader();
+          const dec = new TextDecoder();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = dec.decode(value, { stream: true });
+            full += text;
+            scanner.push(text).forEach(emit);
+          }
+          const out = JSON.parse(full) as { items?: unknown[]; summary?: { update?: string; check?: string } };
+          arr(out?.items, 12).forEach(emit); // anything the scanner missed
+          send({ type: 'summary', summary: { update: clean(str(out?.summary?.update, 800)), check: clean(str(out?.summary?.check, 800)) } });
+        } catch (err) {
+          console.error('[whatif] assess failed mid-stream:', err);
+          send({ type: 'error' });
+        }
+        const summary = { firstItemMs, totalMs: Date.now() - started, items: seen.size, of: ids.length };
+        console.info('[whatif] assess timings', JSON.stringify({ ...summary, calls: timings }));
+        send({ type: 'timings', ...summary, calls: publicTimings(timings) });
+        controller.close();
+      },
+    });
+    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' } });
+  } catch (err) {
+    console.error('[whatif] assess failed:', err);
+    return Response.json({ error: 'llm failed' }, { status: 502 });
+  }
+}

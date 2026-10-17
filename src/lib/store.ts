@@ -5,6 +5,12 @@ import { affectedBy, buildGraph, type Graph } from './graph';
 import { toCharacters, toRaw, type RawCharacter } from './characters';
 import demoCharacters from '@/data/demoCharacters.json';
 
+/** One hop of a ripple: `up` travels from `via` to a module that imports or calls it, `down` from `via` to a module it calls. */
+export type RippleStep = { id: string; hops: number; via: string; dir: 'up' | 'down' };
+export type WhatIfChange =
+  | { kind: 'diff'; diff: string; title: string; path?: string }
+  | { kind: 'describe'; description: string; title: string; path: string; startLine: number; endLine: number };
+
 type TavernState = {
   repo: Repo | null;
   graph: Graph | null; // import graph, rebuilt on every loadRepo
@@ -22,8 +28,11 @@ type TavernState = {
   demo: boolean; // /tavern?demo=1: saved quickcart, saved cast, saved Tribunal, zero AI calls for those
   // Code-smell reaction for the module whose file was just opened (not in clean).
   smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
-  view: 'code' | 'map'; // middle panel
-  rippleFrom: { id: string; at: number } | null; // set while a ripple plays on the map
+  view: 'code' | 'map' | 'diff'; // middle panel
+  rippleFrom: { ids: string[]; at: number; steps?: RippleStep[]; label?: string } | null; // set while a ripple plays on the map
+  whatIf: { id: number; change: WhatIfChange } | null; // right panel in What-if mode
+  whatIfDiff: { path: string; before: string; after: string }[] | null; // the previewed change, for the diff view
+  bubbles: Record<string, string>; // speech bubbles over map nodes
 
   loadRepo: (repo: Repo) => void;
   setCharacters: (characters: Character[]) => void;
@@ -39,9 +48,16 @@ type TavernState = {
   toggleMute: () => void;
   setLoading: (isLoading: boolean) => void;
   setTribunal: (on: boolean) => void;
-  setView: (view: 'code' | 'map') => void;
-  /** Pulse from a module to everything that imports it, hop by hop, on the map (switches to it). */
-  ripple: (fromModuleId: string) => void;
+  setView: (view: 'code' | 'map' | 'diff') => void;
+  /**
+   * Pulse from module(s) hop by hop on the map (switches to it): by default to everything that imports or calls
+   * them; what-if passes explicit steps, including `down` hops to modules whose call sites changed.
+   */
+  ripple: (from: string | string[], opts?: { steps?: RippleStep[]; label?: string }) => void;
+  openWhatIf: (change: WhatIfChange) => void;
+  closeWhatIf: () => void;
+  setWhatIfDiff: (d: TavernState['whatIfDiff']) => void;
+  setBubble: (moduleId: string, text: string | null) => void;
 };
 
 export const useTavern = create<TavernState>()((set, get) => {
@@ -73,6 +89,9 @@ export const useTavern = create<TavernState>()((set, get) => {
     smell: null,
     view: 'code',
     rippleFrom: null,
+    whatIf: null,
+    whatIfDiff: null,
+    bubbles: {},
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
     loadRepo: (repo) =>
@@ -80,6 +99,10 @@ export const useTavern = create<TavernState>()((set, get) => {
         repo,
         graph: buildGraph(repo.files, repo.modules),
         rippleFrom: null,
+        whatIf: null,
+        whatIfDiff: null,
+        bubbles: {},
+        view: 'code',
         characters: {},
         moods: {},
         chats: {},
@@ -126,15 +149,27 @@ export const useTavern = create<TavernState>()((set, get) => {
     setMode: (mode) => set({ mode }),
     toggleMute: () => set((s) => ({ muted: !s.muted })),
     setLoading: (isLoading) => set({ isLoading }),
-    setTribunal: (tribunal) => set({ tribunal }),
+    setTribunal: (tribunal) => set(tribunal ? { tribunal, whatIf: null } : { tribunal }),
     setView: (view) => set({ view }),
-    ripple: (id) => {
+    ripple: (from, opts = {}) => {
       const at = Date.now();
+      const ids = [from].flat();
       const g = get().graph;
-      const hops = g ? Math.max(0, ...affectedBy(g, id).map((a) => a.hops)) : 0;
-      set({ view: 'map', rippleFrom: { id, at } });
+      const steps = opts.steps ?? (g ? ids.flatMap((id) => affectedBy(g, id).map((a) => ({ ...a, dir: 'up' as const }))) : []);
+      const hops = Math.max(0, ...steps.map((s) => s.hops));
+      set({ view: 'map', rippleFrom: { ids, at, steps, label: opts.label } });
       setTimeout(() => get().rippleFrom?.at === at && set({ rippleFrom: null }), RIPPLE_HOP_MS * hops + 3000);
     },
+    openWhatIf: (change) => set({ whatIf: { id: Date.now(), change }, tribunal: false, whatIfDiff: null, bubbles: {} }),
+    closeWhatIf: () => set((s) => ({ whatIf: null, whatIfDiff: null, bubbles: {}, rippleFrom: null, view: s.view === 'diff' ? 'code' : s.view })),
+    setWhatIfDiff: (whatIfDiff) => set({ whatIfDiff }),
+    setBubble: (id, text) =>
+      set((s) => {
+        const bubbles = { ...s.bubbles };
+        if (text) bubbles[id] = text;
+        else delete bubbles[id];
+        return { bubbles };
+      }),
   };
 });
 

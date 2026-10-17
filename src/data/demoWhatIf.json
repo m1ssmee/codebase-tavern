@@ -1,0 +1,76 @@
+{
+  "runs": [
+    {
+      "title": "Add an idempotency key",
+      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@ -22,6 +22,7 @@\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,",
+      "items": [
+        {
+          "moduleId": "orders",
+          "verdict": "relieved",
+          "reason": "Adding `idempotency_key: order.id` to the charge request makes the retry in `checkout()` safer: a timeout on the first `POST /payments/charges` can be retried without creating a second charge if payments uses that key. The retry loop still exists for `UpstreamTimeoutError` with `MAX_PAYMENT_ATTEMPTS = 2`, so this only fixes the duplicate-charge case when the receiver honors the key [orders/checkout.ts:18-30][orders/checkout.ts:43-57].",
+          "reaction": "I finally send a key instead of two blind stabs at /payments/charges. Fucking overdue."
+        },
+        {
+          "moduleId": "gateway",
+          "verdict": "fine",
+          "reason": "The gateway only forwards the request from `orders` and enforces the same 2000ms upstream timeout. Changing the body in `orders/checkout.ts` does not change routing, timeout, or response handling here [gateway/config.ts:15-16][gateway/proxy.ts:25-53].",
+          "reaction": "I still wait 2000ms and then punt. This body tweak is not my damn problem."
+        },
+        {
+          "moduleId": "payments",
+          "verdict": "fine",
+          "reason": "`handleChargeRequest()` accepts unknown extra fields by casting the body to `Partial<ChargeRequest>` and only checking `order_id`, `payment_method_id`, `amount`, and `currency`. The new `idempotency_key` field is ignored unless this module is changed to read and store it [payments/processor.ts:52-63][payments/processor.ts:29-49].",
+          "reaction": "I ignore the shiny new key like a champ. That extra field is just dead weight unless somebody teaches me otherwise, shit."
+        }
+      ],
+      "summary": {
+        "update": "If this is meant to actually stop duplicate charges, `payments/processor.ts` needs to accept `idempotency_key` in `ChargeRequest` and use it when recording or deduplicating charges in `processCharge()` and `handleChargeRequest()` [payments/processor.ts:5-15][payments/processor.ts:29-49][payments/processor.ts:52-63]. Otherwise `orders/checkout.ts` is only sending a key into the void, which hides the retry problem instead of fixing the charge that still happens after a 2000ms timeout [orders/checkout.ts:43-57][gateway/config.ts:15-16].",
+        "check": "Add or update tests for `orders/checkout.ts` to verify one timeout-triggered retry still results in one recorded charge when the same `idempotency_key` is sent. Add a payments test that sends the same `order_id` twice with the same key and verifies the second request is rejected or reuses the first `chargeId`, and verify a request without the key still behaves as before [orders/checkout.ts:20-30][payments/processor.ts:29-49]."
+      }
+    },
+    {
+      "title": "Raise the gateway timeout to 5000ms",
+      "diff": "--- a/gateway/config.ts\n+++ b/gateway/config.ts\n@@ -13,7 +13,7 @@\n };\n \n // Maximum time the gateway waits for any upstream service before failing the request.\n-export const UPSTREAM_TIMEOUT_MS = 2000;\n+export const UPSTREAM_TIMEOUT_MS = 5000;\n \n // Requests larger than this are rejected before they reach a service.\n export const MAX_BODY_BYTES = 256 * 1024;",
+      "items": [
+        {
+          "moduleId": "gateway",
+          "verdict": "relieved",
+          "reason": "The gateway waits 5000ms instead of 2000ms before aborting a call, so it will stop cutting off the payments service at the old 2s mark [gateway/config.ts:15-16]. That fits the payments path better because `processCharge` says typical time is about 2400ms and p99 is around 4s, so fewer requests get blamed for being slow when they were just taking the long road [payments/processor.ts:23-29].",
+          "reaction": "I stop throwing a 2s tantrum and wait 5000ms now. Damn, about time."
+        },
+        {
+          "moduleId": "orders",
+          "verdict": "at risk",
+          "reason": "This checkout retry still catches `UpstreamTimeoutError` and sends the same charge request again with no idempotency key, so a payment slower than 5000ms can still be sent twice if the first one eventually completes [orders/checkout.ts:20-31][orders/checkout.ts:44-58]. Raising the gateway timeout makes that duplicate-charge failure rarer, but it does not remove the retry loop or the missing unique request ID [gateway/config.ts:15-16][orders/checkout.ts:49-53].",
+          "reaction": "I still retry timed-out charges with the same payload. That is some expensive bullshit."
+        }
+      ],
+      "summary": {
+        "update": "To finish this safely, [orders/checkout.ts:20-31] needs an idempotency key on `requestCharge`, and the payments side in [payments/processor.ts:29-49] needs to reject or remove duplicate charge attempts with the same key. If the gateway timeout stays at 5000ms, the retry path in [orders/checkout.ts:44-58] still needs a follow-up so a late first charge does not get charged again.",
+        "check": "Run checkout tests that force payments responses at 2400ms, 4000ms, and over 5000ms, and verify the gateway only times out after 5000ms [payments/processor.ts:23-29][gateway/config.ts:15-16]. Add or run a duplicate-charge test that makes the first `requestCharge` time out and confirms the second attempt does not create two charges once idempotency is added [orders/checkout.ts:44-58][payments/processor.ts:29-49]."
+      }
+    },
+    {
+      "title": "Remove the retry",
+      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@ -15,7 +15,7 @@\n   reason?: string;\n }\n \n-const MAX_PAYMENT_ATTEMPTS = 2;\n+const MAX_PAYMENT_ATTEMPTS = 1;\n \n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {",
+      "items": [
+        {
+          "moduleId": "orders",
+          "verdict": "at risk",
+          "reason": "Removing the second payment attempt means any timeout from `forward` now fails checkout immediately instead of being retried once. That makes transient slow responses from the payments service more visible, and a payment that takes longer than `UPSTREAM_TIMEOUT_MS` 2000ms can still be reported as unavailable even if the charge may have gone through later [orders/checkout.ts:18-19][orders/checkout.ts:44-58][gateway/config.ts:15-16][gateway/proxy.ts:25-31][gateway/proxy.ts:45-49].",
+          "reaction": "I lost my one damn retry, so a 2001ms payment now gets me sent home empty-handed."
+        },
+        {
+          "moduleId": "gateway",
+          "verdict": "fine",
+          "reason": "This change only alters how `orders/checkout.ts` retries a payment call. The gateway configuration and timeout remain the same at 2000ms, and nothing in `gateway/config.ts` or `gateway/proxy.ts` changes behavior here [gateway/config.ts:10][gateway/config.ts:15-16][gateway/proxy.ts:29-53].",
+          "reaction": "I still point at orders with my 2000ms stopwatch and watch the shit show from the hallway."
+        }
+      ],
+      "summary": {
+        "update": "If this is meant to be complete, `orders/checkout.ts` also needs a policy for timeout retries or an idempotency key on `requestCharge` so a timed-out charge is not treated as a fresh failure forever [orders/checkout.ts:20-30][orders/checkout.ts:44-58][gateway/proxy.ts:25-49]. If the payments side is keeping the retry removed, `payments/processor.ts` still needs to stay safe for repeats because a timed-out charge can still finish after the caller gives up [payments/processor.ts:23-49].",
+        "check": "Run checkout tests for a slow payments response that exceeds 2000ms and verify the order now returns `payment unavailable` once, with the reservation released and status set to `payment_failed` [orders/checkout.ts:38-58]. Also add or run a payment test that proves one charge request is not duplicated when the client retries after a timeout, and confirm the charge path still records exactly one charge on success [payments/processor.ts:29-49]."
+      }
+    }
+  ]
+}

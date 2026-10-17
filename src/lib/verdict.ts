@@ -49,10 +49,14 @@ export const realFixNeeded = (hearing: string, culprits: string[]) =>
     : ` The real fix has to change the executable code in ${culprits.join(' and ') || 'the culprit module'}, not only comments or tests.`;
 
 /**
- * Pulls complete objects out of the "turns" array of a JSON document that is still streaming in, as soon
- * as each object's closing brace arrives. String-aware, so braces and quotes inside turn text are fine.
+ * Pulls complete objects out of one array (default "turns") of a JSON document that is still streaming in, as
+ * soon as each object's closing brace arrives. String-aware, so braces and quotes inside text are fine.
  */
 export class TurnScanner {
+  private readonly key: string;
+  constructor(key = 'turns') {
+    this.key = key;
+  }
   private buf = '';
   private pos = 0;
   private inArray = false;
@@ -67,7 +71,7 @@ export class TurnScanner {
     const out: unknown[] = [];
     if (this.done) return out;
     if (!this.inArray) {
-      const m = /"turns"\s*:\s*\[/.exec(this.buf);
+      const m = new RegExp(`"${this.key}"\\s*:\\s*\\[`).exec(this.buf);
       if (!m) return out;
       this.inArray = true;
       this.pos = m.index + m[0].length;

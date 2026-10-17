@@ -1,0 +1,418 @@
+'use client';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, FileDiff, Play, RotateCcw, Sparkles } from 'lucide-react';
+import { RIPPLE_HOP_MS, useTavern, type RippleStep, type WhatIfChange } from '@/lib/store';
+import { computeImpact, QUICKCART_SUGGESTIONS, sameChange, suggestionDiff, type Impact, type ImpactItem } from '@/lib/whatif';
+import { makeDiff } from '@/lib/diff';
+import { isValidCitation } from '@/lib/citations';
+import { blipText, unlockAudio } from '@/lib/blips';
+import type { Mood } from '@/lib/types';
+import demoWhatIf from '@/data/demoWhatIf.json';
+import CharacterFace from './CharacterFace';
+import CitationChip from './CitationChip';
+import Rich from './Rich';
+
+type Verdict = 'breaks' | 'at risk' | 'fine' | 'relieved';
+type Result = { moduleId: string; verdict: Verdict; reason: string; reaction: string };
+type Summary = { update: string; check: string };
+type Run = { title: string; diff: string; items: Result[]; summary: Summary };
+type Phase = 'writing' | 'assessing' | 'done' | 'error';
+
+const SAVED = (demoWhatIf as { runs: Run[] }).runs;
+const LIVE_LIMIT_MS = 20_000;
+const SLOW_NOTE = 'Replaying a saved preview (live AI is slow right now).';
+const DOWN_NOTE = 'Replaying a saved preview (live AI is unavailable right now).';
+const MOOD: Record<Verdict, Mood> = { breaks: 'horrified', 'at risk': 'nervous', fine: 'shrug', relieved: 'happy' };
+const BADGE: Record<Verdict, string> = {
+  breaks: 'bg-tomato text-white',
+  'at risk': 'bg-amber-100 text-amber-900',
+  fine: 'bg-wood text-muted',
+  relieved: 'bg-green-100 text-green-800',
+};
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export default function WhatIfPanel() {
+  const { repo, graph, characters, moods, whatIf, closeWhatIf, setView } = useTavern();
+  const [phase, setPhase] = useState<Phase>('writing');
+  const [title, setTitle] = useState(whatIf?.change.title ?? '');
+  const [impact, setImpact] = useState<Impact | null>(null);
+  const [results, setResults] = useState<Record<string, Result>>({});
+  const [summary, setSummary] = useState<Summary | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [shown, setShown] = useState(true); // false after Undo
+  const [input, setInput] = useState('');
+  const gen = useRef(0); // bumped on unmount: an older run's callbacks see a different value and stop
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const reached = useRef(new Set<string>());
+  const landed = useRef(new Map<string, Result>());
+  const ctrl = useRef<AbortController | null>(null);
+
+  const later = (ms: number, f: () => void) => {
+    const g = gen.current;
+    timers.current.push(setTimeout(() => gen.current === g && f(), ms));
+  };
+
+  /** A module reacts once the ripple has reached it and its verdict is in, whichever comes last. */
+  const react = (id: string) => {
+    const r = landed.current.get(id);
+    if (!r || !reached.current.has(id)) return;
+    const s = useTavern.getState();
+    s.setMood(id, MOOD[r.verdict]);
+    if (r.verdict === 'breaks') later(900, () => useTavern.getState().setMood(id, 'fainted')); // horrified, then faints
+    if (r.reaction) {
+      s.setBubble(id, r.reaction);
+      blipText(r.reaction, s.characters[id]?.voicePitch ?? 1, s.muted);
+      later(7000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null));
+    }
+  };
+  const land = (r: Result) => {
+    landed.current.set(r.moduleId, r);
+    setResults((x) => ({ ...x, [r.moduleId]: r }));
+    react(r.moduleId);
+  };
+
+  /** The show: ripple from the changed modules; each one reacts as the pulse reaches it. */
+  const play = (imp: Impact, label: string) => {
+    const s = useTavern.getState();
+    reached.current = new Set();
+    const changed = imp.items.filter((i) => i.role === 'changed').map((i) => i.moduleId);
+    const steps: RippleStep[] = imp.items
+      .filter((i) => i.role !== 'changed' && i.via)
+      .map((i) => ({ id: i.moduleId, hops: i.hops, via: i.via!, dir: i.role === 'downstream' ? 'down' : 'up' }));
+    s.ripple(changed, { steps, label: `What if: ${label}` });
+    for (const i of imp.items) {
+      const arrive = () => (reached.current.add(i.moduleId), react(i.moduleId));
+      if (i.hops === 0) arrive();
+      else later(i.hops * RIPPLE_HOP_MS, arrive);
+    }
+    setShown(true);
+  };
+
+  const undo = () => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    reached.current = new Set();
+    const s = useTavern.getState();
+    for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
+    useTavern.setState({ bubbles: {}, rippleFrom: null });
+    setShown(false);
+  };
+
+  const replay = async (run: Run, why: string | null, dead: () => boolean) => {
+    setNote(why);
+    for (const r of run.items) {
+      await sleep(650);
+      if (dead()) return;
+      land(r);
+    }
+    setSummary(run.summary);
+    setPhase('done');
+  };
+
+  const start = async (change: WhatIfChange) => {
+    const s = useTavern.getState();
+    if (!repo || !graph) return;
+    const my = gen.current;
+    const dead = () => gen.current !== my;
+    const ac = (ctrl.current = new AbortController());
+    unlockAudio();
+    let diff = change.kind === 'diff' ? change.diff : '';
+    let label = change.title;
+    if (change.kind === 'describe') {
+      if (s.demo) {
+        setPhase('error');
+        setError('The demo route makes no AI calls, so it cannot write a new change. Try one of the suggested changes below.');
+        return;
+      }
+      setPhase('writing');
+      const file = repo.files.find((f) => f.path === change.path);
+      const res = await fetch('/api/whatif', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: 'diff', description: change.description, path: change.path, startLine: change.startLine, endLine: change.endLine, content: file?.content }),
+        signal: ac.signal,
+      }).catch(() => null);
+      const data = await res?.json().catch(() => null);
+      if (dead()) return;
+      if (!res?.ok || !data?.diff) {
+        setPhase('error');
+        setError(res?.status === 422 ? "That change didn't fit the file. Try describing it differently." : 'The AI is busy. Try again in a minute.');
+        return;
+      }
+      diff = data.diff;
+      label = data.title;
+      setTitle(label);
+    }
+
+    const imp = computeImpact(repo.files, repo.modules, graph, diff, change.kind === 'diff' ? change.path : change.path);
+    if ('error' in imp) {
+      setPhase('error');
+      setError(imp.error);
+      return;
+    }
+    setImpact(imp);
+    s.setWhatIfDiff(imp.files.map((f) => ({ path: f.path, before: f.before, after: f.after })));
+    setPhase('assessing');
+    play(imp, label);
+
+    const saved = SAVED.find((r) => {
+      const x = computeImpact(repo.files, repo.modules, graph, r.diff);
+      return !('error' in x) && sameChange(x.files, imp.files);
+    });
+    const graphOnly = (why: string) => {
+      setNote(why);
+      setPhase('done');
+    };
+    if (s.demo) return saved ? replay(saved, null, dead) : graphOnly('The demo route makes no AI calls, so this preview shows the import graph only.');
+
+    // Live. On quickcart, nothing within 20s (or a failure) replays the saved run of the same change.
+    const isDemoRepo = !!repo.url?.includes('/quickcart');
+    let gotItem = false;
+    const limit = isDemoRepo ? setTimeout(() => !gotItem && ac.abort(), LIVE_LIMIT_MS) : undefined;
+    const name = (id: string) => s.characters[id]?.name ?? repo.modules.find((m) => m.id === id)?.name ?? id;
+    // Whole files, within ~110KB: the changed ones, every file a cited line lives in, then as evidence the biggest
+    // file of each module in the list and of each module they call over the network (e.g. the service's timings).
+    const listed = imp.items.map((i) => i.moduleId);
+    const nearby = [...new Set([...listed, ...graph.edges.filter((e) => e.kind === 'calls' && listed.includes(e.from)).map((e) => e.to)])];
+    const paths = [
+      ...new Set([
+        ...imp.files.map((f) => f.path),
+        ...imp.items.flatMap((i) => [...i.lines, ...i.usages].map((c) => c.path)),
+        ...nearby.map((id) => repo.modules.find((m) => m.id === id)?.stats.biggestFile.path ?? ''),
+      ]),
+    ].filter(Boolean);
+    let left = 110_000;
+    const files = paths.flatMap((p) => {
+      const content = repo.files.find((f) => f.path === p)?.content.slice(0, Math.max(0, left)) ?? '';
+      left -= content.length;
+      return content ? [{ path: p, content }] : [];
+    });
+    try {
+      const res = await fetch('/api/whatif', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ac.signal,
+        body: JSON.stringify({
+          stage: 'assess',
+          spice: s.spice,
+          mode: s.mode,
+          repoName: repo.name,
+          title: label,
+          diff: imp.files.map((f) => makeDiff(f.path, f.before, f.after)).join('\n'),
+          items: imp.items.map((i) => ({ ...i, name: name(i.moduleId) })),
+          files,
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`whatif ${res.status}`);
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buf = '';
+      let failed = false;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || dead()) break;
+        buf += value;
+        for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          if (!line.trim()) continue;
+          const e = JSON.parse(line);
+          if (e.type === 'item') {
+            gotItem = true;
+            clearTimeout(limit);
+            land(e.item);
+          } else if (e.type === 'summary') setSummary(e.summary);
+          else if (e.type === 'error') failed = true;
+        }
+      }
+      if (failed && !gotItem) throw new Error('assess failed');
+      if (!dead()) setPhase('done');
+    } catch (err) {
+      clearTimeout(limit);
+      if (dead()) return;
+      console.warn('[whatif]', err);
+      if (isDemoRepo && saved) return replay(saved, ac.signal.aborted ? SLOW_NOTE : DOWN_NOTE, dead);
+      graphOnly(ac.signal.aborted ? 'Live AI is slow right now. The impact list comes from the import graph and is still accurate.' : 'The AI is busy right now. The impact list comes from the import graph and is still accurate.');
+    }
+  };
+
+  useEffect(() => {
+    // A tick later, so StrictMode's instant remount cancels the first run before it calls anything.
+    const t = setTimeout(() => whatIf && void start(whatIf.change), 0);
+    return () => {
+      clearTimeout(t);
+      gen.current++; // eslint-disable-line react-hooks/exhaustive-deps -- a run counter, not a DOM ref
+      ctrl.current?.abort();
+      timers.current.forEach(clearTimeout);
+      const s = useTavern.getState();
+      for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
+      useTavern.setState({ bubbles: {} });
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- one run per mount; the panel is keyed by whatIf.id
+
+  if (!repo || !whatIf) return null;
+  const modName = (id: string) => characters[id]?.name ?? repo.modules.find((m) => m.id === id)?.name ?? id;
+  const roleText = (i: ImpactItem) =>
+    i.role === 'changed' ? 'changed by this diff' : i.role === 'upstream' ? `${i.why} · ${i.hops} ${i.hops === 1 ? 'hop' : 'hops'} away` : i.why;
+  const suggestions = repo.url?.includes('/quickcart') ? QUICKCART_SUGGESTIONS.filter((x) => suggestionDiff(repo.files, x)) : [];
+  const target = whatIf.change.kind === 'describe' ? whatIf.change : null;
+  const describePath = target?.path ?? impact?.files[0]?.path ?? useTavern.getState().openFilePath ?? '';
+  const describe = (text: string) => {
+    const f = repo.files.find((x) => x.path === describePath);
+    if (!text.trim() || !f) return;
+    useTavern.getState().openWhatIf({
+      kind: 'describe',
+      description: text.trim(),
+      title: text.trim(),
+      path: f.path,
+      startLine: target?.startLine ?? 1,
+      endLine: target?.endLine ?? f.lineCount,
+    });
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-panel">
+      <div className="flex items-center gap-2 border-b border-edge p-3">
+        <Sparkles className="text-amber" size={20} />
+        <span className="font-display text-xl italic">What if</span>
+        <button
+          type="button"
+          onClick={closeWhatIf}
+          className="bounce-hover ml-auto flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-sm font-medium text-cream"
+        >
+          <ArrowLeft size={14} /> Back
+        </button>
+      </div>
+      <div className="border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-center text-xs text-amber-900">Preview only. Nothing was changed.</div>
+
+      <div className="flex-1 space-y-3 overflow-auto p-3">
+        <div className="rounded-xl border border-edge bg-wood/60 p-3">
+          <div className="text-xs text-muted">The change</div>
+          <div className="font-medium">{title}</div>
+          {impact && (
+            <div className="mt-0.5 font-mono text-xs text-muted">
+              {impact.files.map((f) => `${f.path} +${f.added} −${f.removed}`).join(' · ')}
+            </div>
+          )}
+          {impact && (
+            <div className="mt-2 flex gap-2">
+              <button type="button" onClick={() => setView('diff')} className="flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs text-cream hover:border-amber">
+                <FileDiff size={13} /> View diff
+              </button>
+              {shown ? (
+                <button type="button" onClick={undo} className="flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs text-cream hover:border-amber">
+                  <RotateCcw size={13} /> Undo
+                </button>
+              ) : (
+                <button type="button" onClick={() => play(impact, title)} className="flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs text-cream hover:border-amber">
+                  <Play size={13} /> Replay
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {phase === 'writing' && <p className="text-center text-sm text-muted italic">Writing the change against the real file.</p>}
+        {error && <p className="text-center text-sm text-tomato">{error}</p>}
+        {note && <p className="text-center text-xs text-neutral-400">{note}</p>}
+
+        {impact && (
+          <div className="space-y-2">
+            <div className="text-xs text-muted">
+              Who feels it ({impact.items.length}), from the import graph{phase === 'assessing' ? '. The modules are reading the diff.' : '.'}
+            </div>
+            {impact.items.map((i) => {
+              const m = repo.modules.find((x) => x.id === i.moduleId);
+              const r = results[i.moduleId];
+              const cites = [...i.usages, ...i.lines]
+                .map((c) => ({ path: c.path, startLine: c.line, endLine: c.endLine }))
+                .filter((c) => isValidCitation(c, repo.files))
+                .slice(0, 6);
+              return (
+                <div key={i.moduleId} className="rounded-xl border border-edge p-2.5">
+                  <div className="flex items-center gap-2">
+                    <CharacterFace size={36} name={m?.name ?? i.moduleId} stats={m?.stats} color={characters[i.moduleId]?.color} mood={moods[i.moduleId]} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{modName(i.moduleId)}</div>
+                      <div className="text-xs text-muted">{roleText(i)}</div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${r ? BADGE[r.verdict] : 'text-muted'}`}>
+                      {r ? r.verdict : phase === 'done' ? 'no verdict' : '…'}
+                    </span>
+                  </div>
+                  {r?.reason && (
+                    <div className="mt-1.5 text-sm leading-relaxed">
+                      <Rich text={r.reason} files={repo.files} />
+                    </div>
+                  )}
+                  {r?.reaction && <p className="mt-1 text-sm text-cream/80 italic">&ldquo;{r.reaction}&rdquo;</p>}
+                  {i.usages.length > 0 && <div className="mt-1 text-xs text-muted">Uses {[...new Set(i.usages.map((u) => u.symbol))].join(', ')}:</div>}
+                  {cites.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {cites.map((c, k) => (
+                        <CitationChip key={k} citation={c} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {summary && (summary.update || summary.check) && (
+          <div className="space-y-2 rounded-xl border border-amber bg-ink/60 p-3 text-sm leading-relaxed">
+            {summary.update && (
+              <div>
+                <div className="text-xs font-medium text-muted">What to update</div>
+                <Rich text={summary.update} files={repo.files} />
+              </div>
+            )}
+            {summary.check && (
+              <div>
+                <div className="text-xs font-medium text-muted">What to check</div>
+                <Rich text={summary.check} files={repo.files} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-edge p-3">
+        {suggestions.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {suggestions.map((x) => (
+              <button
+                key={x.label}
+                type="button"
+                onClick={() => useTavern.getState().openWhatIf({ kind: 'diff', diff: suggestionDiff(repo.files, x)!, title: x.label, path: x.path })}
+                className="rounded-full border border-edge px-2.5 py-1 text-xs text-cream/80 transition-colors hover:border-amber hover:text-cream"
+              >
+                {x.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {describePath && (
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              describe(input);
+            }}
+          >
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={`Describe a change to ${describePath.split('/').pop()}`}
+              className="min-w-0 flex-1 rounded-full border border-edge bg-ink px-4 py-2 text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
+            />
+            <button type="submit" disabled={!input.trim()} className="bounce-hover rounded-full bg-amber px-4 text-sm font-medium text-ink disabled:opacity-50">
+              Preview
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

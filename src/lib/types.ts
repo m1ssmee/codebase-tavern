@@ -22,7 +22,8 @@ export type Character = {
   color: string;
 };
 
-export type Mood = 'idle' | 'talking' | 'accused' | 'guilty' | 'happy';
+// horrified/fainted/nervous/shrug: what-if reactions (Character3D expressions: horrified, dead, nervous, deadpan).
+export type Mood = 'idle' | 'talking' | 'accused' | 'guilty' | 'happy' | 'horrified' | 'fainted' | 'nervous' | 'shrug';
 
 export type Citation = { path: string; startLine: number; endLine: number };
 

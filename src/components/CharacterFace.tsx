@@ -11,6 +11,7 @@ const loop = (duration: number, extra: Transition = {}): Transition => ({ durati
  * Procedural face, deterministic from the module name + stats.
  * Traits: width ∝ totalLines, shifty eyes (TODOs ≥ 5), sweat (biggest file > 300 lines),
  * spiral eyes (nesting ≥ 6), shiver (no tests), smug (small, clean, tested).
+ * What-if moods: horrified (jolt, wide eyes), fainted (falls over), nervous (darting eyes, sweat), shrug (one shrug, half lids).
  */
 export default function CharacterFace({
   name,
@@ -38,7 +39,7 @@ export default function CharacterFace({
   const ex = rx * 0.4;
   const ey = cy - ry * 0.12;
   const accessory = (h >> 3) % 4;
-  const sweat = t.sweaty || mood === 'accused';
+  const sweat = t.sweaty || mood === 'accused' || mood === 'nervous' || mood === 'horrified';
   // Spice-driven extras: feral+ talking faces go red and steam; nuclear culprits burst into smoke.
   const spice = useTavern((s) => s.spice);
   const heated = mood === 'talking' && (spice === 'feral' || spice === 'nuclear');
@@ -48,10 +49,16 @@ export default function CharacterFace({
   const body: { animate: TargetAndTransition; transition: Transition } =
     poof
       ? { animate: { rotate: 0, x: 0, y: 0, scale: reduced ? 0 : [1, 1.25, 0] }, transition: reduced ? { duration: 0 } : { duration: 0.45, times: [0, 0.4, 1] } }
-      : mood === 'guilty'
+      : mood === 'guilty' || mood === 'fainted'
       ? { animate: { rotate: 90, x: 0, y: 4 }, transition: reduced ? { duration: 0 } : { type: 'spring', stiffness: 120, damping: 9 } }
       : calm
         ? { animate: { rotate: 0, x: 0, y: 0 }, transition: { duration: 0.2 } }
+        : mood === 'horrified'
+          ? { animate: { rotate: 0, x: 0, y: [0, -9, 0], scale: [1, 1.14, 1] }, transition: { duration: 0.35 } }
+        : mood === 'nervous'
+          ? { animate: { rotate: 0, x: [0, -1.6, 1.6, -1, 0], y: 0 }, transition: loop(0.3, { ease: 'linear' }) }
+        : mood === 'shrug'
+          ? { animate: { rotate: [0, -7, 7, 0], x: 0, y: [0, -5, 0, 0] }, transition: { duration: 0.6 } }
         : mood === 'happy'
           ? { animate: { rotate: 0, x: 0, y: [0, -10, 0] }, transition: loop(0.5, { repeatDelay: 0.35 }) }
           : mood === 'talking'
@@ -59,12 +66,12 @@ export default function CharacterFace({
             : { animate: { rotate: 0, x: 0, y: [0, -3, 0] }, transition: loop(2.4, { delay: (h % 10) / 10 }) };
 
   const eyes = () => {
-    if (mood === 'guilty') return [-ex, ex].map((dx) => <XEye key={dx} x={50 + dx} y={ey} />);
+    if (mood === 'guilty' || mood === 'fainted') return [-ex, ex].map((dx) => <XEye key={dx} x={50 + dx} y={ey} />);
     if (mood === 'happy')
       return [-ex, ex].map((dx) => (
         <path key={dx} d={`M${50 + dx - 7} ${ey + 2} q7 -9 14 0`} stroke={INK} strokeWidth={5} strokeLinecap="round" fill="none" />
       ));
-    if (t.dizzy && mood !== 'accused')
+    if (t.dizzy && !['accused', 'horrified', 'nervous', 'shrug'].includes(mood))
       return [-ex, ex].map((dx) => (
         <g key={dx} transform={`translate(${50 + dx} ${ey})`}>
           <circle r={9.5} fill="#fff" stroke={INK} strokeWidth={3} />
@@ -82,10 +89,15 @@ export default function CharacterFace({
     const pupil: { animate: TargetAndTransition; transition: Transition } =
       mood === 'accused' && !calm
         ? { animate: { x: [0, 3, 0, -3, 0], y: [0, -3, -5, -3, 0] }, transition: loop(1.4, { repeatDelay: 0.8 }) }
+        : mood === 'nervous'
+          ? { animate: { x: calm ? -3 : [-3, 3, -2, 3, -3], y: 1 }, transition: calm ? {} : loop(0.9) }
+        : mood === 'horrified' || mood === 'shrug'
+          ? { animate: { x: mood === 'shrug' ? 3.5 : 0, y: mood === 'shrug' ? 1 : 0 }, transition: {} }
         : t.shifty
           ? { animate: { x: calm ? -3.5 : [-3.5, -3.5, 3.5, 3.5, -3.5], y: 1 }, transition: calm ? {} : loop(3.2) }
           : { animate: { x: 0, y: t.smug ? 3 : 0 }, transition: {} };
-    const lid = t.smug && mood !== 'accused' ? 'smug' : t.shifty && mood !== 'accused' ? 'shifty' : null;
+    const wide = mood === 'horrified';
+    const lid = mood === 'shrug' ? 'smug' : wide || mood === 'accused' || mood === 'nervous' ? null : t.smug ? 'smug' : t.shifty ? 'shifty' : null;
     // Occasional blink, staggered per name so a room of faces never blinks in unison.
     const blink = !calm && (mood === 'idle' || mood === 'talking');
     return (
@@ -95,8 +107,8 @@ export default function CharacterFace({
       >
         {[-ex, ex].map((dx) => (
           <g key={dx}>
-            <circle cx={50 + dx} cy={ey} r={9.5} fill="#fff" stroke={INK} strokeWidth={3} />
-            <motion.circle cx={50 + dx} cy={ey} r={4.5} fill={INK} {...pupil} />
+            <circle cx={50 + dx} cy={ey} r={wide ? 11.5 : 9.5} fill="#fff" stroke={INK} strokeWidth={3} />
+            <motion.circle cx={50 + dx} cy={ey} r={wide ? 2.4 : 4.5} fill={INK} {...pupil} />
             {lid && (
               // eyelid: covers the top half (smug) or top third (shifty)
               <path
@@ -128,7 +140,10 @@ export default function CharacterFace({
         />
       );
     if (mood === 'accused') return <circle cx={50} cy={my + 1} r={5} fill={INK} />;
-    if (mood === 'guilty') return <path d={`M38 ${my + 3} q4 -5 8 0 q4 5 8 0 q4 -5 8 0`} stroke={INK} strokeWidth={4} fill="none" strokeLinecap="round" />;
+    if (mood === 'horrified') return <ellipse cx={50} cy={my + 2} rx={6.5} ry={8.5} fill={INK} />;
+    if (mood === 'nervous') return <path d={`M39 ${my} q2.75 -3 5.5 0 q2.75 3 5.5 0 q2.75 -3 5.5 0 q2.75 3 5.5 0`} stroke={INK} strokeWidth={3.5} fill="none" strokeLinecap="round" />;
+    if (mood === 'shrug') return <path d={`M41 ${my + 1} q9 -2 18 2`} stroke={INK} strokeWidth={4} fill="none" strokeLinecap="round" />;
+    if (mood === 'guilty' || mood === 'fainted') return <path d={`M38 ${my + 3} q4 -5 8 0 q4 5 8 0 q4 -5 8 0`} stroke={INK} strokeWidth={4} fill="none" strokeLinecap="round" />;
     if (mood === 'happy') return <path d={`M37 ${my - 3} q13 16 26 0 z`} fill={INK} stroke={INK} strokeWidth={3} strokeLinejoin="round" />;
     if (t.smug) return <path d={`M40 ${my} q10 3 20 -5`} stroke={INK} strokeWidth={4} fill="none" strokeLinecap="round" />;
     const curve = [0, 4, -3][h % 3]; // flat / slight smile / slight frown

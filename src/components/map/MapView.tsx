@@ -5,8 +5,8 @@ import { QuadraticBezierLine, useCursor, type QuadraticBezierLineRef } from '@re
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from 'd3-force';
 import * as THREE from 'three';
 import { useReducedMotion } from 'framer-motion';
-import { RIPPLE_HOP_MS as HOP_MS, useTavern } from '@/lib/store';
-import { affectedBy, dependenciesOf, dependentsOf, type Edge } from '@/lib/graph';
+import { RIPPLE_HOP_MS as HOP_MS, useTavern, type RippleStep as Step } from '@/lib/store';
+import { dependenciesOf, dependentsOf, type Edge } from '@/lib/graph';
 import { faceTraits, sizeOf, statsLine } from '@/lib/characters';
 import type { Module } from '@/lib/types';
 import MapNode from './MapNode';
@@ -18,11 +18,12 @@ const INK = '#171717';
 const EDGE = '#bdb7ae';
 const FAINT = '#ece9e4';
 const HOT = '#ff5a3c';
+const CALL = '#9db8d6'; // "calls" edges: dashed, blue-grey
+const CALL_DARK = '#3d6a9c';
 const UP = new THREE.Vector3(0, 1, 0);
 const CAMERA: [number, number, number] = [5, 16, 9]; // ~57° down: tilted, but faces don't stack on each other
 
 type N = SimulationNodeDatum & { id: string; scale: number; hx: number; hy: number };
-type Step = { id: string; hops: number; via: string };
 
 /** d3-force in 2D, run to rest. Afterwards only a pull home (and collisions) stays on; charge and links come back
  *  while dragging, so the others shove aside and everything floats back to the same layout on release. */
@@ -79,43 +80,53 @@ function Scene() {
   const moods = useTavern((s) => s.moods);
   const selected = useTavern((s) => s.selectedModuleId);
   const rippleFrom = useTavern((s) => s.rippleFrom);
+  const bubbles = useTavern((s) => s.bubbles);
   const reduced = !!useReducedMotion();
   const mods = repo.modules;
   const { sim, nodes, shove } = useMemo(() => layout(mods, graph.edges), [mods, graph]);
   const index = useMemo(() => new Map(mods.map((m, i) => [m.id, i])), [mods]);
-  const edgeAt = useMemo(() => new Map(graph.edges.map((e, k) => [`${e.from}>${e.to}`, k])), [graph]);
+  // Both kinds of edge between the same pair: a ripple lights all of them and rides the first.
+  const edgesOf = useMemo(() => {
+    const m = new Map<string, number[]>();
+    graph.edges.forEach((e, k) => m.set(`${e.from}>${e.to}`, [...(m.get(`${e.from}>${e.to}`) ?? []), k]));
+    return (from: string, to: string) => m.get(`${from}>${to}`) ?? [];
+  }, [graph]);
+  const pathOf = (s: Step) => (s.dir === 'up' ? edgesOf(s.id, s.via) : edgesOf(s.via, s.id));
   const curves = useMemo(() => graph.edges.map(() => new THREE.QuadraticBezierCurve3()), [graph]);
   const radius = useMemo(() => Math.max(...nodes.map((n) => Math.hypot(n.hx, n.hy) / PX + n.scale)) + 2, [nodes]);
 
   const [hovered, setHovered] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [hoveredEdge, setHoveredEdge] = useState<number | null>(null);
   const [flinching, setFlinching] = useState<string[]>([]);
-  const steps = useMemo(() => (rippleFrom ? affectedBy(graph, rippleFrom.id) : []), [rippleFrom, graph]); // one spark each
+  const steps = useMemo(() => (rippleFrom?.steps ?? []).filter((s) => index.has(s.id) && index.has(s.via)), [rippleFrom, index]); // one spark each
   useCursor(!!hovered || dragging, dragging ? 'grabbing' : 'grab');
 
   const outer = useRef<(THREE.Group | null)[]>([]); // ground position: shadow, rings, label
   const inner = useRef<(THREE.Group | null)[]>([]); // + bob: the face
   const lines = useRef<(QuadraticBezierLineRef | null)[]>([]);
+  const hitLines = useRef<(QuadraticBezierLineRef | null)[]>([]); // invisible fat twins of "calls" edges, for hover
+  const edgeTip = useRef<THREE.Group>(null);
   const arrows = useRef<(THREE.Mesh | null)[]>([]);
   const sparks = useRef<(THREE.Group | null)[]>([]);
-  const ring = useRef<THREE.Mesh>(null);
+  const rings = useRef<(THREE.Mesh | null)[]>([]);
   const hotRings = useRef<(THREE.Mesh | null)[]>([]);
   const drag = useRef<{ id: string; plane: THREE.Plane; dx: number; dz: number } | null>(null);
   const pulse = useRef<{ id: string; t0: number } | null>(null); // click: that node's edges throb once
-  const ripple = useRef<{ from: string; t0: number; steps: Step[]; hit: Set<string>; edges: Set<number>; reduced: boolean } | null>(null);
+  const ripple = useRef<{ from: string[]; t0: number; steps: Step[]; hit: Set<string>; edges: Set<number>; reduced: boolean } | null>(null);
   const tmp = useMemo(() => ({ a: new THREE.Vector3(), b: new THREE.Vector3(), m: new THREE.Vector3(), d: new THREE.Vector3(), hit: new THREE.Vector3() }), []);
 
   useEffect(() => () => void sim.stop(), [sim]);
 
-  // ripple(): sparks travel from the source along reverse edges, hop by hop, in affectedBy() order.
-  // Reduced motion: no sparks or flinches, the whole path just lights up.
+  // ripple(): sparks travel hop by hop from the source(s): `up` to modules that import or call them, `down` to
+  // modules they call. Reduced motion: no sparks or flinches, the whole path just lights up.
   useEffect(() => {
-    if (!rippleFrom || !index.has(rippleFrom.id)) return;
-    const edges = new Set(reduced ? steps.map((s) => edgeAt.get(`${s.id}>${s.via}`)!) : []);
+    if (!rippleFrom) return;
+    const edges = new Set(reduced ? steps.flatMap(pathOf) : []);
     const hit = new Set(reduced ? steps.map((s) => s.id) : []);
-    ripple.current = { from: rippleFrom.id, t0: performance.now(), steps, hit, edges, reduced };
+    ripple.current = { from: rippleFrom.ids, t0: performance.now(), steps, hit, edges, reduced };
     return () => void (ripple.current = null);
-  }, [rippleFrom, steps, index, edgeAt, reduced]);
+  }, [rippleFrom, steps, reduced]); // eslint-disable-line react-hooks/exhaustive-deps -- pathOf only reads edgesOf
 
   useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime;
@@ -129,7 +140,7 @@ function Scene() {
       const inn = inner.current[i];
       if (!o || !inn) return;
       const m = mods[i];
-      const speed = moods[m.id] === 'guilty' || faceTraits(m.stats).sweaty ? 0.45 : 1;
+      const speed = moods[m.id] === 'guilty' || moods[m.id] === 'fainted' || faceTraits(m.stats).sweaty ? 0.45 : 1;
       const ph = i * 1.7;
       const still = reduced || drag.current?.id === m.id;
       o.position.set(n.x! / PX + (still ? 0 : 0.14 * Math.sin(t * 0.5 * speed + ph)), 0, n.y! / PX + (still ? 0 : 0.1 * Math.cos(t * 0.37 * speed + ph * 1.3)));
@@ -151,9 +162,16 @@ function Scene() {
       const c = curves[k];
       c.v0.set(A.x + tmp.d.x * ra, 0.06, A.z + tmp.d.z * ra);
       c.v2.set(B.x - tmp.d.x * rb, 0.06, B.z - tmp.d.z * rb);
-      // Bend sideways (A→B and B→A bend apart) and slightly up.
-      c.v1.set((c.v0.x + c.v2.x) / 2 - tmp.d.z * len * 0.12, 0.2 + len * 0.05, (c.v0.z + c.v2.z) / 2 + tmp.d.x * len * 0.12);
-      lines.current[k]?.setPoints(c.v0, c.v2, c.v1);
+      // Bend sideways (A→B and B→A bend apart; calls bend further than imports) and slightly up.
+      const bend = e.kind === 'calls' ? 0.22 : 0.12;
+      c.v1.set((c.v0.x + c.v2.x) / 2 - tmp.d.z * len * bend, 0.2 + len * 0.05, (c.v0.z + c.v2.z) / 2 + tmp.d.x * len * bend);
+      const line = lines.current[k];
+      line?.setPoints(c.v0, c.v2, c.v1);
+      if (e.kind === 'calls') {
+        line?.computeLineDistances(); // dashes follow the new length
+        hitLines.current[k]?.setPoints(c.v0, c.v2, c.v1);
+        if (k === hoveredEdge) c.getPoint(0.5, edgeTip.current?.position ?? tmp.m);
+      }
       const arrow = arrows.current[k];
       if (arrow) {
         const tan = c.getTangent(1, tmp.a);
@@ -162,19 +180,21 @@ function Scene() {
       }
     });
 
-    // Ripple: one spark per affected module, travelling imported → importer during its hop; a ring on each module hit.
+    // Ripple: one spark per reached module, riding its edge during its hop; a ring on each module hit.
     const r = ripple.current;
     const el = r ? now - r.t0 : 0;
     if (r && !r.reduced) {
       r.steps.forEach((s, j) => {
-        const k = edgeAt.get(`${s.id}>${s.via}`)!;
+        const path = pathOf(s);
+        const k = path[0];
         const p = Math.min(1, Math.max(0, (el - (s.hops - 1) * HOP_MS) / HOP_MS));
         const sp = sparks.current[j];
-        if (sp) {
+        if (sp && k !== undefined) {
           sp.visible = p > 0 && p < 1;
-          if (sp.visible) curves[k].getPoint(1 - p, sp.position);
+          // Curves run importer/caller → imported/called: up travels backwards along them, down forwards.
+          if (sp.visible) curves[k].getPoint(s.dir === 'up' ? 1 - p : p, sp.position);
         }
-        if (p > 0) r.edges.add(k);
+        if (p > 0) path.forEach((x) => r.edges.add(x));
         if (p >= 1 && !r.hit.has(s.id)) {
           r.hit.add(s.id);
           setFlinching((f) => [...f, s.id]);
@@ -182,17 +202,19 @@ function Scene() {
         }
       });
     }
-    const src = r && outer.current[index.get(r.from)!];
-    if (ring.current) {
+    (r?.from ?? []).forEach((id, j) => {
+      const ring = rings.current[j];
+      const src = outer.current[index.get(id) ?? -1];
+      if (!ring || !src) return;
       const q = Math.min(1, el / 700);
-      ring.current.visible = !!src && !r.reduced && q < 1;
-      if (src) ring.current.position.set(src.position.x, 0.03, src.position.z);
-      ring.current.scale.setScalar(0.5 + q * 2.5);
-      (ring.current.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - q);
-    }
+      ring.visible = !r!.reduced && q < 1;
+      ring.position.set(src.position.x, 0.03, src.position.z);
+      ring.scale.setScalar(0.5 + q * 2.5);
+      (ring.material as THREE.MeshBasicMaterial).opacity = 0.8 * (1 - q);
+    });
     mods.forEach((m, i) => {
       const hr = hotRings.current[i];
-      if (hr) hr.visible = !!r && (r.hit.has(m.id) || (r.reduced && r.from === m.id));
+      if (hr) hr.visible = !!r && (r.hit.has(m.id) || (r.reduced && r.from.includes(m.id)));
     });
 
     // Edge styling: ripple > hover > click pulse > resting.
@@ -201,10 +223,11 @@ function Scene() {
     graph.edges.forEach((e, k) => {
       const line = lines.current[k];
       if (!line) return;
-      const hov = !!hovered && (e.from === hovered || e.to === hovered);
+      const hov = (!!hovered && (e.from === hovered || e.to === hovered)) || hoveredEdge === k;
       const throb = pulse.current && (e.from === pulse.current.id || e.to === pulse.current.id) ? pul : 0;
       const hot = !!ripple.current?.edges.has(k);
-      const color = hot ? HOT : hov || throb ? INK : hovered ? FAINT : EDGE;
+      const calls = e.kind === 'calls';
+      const color = hot ? HOT : hov || throb ? (calls ? CALL_DARK : INK) : hovered || hoveredEdge !== null ? FAINT : calls ? CALL : EDGE;
       const mat = line.material;
       mat.color.set(color);
       mat.linewidth = (1.2 + Math.min(e.weight, 5) * 0.9) * (1 + 1.4 * throb) * (hov || hot ? 1.35 : 1);
@@ -255,20 +278,57 @@ function Scene() {
       </mesh>
 
       {graph.edges.map((e, k) => (
-        <group key={`${e.from}>${e.to}`}>
+        <group key={`${e.from}>${e.to}>${e.kind}`}>
           <QuadraticBezierLine
             ref={(el) => void (lines.current[k] = el)}
             start={[0, 0, 0]}
             end={[0, 0, 0]}
-            color={EDGE}
+            color={e.kind === 'calls' ? CALL : EDGE}
             lineWidth={1.5}
+            dashed={e.kind === 'calls'}
+            dashSize={0.22}
+            gapSize={0.16}
           />
+          {e.kind === 'calls' && (
+            <QuadraticBezierLine
+              ref={(el) => void (hitLines.current[k] = el)}
+              start={[0, 0, 0]}
+              end={[0, 0, 0]}
+              lineWidth={16}
+              transparent
+              opacity={0}
+              depthWrite={false}
+              onPointerOver={(ev) => (ev.stopPropagation(), setHoveredEdge(k))}
+              onPointerOut={() => setHoveredEdge((h) => (h === k ? null : h))}
+            />
+          )}
           <mesh ref={(el) => void (arrows.current[k] = el)}>
             <coneGeometry args={[0.1 + Math.min(e.weight, 5) * 0.02, 0.3, 12]} />
-            <meshStandardMaterial color={EDGE} />
+            <meshStandardMaterial color={e.kind === 'calls' ? CALL : EDGE} />
           </mesh>
         </group>
       ))}
+      {hoveredEdge !== null && graph.edges[hoveredEdge] && (
+        <group ref={edgeTip}>
+          <Dom z={3} clamp>
+            {(() => {
+              const e = graph.edges[hoveredEdge];
+              const site = graph.imports.find((r) => r.kind === 'calls' && r.from === e.from && r.to === e.to);
+              const name = (id: string) => mods.find((m) => m.id === id)?.name ?? id;
+              return (
+                <div className="rounded-lg border border-edge bg-panel px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md">
+                  <div className="font-medium text-cream">talks over the network</div>
+                  <div className="font-mono text-muted">
+                    {name(e.from)} → {name(e.to)} · {e.weight} call {e.weight === 1 ? 'site' : 'sites'}
+                    {site ? ` · ${site.file}:${site.line}` : ''}
+                  </div>
+                  <div className="text-muted">Spotted by a heuristic (service lookup or URL), not an import.</div>
+                </div>
+              );
+            })()}
+          </Dom>
+        </group>
+      )}
 
       {steps.map((s, j) => (
         <group key={`${rippleFrom?.at}-${s.id}`} ref={(el) => void (sparks.current[j] = el)} visible={false}>
@@ -282,16 +342,20 @@ function Scene() {
           </mesh>
         </group>
       ))}
-      <mesh ref={ring} rotation-x={-Math.PI / 2} visible={false}>
-        <ringGeometry args={[0.9, 1, 64]} />
-        <meshBasicMaterial color={HOT} transparent depthWrite={false} />
-      </mesh>
+      {(rippleFrom?.ids ?? []).map((id, j) => (
+        <mesh key={`${rippleFrom?.at}-${id}`} ref={(el) => void (rings.current[j] = el)} rotation-x={-Math.PI / 2} visible={false}>
+          <ringGeometry args={[0.9, 1, 64]} />
+          <meshBasicMaterial color={HOT} transparent depthWrite={false} />
+        </mesh>
+      ))}
 
       {mods.map((m, i) => {
         const n = nodes[i];
         const char = characters[m.id];
-        const deps = dependenciesOf(graph, m.id).length;
-        const users = dependentsOf(graph, m.id).length;
+        const deps = dependenciesOf(graph, m.id, { calls: false }).length;
+        const users = dependentsOf(graph, m.id, { calls: false }).length;
+        const calls = dependenciesOf(graph, m.id).length - deps;
+        const callers = dependentsOf(graph, m.id).length - users;
         const pkgs = graph.external[m.id]?.length ?? 0;
         return (
           <group
@@ -339,7 +403,7 @@ function Scene() {
                 }}
               />
               {hovered === m.id && !dragging && (
-                <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={3}>
+                <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={3} clamp>
                   <div className="-translate-y-1/2 rounded-lg border border-edge bg-panel px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md">
                     <div className="font-medium text-cream">{char?.name ?? m.name}</div>
                     <div className="font-mono text-muted">{statsLine(m.stats)}</div>
@@ -347,6 +411,18 @@ function Scene() {
                       imports {deps} {deps === 1 ? 'module' : 'modules'} · imported by {users}
                       {pkgs ? ` · ${pkgs} ${pkgs === 1 ? 'package' : 'packages'}` : ''}
                     </div>
+                    {calls + callers > 0 && (
+                      <div className="font-mono text-muted">
+                        over the network: calls {calls} · called by {callers}
+                      </div>
+                    )}
+                  </div>
+                </Dom>
+              )}
+              {bubbles[m.id] && !(hovered === m.id && !dragging) && (
+                <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={4} clamp>
+                  <div className="w-max max-w-60 -translate-y-1/2 rounded-2xl rounded-bl-sm border border-edge bg-panel px-2.5 py-1.5 text-xs leading-snug text-cream shadow-md">
+                    {bubbles[m.id]}
                   </div>
                 </Dom>
               )}
@@ -374,15 +450,17 @@ export default function MapView() {
   const graph = useTavern((s) => s.graph);
   const selected = useTavern((s) => s.selectedModuleId);
   const rippleFrom = useTavern((s) => s.rippleFrom);
-  // Say where the ripple went; "nothing imports X" is a real answer, not a broken animation.
+  // Say where the ripple went; "nothing imports or calls X" is a real answer, not a broken animation.
   const caption = useMemo(() => {
     if (!rippleFrom || !graph || !repo) return null;
+    if (rippleFrom.label) return rippleFrom.label;
     const name = (id: string) => repo.modules.find((m) => m.id === id)?.name ?? id;
-    const st = affectedBy(graph, rippleFrom.id);
+    const st = rippleFrom.steps ?? [];
     const hops = Math.max(0, ...st.map((s) => s.hops));
+    const from = rippleFrom.ids.map(name).join(' and ');
     return st.length
-      ? `If ${name(rippleFrom.id)} breaks, ${st.map((s) => name(s.id)).join(', ')} feel it, up to ${hops} ${hops === 1 ? 'hop' : 'hops'} out.`
-      : `Nothing imports ${name(rippleFrom.id)}. The ripple stops there.`;
+      ? `If ${from} breaks, ${st.map((s) => name(s.id)).join(', ')} feel it, up to ${hops} ${hops === 1 ? 'hop' : 'hops'} out.`
+      : `Nothing imports or calls ${from}. The ripple stops there.`;
   }, [rippleFrom, graph, repo]);
 
   if (!repo || !graph) return null;
@@ -399,7 +477,7 @@ export default function MapView() {
         </div>
       )}
       <div className="pointer-events-none absolute right-3 bottom-3 text-xs text-muted">
-        Arrows point at what a module imports. Thicker means more imports. Drag to shove.
+        Arrows point at what a module imports (solid) or calls over the network (dashed). Thicker means more. Drag to shove.
       </div>
       {process.env.NODE_ENV !== 'production' && (
         <button

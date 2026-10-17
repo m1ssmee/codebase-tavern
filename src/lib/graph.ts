@@ -2,10 +2,16 @@
 // `node scripts/check.mjs` can run it directly.
 import type { Module, RepoFile } from './types';
 
-/** One import statement. `to` is the imported module (internal only); `target` the resolved file, when known. */
-export type ImportRef = { file: string; line: number; endLine: number; spec: string; from: string; to?: string; target?: string };
-export type Edge = { from: string; to: string; weight: number }; // from imports to, `weight` statements
+export type EdgeKind = 'imports' | 'calls';
+/**
+ * One import statement, or one call site that reaches another module over the network ("calls": a service
+ * registry lookup, a name→URL config entry, or an HTTP call whose URL names the module). `to` is the target
+ * module (internal only); `target` the resolved file for imports. A call's endLine is where the call closes.
+ */
+export type ImportRef = { file: string; line: number; endLine: number; spec: string; from: string; to?: string; target?: string; kind: EdgeKind };
+export type Edge = { from: string; to: string; weight: number; kind: EdgeKind }; // `weight` statements or call sites
 export type Graph = { imports: ImportRef[]; edges: Edge[]; external: Record<string, string[]> };
+export type EdgeOpts = { calls?: boolean }; // include "calls" edges (default true)
 
 const JS = /\.(m|c)?[jt]sx?$/;
 const PY = /\.pyi?$/;
@@ -39,6 +45,50 @@ function scan(content: string, re: RegExp) {
     for (; pos < m.index; pos++) if (content.charCodeAt(pos) === 10) line++;
     out.push({ spec: m[1], line, endLine: line + (m[0].match(/\n/g)?.length ?? 0) });
   }
+  return out;
+}
+
+// "calls" heuristics. ponytail: line-level regexes; dynamic lookups (SERVICES[prefix]) and URLs built elsewhere are missed.
+const REGISTRY = /\b\w*(?:services?|urls?|endpoints?|hosts?|clients?|upstreams?)\b\s*(?:\??\.\s*(\w+)|\[\s*['"`]([\w-]+)['"`]\s*\])/gi; // SERVICES.payments, services['orders']
+const CONFIG_ENTRY = /^\s*['"]?([\w-]+)['"]?\s*:.*(?:https?:\/\/|\b[A-Z0-9_]*_URL\b|\bbase_?url\b|\burl\b)/i; // payments: { baseUrl: … }
+const HTTP_CALL = /\b(?:fetch|axios(?:\.\w+)?|got(?:\.\w+)?|https?\.(?:request|get)|requests\.\w+|httpx\.\w+|ky(?:\.\w+)?|superagent\.\w+|http\.(?:Get|Post|NewRequest))\s*\(/;
+const COMMENT = /^\s*(\/\/|#|\*|\/\*)/;
+const IMPORT_LINE = /^\s*(import|from\s+\S+\s+import|export\s.*\bfrom\b)|\brequire\s*\(/;
+
+/** Line where the call starting on line i closes (parentheses balance), or i for a one-line entry. */
+function callEnd(lines: string[], i: number): number {
+  let depth = 0;
+  let opened = false;
+  for (let j = i; j < Math.min(lines.length, i + 60); j++) {
+    for (const ch of lines[j]) {
+      if (ch === '(') {
+        depth++;
+        opened = true;
+      } else if (ch === ')') depth--;
+    }
+    if (!opened || depth <= 0) return j;
+  }
+  return i;
+}
+
+function serviceCalls(f: RepoFile, from: string, named: { id: string; name: string }[]): ImportRef[] {
+  const out: ImportRef[] = [];
+  const lines = f.content.split('\n');
+  const byName = new Map(named.map((m) => [m.name.toLowerCase(), m.id]));
+  lines.forEach((l, i) => {
+    if (COMMENT.test(l) || IMPORT_LINE.test(l)) return;
+    const hits = new Set<string>();
+    for (const m of l.matchAll(REGISTRY)) {
+      const id = byName.get((m[1] ?? m[2]).toLowerCase());
+      if (id) hits.add(id);
+    }
+    const entry = l.match(CONFIG_ENTRY)?.[1];
+    if (entry && byName.has(entry.toLowerCase())) hits.add(byName.get(entry.toLowerCase())!);
+    if (HTTP_CALL.test(l))
+      for (const m of named)
+        if (new RegExp(`(\\/${m.name}\\b|\\/\\/${m.name}[:/]|\\b${m.name}[_-]?(?:url|base_?url|host|endpoint|api|service|client)\\b)`, 'i').test(l)) hits.add(m.id);
+    for (const to of hits) if (to !== from) out.push({ file: f.path, line: i + 1, endLine: callEnd(lines, i) + 1, spec: l.trim().slice(0, 120), from, to, kind: 'calls' });
+  });
   return out;
 }
 
@@ -86,17 +136,18 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
   const external = new Map<string, Set<string>>();
   const ext = (mod: string, name: string) => external.set(mod, (external.get(mod) ?? new Set()).add(name));
   const add = (file: string, from: string, x: { spec: string; line: number; endLine: number }, target?: string, to = target && owner.get(target)) =>
-    to && imports.push({ file, from, ...x, ...(target ? { target } : {}), to });
+    to && imports.push({ file, from, ...x, ...(target ? { target } : {}), to, kind: 'imports' });
 
   // Heuristic for other languages: an import-like line naming another module's folder.
   const named = modules
     .filter((m) => m.path && m.path !== '(misc)')
-    .map((m) => ({ id: m.id, re: new RegExp(`(^|[^\\w-])${m.path.split('/').pop()!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`) }))
-    .filter((m) => m.id.split('/').pop()!.length >= 3);
+    .map((m) => ({ id: m.id, name: m.path.split('/').pop()!, re: new RegExp(`(^|[^\\w-])${m.path.split('/').pop()!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`) }))
+    .filter((m) => m.name.length >= 3 && /^[\w-]+$/.test(m.name));
 
   for (const f of files) {
     const from = owner.get(f.path);
     if (!from) continue;
+    if (JS.test(f.path) || PY.test(f.path) || OTHER.test(f.path)) imports.push(...serviceCalls(f, from, named));
     if (JS.test(f.path) || /\.(vue|svelte|astro)$/.test(f.path)) {
       for (const re of JS_IMPORTS) {
         for (const x of scan(f.content, re)) {
@@ -146,30 +197,31 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
   const weights = new Map<string, Edge>();
   for (const r of imports) {
     if (!r.to || r.to === r.from) continue;
-    const k = `${r.from}\0${r.to}`;
-    const e = weights.get(k) ?? { from: r.from, to: r.to, weight: 0 };
+    const k = `${r.from}\0${r.to}\0${r.kind}`;
+    const e = weights.get(k) ?? { from: r.from, to: r.to, weight: 0, kind: r.kind };
     e.weight++;
     weights.set(k, e);
   }
   return {
     imports,
-    edges: [...weights.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to)),
+    edges: [...weights.values()].sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to) || a.kind.localeCompare(b.kind)),
     external: Object.fromEntries([...external].map(([m, s]) => [m, [...s].sort()])),
   };
 }
 
-/** Modules `id` imports. */
-export const dependenciesOf = (g: Graph, id: string) => g.edges.filter((e) => e.from === id);
-/** Modules that import `id`. */
-export const dependentsOf = (g: Graph, id: string) => g.edges.filter((e) => e.to === id);
+const keep = ({ calls = true }: EdgeOpts) => (e: Edge) => calls || e.kind === 'imports';
+/** Modules `id` imports (and calls). */
+export const dependenciesOf = (g: Graph, id: string, opts: EdgeOpts = {}) => g.edges.filter((e) => e.from === id && keep(opts)(e));
+/** Modules that import (or call) `id`. */
+export const dependentsOf = (g: Graph, id: string, opts: EdgeOpts = {}) => g.edges.filter((e) => e.to === id && keep(opts)(e));
 
-/** Every module that directly or transitively imports `id`, breadth-first: hop 1 first. `via` is the module it imports on the way. */
-export function affectedBy(g: Graph, id: string): { id: string; hops: number; via: string }[] {
+/** Every module that directly or transitively imports (or calls) `id`, breadth-first: hop 1 first. `via` is the module it reaches on the way. */
+export function affectedBy(g: Graph, id: string, opts: EdgeOpts = {}): { id: string; hops: number; via: string }[] {
   const out: { id: string; hops: number; via: string }[] = [];
   const seen = new Set([id]);
   const queue = [{ id, hops: 0 }];
   for (let cur = queue.shift(); cur; cur = queue.shift()) {
-    for (const e of dependentsOf(g, cur.id).sort((a, b) => b.weight - a.weight)) {
+    for (const e of dependentsOf(g, cur.id, opts).sort((a, b) => b.weight - a.weight)) {
       if (seen.has(e.from)) continue;
       seen.add(e.from);
       out.push({ id: e.from, hops: cur.hops + 1, via: cur.id });
@@ -179,19 +231,22 @@ export function affectedBy(g: Graph, id: string): { id: string; hops: number; vi
   return out;
 }
 
-/** Chat context: who imports this module and what it imports, with the exact import lines to cite. */
+/** Chat context: who imports or calls this module and what it imports or calls, with the exact lines to cite. */
 export function graphFacts(g: Graph, id: string, files: RepoFile[], nameOf: (id: string) => string) {
   const lines = new Map<string, string[]>();
   const code = (r: ImportRef) => {
     if (!lines.has(r.file)) lines.set(r.file, files.find((f) => f.path === r.file)?.content.split('\n') ?? []);
-    return lines.get(r.file)!.slice(r.line - 1, r.endLine).map((l) => l.trim()).join(' ').slice(0, 160);
+    return lines.get(r.file)!.slice(r.line - 1, r.kind === 'calls' ? r.line : r.endLine).map((l) => l.trim()).join(' ').slice(0, 160);
   };
+  const cite = (r: ImportRef) => `[${r.file}:${r.kind === 'calls' || r.line === r.endLine ? r.line : `${r.line}-${r.endLine}`}]`;
   const block = (e: Edge, other: string) =>
-    `${nameOf(other)}, ${e.weight} ${e.weight === 1 ? 'import' : 'imports'}:\n` +
+    (e.kind === 'calls'
+      ? `${nameOf(other)}, over the network (heuristic: a service lookup or URL, not an import), ${e.weight} call ${e.weight === 1 ? 'site' : 'sites'}:\n`
+      : `${nameOf(other)}, ${e.weight} ${e.weight === 1 ? 'import' : 'imports'}:\n`) +
     g.imports
-      .filter((r) => r.from === e.from && r.to === e.to)
+      .filter((r) => r.from === e.from && r.to === e.to && r.kind === e.kind)
       .slice(0, 8)
-      .map((r) => `    [${r.file}:${r.line === r.endLine ? r.line : `${r.line}-${r.endLine}`}] ${code(r)}`)
+      .map((r) => `    ${cite(r)} ${code(r)}`)
       .join('\n');
   const pkgs = g.external[id] ?? [];
   return {
@@ -205,7 +260,7 @@ export function graphFacts(g: Graph, id: string, files: RepoFile[], nameOf: (id:
 
 /** One gossip line from the graph, about the module's heaviest importer. */
 export function graphGossip(g: Graph, id: string, nameOf: (id: string) => string): string | null {
-  const top = dependentsOf(g, id).sort((a, b) => b.weight - a.weight)[0];
+  const top = dependentsOf(g, id, { calls: false }).sort((a, b) => b.weight - a.weight)[0];
   if (!top) return null;
   return `${nameOf(top.from)} imports me ${top.weight === 1 ? 'once' : `${top.weight} times`} and has never once said thanks.`;
 }

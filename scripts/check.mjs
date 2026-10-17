@@ -139,16 +139,22 @@ assert.equal(fixProblem(F('orders/checkout.test.ts', mixed), culprits, 'retry'),
 assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+  // TODO\n' + hdr('orders/checkout.test.ts') + "+test('x', () => {});"), culprits, 'retry'), /test files/);
 console.log('fix-quality checks ok');
 
-// Import graph: real quickcart edges (nothing imports payments: orders reaches it over HTTP via SERVICES.payments)
+// Import graph: real quickcart edges. Nothing imports payments; orders reaches it over HTTP via SERVICES.payments (a "calls" edge).
 const { buildGraph, dependenciesOf, dependentsOf, affectedBy, graphFacts, graphGossip } = await import('../src/lib/graph.ts');
 const { buildRepo } = await import('../src/lib/analyze.ts');
 const { default: qc } = await import('../src/data/demoRepo.json', { with: { type: 'json' } });
 const qr = buildRepo(qc.name, qc.files, qc.url);
 const qg = buildGraph(qr.files, qr.modules);
-const edgeList = (g) => g.edges.map((e) => `${e.from}>${e.to}:${e.weight}`);
+const edgeList = (g, kind = 'imports') => g.edges.filter((e) => e.kind === kind).map((e) => `${e.from}>${e.to}:${e.weight}`);
 assert.deepEqual(edgeList(qg), ['gateway>auth:1', 'gateway>utils:2', 'orders>gateway:2', 'orders>inventory:1', 'orders>utils:2', 'payments>utils:1']);
-assert.deepEqual(dependentsOf(qg, 'payments'), []);
-assert.deepEqual(dependenciesOf(qg, 'orders').map((e) => e.to), ['gateway', 'inventory', 'utils']);
+// calls: the gateway's name→URL service map, and orders' SERVICES.payments lookup
+assert.deepEqual(edgeList(qg, 'calls'), ['gateway>auth:1', 'gateway>inventory:1', 'gateway>orders:1', 'gateway>payments:1', 'orders>payments:1']);
+const op = qg.imports.find((r) => r.kind === 'calls' && r.from === 'orders' && r.to === 'payments');
+assert.deepEqual([op.file, op.line, op.endLine], ['orders/checkout.ts', 21, 30]); // the forward(...) call spans 21-30
+assert.deepEqual(dependentsOf(qg, 'payments', { calls: false }), []);
+assert.deepEqual(dependentsOf(qg, 'payments').map((e) => e.from), ['gateway', 'orders']);
+assert.deepEqual(affectedBy(qg, 'payments').map((a) => `${a.id}@${a.hops}`), ['gateway@1', 'orders@1']);
+assert.deepEqual(dependenciesOf(qg, 'orders', { calls: false }).map((e) => e.to), ['gateway', 'inventory', 'utils']);
 assert.deepEqual(affectedBy(qg, 'auth'), [{ id: 'gateway', hops: 1, via: 'auth' }, { id: 'orders', hops: 2, via: 'gateway' }]);
 assert.deepEqual(affectedBy(qg, 'utils').map((a) => `${a.id}@${a.hops}`), ['gateway@1', 'orders@1', 'payments@1']);
 assert.deepEqual(qg.external.auth, ['node:assert/strict', 'node:crypto', 'node:test']);
@@ -196,3 +202,73 @@ assert.deepEqual(fl.external['src/flask'], ['json', 'os', 'typing', 'werkzeug'])
 const go = G([['api/server.go', 'package api\nimport (\n  "fmt"\n  "example.com/app/store"\n)\n// store is great'], ['store/db.go', 'package store']]);
 assert.deepEqual(edgeList(go), ['api>store:1']);
 console.log('graph checks ok');
+
+// Diffs: bare @@ hunks (the Tribunal's), wrong line numbers, a dropped context space, and makeDiff round trips
+const { parseDiff, applyDiff, makeDiff } = await import('../src/lib/diff.ts');
+const { default: trib } = await import('../src/data/demoTribunal.json', { with: { type: 'json' } });
+const checkout = qc.files.find((f) => f.path === 'orders/checkout.ts').content;
+const [fd] = parseDiff(trib.verdict.fix.diff);
+const applied = applyDiff(checkout, fd);
+assert.equal(fd.path, 'orders/checkout.ts');
+assert.deepEqual([applied.changedOld, applied.added, applied.removed], [[24], 1, 0]); // inserted after line 24
+assert.equal(applied.text.split('\n')[24], '      idempotency_key: order.id,');
+const loose = '@@ -90,2 +90,2 @@\n const MAX_PAYMENT_ATTEMPTS = 2;\n-const x = 1;\n+const x = 2;\n';
+assert.equal(applyDiff('a\nconst MAX_PAYMENT_ATTEMPTS = 2;\nconst x = 1;\nb', parseDiff(loose, 'f.ts')[0]).text, 'a\nconst MAX_PAYMENT_ATTEMPTS = 2;\nconst x = 2;\nb');
+assert.match(applyDiff('nothing here', parseDiff(loose, 'f.ts')[0]).error, /doesn't match/);
+assert.equal(applyDiff('  if (x) {\n    y();\n  }', parseDiff('@@\n if (x) {\n-    y();\n+    z();\n', 'f.ts')[0]).text, '  if (x) {\n    z();\n  }'); // indentation-insensitive match
+const before = 'a\nb\nc\nd\ne\nf\ng\nh', after = 'a\nb\nc\nD\nE2\ne\nf\ng\nh';
+assert.equal(applyDiff(before, parseDiff(makeDiff('x.ts', before, after))[0]).text, after);
+assert.equal(makeDiff('x.ts', before, before), '');
+console.log('diff checks ok');
+
+// What-if impact (deterministic ground truth)
+const { computeImpact, renameDiff, deleteDiff, declaredIn, retryOrCheck, QUICKCART_SUGGESTIONS, suggestionDiff, sameChange } = await import('../src/lib/whatif.ts');
+const short = (imp) => imp.items.map((i) => `${i.moduleId}:${i.role}@${i.hops}${i.via ? '<' + i.via : ''}`);
+const fix = computeImpact(qr.files, qr.modules, qg, trib.verdict.fix.diff);
+assert.deepEqual(short(fix), ['orders:changed@0', 'gateway:upstream@1<orders', 'payments:downstream@1<orders']);
+assert.deepEqual(fix.items[1].lines.map((c) => `${c.path}:${c.line}`), ['gateway/config.ts:10']); // gateway routes /orders to the orders service
+assert.deepEqual(fix.items[2].lines.map((c) => `${c.path}:${c.line}`), ['orders/checkout.ts:21']); // the SERVICES.payments call now carries a new field
+assert.deepEqual(fix.symbols, []); // requestCharge is not exported
+const timeout = computeImpact(qr.files, qr.modules, qg, suggestionDiff(qr.files, QUICKCART_SUGGESTIONS[2]));
+assert.deepEqual(short(timeout), ['gateway:changed@0', 'orders:upstream@1<gateway']);
+assert.deepEqual(timeout.symbols, ['UPSTREAM_TIMEOUT_MS']);
+assert.deepEqual(timeout.items[0].usages.map((u) => `${u.path}:${u.line}`), ['gateway/proxy.ts:1', 'gateway/proxy.ts:6', 'gateway/proxy.ts:31']);
+assert.deepEqual(timeout.items[1].lines.map((c) => `${c.path}:${c.line}-${c.endLine}`), ['orders/checkout.ts:1-1', 'orders/checkout.ts:2-2']);
+for (const s of QUICKCART_SUGGESTIONS) assert.ok(suggestionDiff(qr.files, s), s.label);
+assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, suggestionDiff(qr.files, QUICKCART_SUGGESTIONS[0])).files, fix.files)); // same edit as the Tribunal fix
+assert.match(computeImpact(qr.files, qr.modules, qg, '--- a/nope.ts\n+++ b/nope.ts\n@@\n-x\n+y').error, /not in the loaded files/);
+// Rename an exported function: the declaration changes, callers keep the old name and are cited
+const rn = G([
+  ['lib/utils.js', "exports.etag = createETagGenerator({ weak: false });\nexports.wetag = createETagGenerator({ weak: true });\n" + 'x\n'.repeat(80)],
+  ['lib/response.js', "var etag = require('./utils').etag;\nres.send = function send(body) { etag(body); };"],
+  ['test/utils.js', "var utils = require('../lib/utils');\ndescribe('utils.etag(body)', function () {\n  utils.etag('express!');\n  utils.wetag('x');\n});"],
+]);
+const rnRepo = buildRepo('x', [
+  { path: 'lib/utils.js', content: "exports.etag = createETagGenerator({ weak: false });\nexports.wetag = createETagGenerator({ weak: true });\n" + 'x\n'.repeat(80), lineCount: 83 },
+  { path: 'lib/response.js', content: "var etag = require('./utils').etag;\nres.send = function send(body) { etag(body); };", lineCount: 2 },
+  { path: 'test/utils.js', content: "var utils = require('../lib/utils');\ndescribe('utils.etag(body)', function () {\n  utils.etag('express!');\n  utils.wetag('x');\n});", lineCount: 5 },
+]);
+const utilsJs = rnRepo.files[0].content;
+assert.equal(declaredIn(utilsJs, 1, 1).name, 'etag');
+const ren = computeImpact(rnRepo.files, rnRepo.modules, rn, renameDiff('lib/utils.js', utilsJs, 1, 1));
+assert.deepEqual(ren.symbols, ['etag']);
+assert.deepEqual(short(ren), ['lib:changed@0', 'test:upstream@1<lib']);
+assert.deepEqual(ren.items.find((i) => i.moduleId === 'test').usages.map((u) => `${u.path}:${u.line}`), ['test/utils.js:2', 'test/utils.js:3']);
+assert.deepEqual(ren.items[0].usages.map((u) => `${u.path}:${u.line}`), ['lib/response.js:1', 'lib/response.js:2']); // same module, still breaks
+assert.equal(deleteDiff('a.ts', 'a\nb\nc', 2, 2), '--- a/a.ts\n+++ b/a.ts\n@@ -1,3 +1,2 @@\n a\n-b\n c');
+assert.deepEqual([retryOrCheck('for (let attempt = 1;'), retryOrCheck('if (!user) return'), retryOrCheck('const x = 1')], ['retry', 'check', null]);
+console.log('what-if checks ok');
+
+// Saved what-if runs (demo replay): each still matches its change on the bundled quickcart, and only lists modules
+// the deterministic impact list contains.
+const { default: savedWhatIf } = await import('../src/data/demoWhatIf.json', { with: { type: 'json' } });
+assert.ok(savedWhatIf.runs.some((r) => r.title === 'Add an idempotency key'));
+for (const run of savedWhatIf.runs) {
+  const imp = computeImpact(qr.files, qr.modules, qg, run.diff);
+  const ids = imp.items.map((i) => i.moduleId);
+  assert.deepEqual(run.items.map((i) => i.moduleId), ids, run.title);
+  assert.ok(run.items.every((i) => ['breaks', 'at risk', 'fine', 'relieved'].includes(i.verdict) && i.reason && i.reaction), run.title);
+  assert.ok(run.summary.update && run.summary.check, run.title);
+}
+assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, savedWhatIf.runs[0].diff).files, fix.files)); // replays for "Apply this fix" too
+console.log('saved what-if checks ok');
