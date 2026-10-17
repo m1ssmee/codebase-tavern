@@ -103,7 +103,7 @@ function skipSteps(reasons: Record<string, number>, say: Say) {
       why === 'dependencies' ? 'Skipping node_modules'
       : why === 'build output' ? 'Skipping build output'
       : why === CAP_REASON ? `Leaving ${plural(n, 'file')} outside (over the cap)`
-      : `Skipping ${n.toLocaleString('en')} ${why}`,
+      : `Skipping ${n.toLocaleString('en')} ${n === 1 ? why.replace('images and binaries', 'image or binary').replace(/files\b/, 'file').replace('notebooks', 'notebook') : why}`,
     );
 }
 
