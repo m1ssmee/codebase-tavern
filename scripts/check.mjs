@@ -138,3 +138,24 @@ const mixed = hdr('orders/checkout.test.ts') + "+test('one charge', () => {});\n
 assert.equal(fixProblem(F('orders/checkout.test.ts', mixed), culprits, 'retry'), null);
 assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+  // TODO\n' + hdr('orders/checkout.test.ts') + "+test('x', () => {});"), culprits, 'retry'), /test files/);
 console.log('fix-quality checks ok');
+
+// 3D cast assignment: folder name, then main file names, then the fallbacks; repeats get the alternate variant
+const { assignCast, keywordArchetype, tokens } = await import('../src/lib/cast.ts');
+const { readFileSync } = await import('node:fs');
+const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, `${c.archetype}${c.variant ? '*' : ''}`]));
+const demo = JSON.parse(readFileSync(new URL('../src/data/demoRepo.json', import.meta.url), 'utf8'));
+assert.deepEqual(castOf(detectModules(demo.files)), {
+  utils: 'junkDrawer', orders: 'clerk', gateway: 'doorman', auth: 'bouncer', payments: 'accountant', inventory: 'hoarder', '(misc)': 'junkDrawer*',
+});
+const express = JSON.parse(readFileSync(new URL('../src/data/expressModules.json', import.meta.url), 'utf8'));
+assert.deepEqual(castOf(express.modules), { test: 'inspector', '(root)': 'librarian', lib: 'junkDrawer', examples: 'hoarder', '(misc)': 'junkDrawer*' });
+assert.deepEqual(tokens('userModels.test.ts'), ['user', 'models', 'test', 'ts']);
+assert.equal(keywordArchetype('__tests__'), 'inspector');
+assert.equal(keywordArchetype('auth-api'), 'clerk'); // head noun wins
+assert.equal(keywordArchetype('feedback'), null); // whole tokens only, no "db" inside words
+assert.equal(keywordArchetype('Payment'), 'accountant'); // case and plural folded
+const M = (id, filePaths, s = {}) => ({ id, name: id, path: id, filePaths, stats: { fileCount: 1, totalLines: 50, biggestFile: { path: '', lines: 50 }, todoCount: 0, maxNesting: 1, hasTests: false, ...s } });
+assert.deepEqual(castOf([M('core', ['core/server.ts', 'core/README.md']), M('x', ['x/a.ts']), M('y', ['y/b.ts'], { todoCount: 5 }), M('z', ['z/z.test.ts'])]), {
+  core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'clerk', // tests aren't main files
+});
+console.log('cast checks ok');

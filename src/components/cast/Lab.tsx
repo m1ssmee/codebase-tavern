@@ -1,0 +1,247 @@
+'use client';
+// /lab: review page for the 3D cast. Not linked from the app. Zero API calls: quickcart comes from the
+// saved demo data, express from a module snapshot in src/data.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
+import type { Module, ModuleStats } from '@/lib/types';
+import { ARCHETYPES, CAST, assignCast, type Archetype, type Variant } from '@/lib/cast';
+import { assignColors, PALETTE } from '@/lib/characters';
+import { detectModules } from '@/lib/analyze';
+import demoRepo from '@/data/demoRepo.json';
+import expressSnap from '@/data/expressModules.json';
+import { CastLights, Character3D } from './Character3D';
+import { EXPRESSIONS, type Expression } from './rig';
+import type { Built } from './archetypes';
+
+type Scene = 'all' | 'quickcart' | 'express';
+type Slot = { key: string; label: string; sub: string; archetype: Archetype; variant: Variant; color: string; stats: ModuleStats };
+
+const REPOS: Record<Exclude<Scene, 'all'>, Module[]> = {
+  quickcart: detectModules((demoRepo as { files: { path: string; content: string; lineCount: number }[] }).files),
+  express: expressSnap.modules as Module[],
+};
+const castRows = (mods: Module[]) => assignCast(mods).map((c, i) => ({ module: mods[i], ...c }));
+const SPACING = 2.15;
+
+function Spin({ on, children, x }: { on: boolean; children: React.ReactNode; x: number }) {
+  const ref = useRef<THREE.Group>(null);
+  useFrame((_, dt) => {
+    if (ref.current) ref.current.rotation.y = on ? ref.current.rotation.y + dt * 0.55 : 0;
+  });
+  return (
+    <group ref={ref} position={[x, 0, 0]}>
+      {children}
+    </group>
+  );
+}
+
+/** Keeps the DOM name labels under each character (plain DOM, not one React root per label). */
+function LabelTracker({ xs, refs }: { xs: number[]; refs: React.RefObject<(HTMLDivElement | null)[]> }) {
+  const v = useMemo(() => new THREE.Vector3(), []);
+  useFrame(({ camera, size }) => {
+    xs.forEach((x, i) => {
+      const el = refs.current[i];
+      if (!el) return;
+      v.set(x, -0.02, 0.9).project(camera);
+      el.style.transform = `translate(-50%, 0) translate(${((v.x + 1) / 2) * size.width}px, ${((1 - v.y) / 2) * size.height}px)`;
+    });
+  });
+  return null;
+}
+
+/** Frames the whole lineup, or one character when focused. */
+function Framing({ focusX, width }: { focusX: number | null; width: number }) {
+  const camera = useThree((s) => s.camera);
+  const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
+  const { width: w, height: h } = useThree((s) => s.size);
+  useEffect(() => {
+    if (!controls) return;
+    if (focusX !== null) {
+      controls.target.set(focusX, 0.95, 0);
+      camera.position.set(focusX + 0.9, 1.35, 5.2);
+    } else {
+      const tanH = Math.tan((15 * Math.PI) / 180) * (w / h);
+      controls.target.set(0, 0.95, 0);
+      camera.position.set(0, 1.45, Math.max(7, (width / 2 + 0.4) / tanH));
+    }
+    controls.update();
+  }, [focusX, width, controls, camera, w, h]);
+  return null;
+}
+
+const btn = (on: boolean) =>
+  `rounded-md border px-2 py-1 text-xs transition-colors ${on ? 'border-amber bg-amber text-ink' : 'border-edge bg-panel text-cream hover:bg-wood'}`;
+
+function Slider({ label, value, min, max, step = 1, onChange, fmt = String }: { label: string; value: number; min: number; max: number; step?: number; onChange: (v: number) => void; fmt?: (v: number) => string }) {
+  return (
+    <label className="flex flex-col gap-0.5 text-xs">
+      <span className="flex justify-between text-muted">
+        {label}
+        <span className="font-mono text-cream">{fmt(value)}</span>
+      </span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(+e.target.value)} className="accent-black" />
+    </label>
+  );
+}
+
+export default function Lab() {
+  const [scene, setScene] = useState<Scene>('all');
+  const [expression, setExpression] = useState<Expression>('deadpan');
+  const [turntable, setTurntable] = useState(false);
+  const [silhouette, setSilhouette] = useState(false);
+  const [variant, setVariant] = useState<Variant>(0);
+  const [shift, setShift] = useState(0);
+  const [focus, setFocus] = useState<number | null>(null);
+  const [logLines, setLogLines] = useState(2.4);
+  const [fileCount, setFileCount] = useState(4);
+  const [todos, setTodos] = useState(1);
+  const [nesting, setNesting] = useState(3);
+  const [biggest, setBiggest] = useState(120);
+  const [tris, setTris] = useState<Record<string, Built['tris']>>({});
+  const labels = useRef<(HTMLDivElement | null)[]>([]);
+
+  const stats = useMemo<ModuleStats>(
+    () => ({ totalLines: Math.round(10 ** logLines), fileCount, todoCount: todos, maxNesting: nesting, biggestFile: { path: 'lab.ts', lines: biggest }, hasTests: true }),
+    [logLines, fileCount, todos, nesting, biggest],
+  );
+  const cycle = useCallback((c: string) => PALETTE[(PALETTE.indexOf(c) + shift) % PALETTE.length], [shift]);
+  const slots = useMemo<Slot[]>(() => {
+    if (scene === 'all')
+      return ARCHETYPES.map((a, i) => ({ key: a, label: CAST[a].name, sub: variant ? 'alternate props' : '', archetype: a, variant, color: PALETTE[(i + shift) % PALETTE.length], stats }));
+    const mods = REPOS[scene], colors = assignColors(mods);
+    return castRows(mods).map((r) => ({
+      key: r.module.id, label: r.module.name, sub: `${CAST[r.archetype].name}${r.variant ? ' (alt)' : ''}`,
+      archetype: r.archetype, variant: r.variant, color: cycle(colors[r.module.id]), stats: r.module.stats,
+    }));
+  }, [scene, variant, shift, stats, cycle]);
+  const xs = slots.map((_, i) => (i - (slots.length - 1) / 2) * SPACING);
+  const onBuilt = useCallback((key: string, b: Built) => {
+    setTris((t) => (t[key]?.base === b.tris.base && t[key]?.outline === b.tris.outline ? t : { ...t, [key]: b.tris }));
+  }, []);
+  const focused = focus === null ? null : slots[focus];
+
+  return (
+    <div className="flex h-screen w-full overflow-hidden bg-ink text-cream">
+      <aside className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-edge p-4 text-sm">
+        <div>
+          <h1 className="font-display text-2xl">Cast lab</h1>
+          <p className="text-xs text-muted">Review page for the 3D characters. Click a character to focus, drag to orbit.</p>
+        </div>
+        <section className="flex flex-wrap gap-1.5" aria-label="Scene">
+          {(['all', 'quickcart', 'express'] as Scene[]).map((s) => (
+            <button key={s} className={btn(scene === s)} onClick={() => { setScene(s); setFocus(null); }}>
+              {s === 'all' ? 'All archetypes' : `Cast: ${s}`}
+            </button>
+          ))}
+        </section>
+        <section className="flex flex-col gap-1.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Expression</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {EXPRESSIONS.map((e) => (
+              <button key={e} className={btn(expression === e)} onClick={() => setExpression(e)}>
+                {e}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="flex flex-wrap gap-1.5">
+          <button className={btn(turntable)} onClick={() => setTurntable((v) => !v)}>Turntable</button>
+          <button className={btn(silhouette)} onClick={() => setSilhouette((v) => !v)}>Silhouette</button>
+          <button className={btn(variant === 1)} disabled={scene !== 'all'} onClick={() => setVariant((v) => (v ? 0 : 1))}>Alternate props</button>
+          <button className={btn(false)} onClick={() => setShift((v) => (v + 1) % PALETTE.length)}>Cycle colours</button>
+          {focus !== null && <button className={btn(false)} onClick={() => setFocus(null)}>Show all</button>}
+        </section>
+        <section className={`flex flex-col gap-2 ${scene !== 'all' ? 'opacity-40' : ''}`}>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Stats {scene !== 'all' && '(real stats in cast view)'}</h2>
+          <Slider label="Total lines" value={logLines} min={1} max={4.3} step={0.05} onChange={setLogLines} fmt={(v) => Math.round(10 ** v).toLocaleString('en')} />
+          <Slider label="File count" value={fileCount} min={1} max={30} onChange={setFileCount} />
+          <Slider label="TODOs (5+ shifty eyes)" value={todos} min={0} max={12} onChange={setTodos} />
+          <Slider label="Max nesting (6+ spiral eyes)" value={nesting} min={0} max={12} onChange={setNesting} />
+          <Slider label="Biggest file lines (300+ sweat)" value={biggest} min={10} max={1500} step={10} onChange={setBiggest} />
+        </section>
+        {focused && (
+          <section className="rounded-md border border-edge p-2 text-xs">
+            <p className="font-semibold">{CAST[focused.archetype].name}</p>
+            <p className="text-muted">{CAST[focused.archetype].joke}</p>
+          </section>
+        )}
+        {(['quickcart', 'express'] as const).map((repo) => (
+          <section key={repo} className="flex flex-col gap-1">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Cast for {repo}</h2>
+            <table className="text-xs">
+              <tbody>
+                {castRows(REPOS[repo]).map((r) => (
+                  <tr key={r.module.id}>
+                    <td className="pr-2 font-mono">{r.module.name}</td>
+                    <td>{CAST[r.archetype].name}{r.variant ? ' (alt)' : ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+        <section className="flex flex-col gap-1">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Triangles (body / outline)</h2>
+          <table className="text-xs" data-testid="tris">
+            <tbody>
+              {slots.map((s) => (
+                <tr key={s.key}>
+                  <td className="pr-2">{s.label}</td>
+                  <td className="font-mono">{tris[`${scene}:${s.key}`] ? `${tris[`${scene}:${s.key}`].base} / ${tris[`${scene}:${s.key}`].outline}` : '…'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </aside>
+      <main className="relative min-w-0 flex-1" data-testid="stage">
+        <Canvas flat dpr={[1, 1.5]} camera={{ fov: 30, position: [0, 1.45, 22] }}>
+          <color attach="background" args={[silhouette ? '#ffffff' : '#fafaf8']} />
+          <CastLights />
+          {!silhouette && (
+            <mesh rotation-x={-Math.PI / 2} position={[0, -0.001, 0]}>
+              <circleGeometry args={[30, 64]} />
+              <meshBasicMaterial color="#efeee9" />
+            </mesh>
+          )}
+          {slots.map((s, i) => (
+            <Spin key={s.key} on={turntable} x={xs[i]}>
+              <Character3D
+                archetype={s.archetype}
+                variant={s.variant}
+                color={s.color}
+                stats={s.stats}
+                expression={expression}
+                silhouette={silhouette}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFocus(i);
+                }}
+                onBuilt={(b) => onBuilt(`${scene}:${s.key}`, b)}
+              />
+            </Spin>
+          ))}
+          <OrbitControls makeDefault target={[0, 0.95, 0]} maxPolarAngle={Math.PI / 2 - 0.02} />
+          <Framing focusX={focus === null ? null : xs[focus]} width={slots.length * SPACING} />
+          <LabelTracker xs={xs} refs={labels} />
+        </Canvas>
+        {!silhouette &&
+          slots.map((s, i) => (
+            <div
+              key={s.key}
+              ref={(el) => {
+                labels.current[i] = el;
+              }}
+              data-testid="label"
+              className="pointer-events-none absolute left-0 top-0 whitespace-nowrap text-center leading-tight"
+            >
+              <div className="text-[11px] font-semibold text-cream">{s.label}</div>
+              {s.sub && <div className="text-[10px] text-muted">{s.sub}</div>}
+            </div>
+          ))}
+      </main>
+    </div>
+  );
+}

@@ -44,3 +44,6 @@ next-env.d.ts
 
 # local presentation files
 *.pptx
+
+# third-party agent skills (installed locally, not published)
+.claude/skills/
