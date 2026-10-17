@@ -1,11 +1,11 @@
 'use client';
 // 3D cast members for any React Three Fiber scene. Load this module with next/dynamic (ssr: false):
 // it pulls in three.js.
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref, type RefObject } from 'react';
+import { Component, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref, type RefObject } from 'react';
 import * as THREE from 'three';
 import { Canvas, useFrame, useThree, type CanvasProps, type ThreeEvent } from '@react-three/fiber';
 import { AdaptiveDpr, PerformanceMonitor } from '@react-three/drei';
-import type { Module, ModuleStats } from '@/lib/types';
+import type { Module, ModuleStats, Mood } from '@/lib/types';
 import { assignCast, type Archetype, type Variant } from '@/lib/cast';
 import { faceTraits, hash, PALETTE } from '@/lib/characters';
 import CharacterFace from '@/components/CharacterFace';
@@ -44,6 +44,16 @@ export type Character3DProps = {
   onClick?: (e: ThreeEvent<MouseEvent>) => void;
   /** Animate it as the actor registered under this id: useActor(id), the director's events, clicks boing. */
   actor?: string;
+  /** The app's mood for the module (needs `actor`): talking, accused, guilty, happy, What-if reactions. */
+  mood?: Mood;
+  /** Swap the clip a mood plays (on the map, What-if's relieved "happy" is a hop). */
+  moodClips?: Partial<Record<Mood, string>>;
+  /** Idle gags now and then (default on; the app keeps them off for now). */
+  ambient?: boolean;
+  /** Clicks boing and count towards pestering (default on). */
+  clicks?: boolean;
+  /** Don't pick its meshes with the pointer: the parent supplies a cheap hit shape (the map). */
+  hitbox?: boolean;
   /** Called with each new build (triangle and draw-call counts, rig). */
   onBuilt?: (b: Built) => void;
   /** Resolves to the rig, for animation. Same joints at both detail levels. */
@@ -73,7 +83,7 @@ function DetailProbe({ target, level, onChange }: { target: RefObject<THREE.Grou
   return null;
 }
 
-export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, actor, ref }: Character3DProps) {
+export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, actor, mood, moodClips, ambient = true, clicks = true, hitbox = false, ref }: Character3DProps) {
   const s = stats ?? module?.stats ?? DEFAULT_STATS;
   const auto = useMemo(() => {
     if (archetype || !module) return null;
@@ -92,13 +102,22 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
   // An actor keeps its state (mood, cooldowns, where it floated to) across rebuilds, e.g. a detail swap.
   useLayoutEffect(() => {
     if (!actor) return;
-    bindActor(actor, built, a, v, get);
+    bindActor(actor, built, a, v, get).ambient = ambient;
     return () => unbindActor(actor, built);
-  }, [actor, built, a, v, get]);
+  }, [actor, built, a, v, get, ambient]);
   useLayoutEffect(() => {
-    if (actor) getActor(actor)?.setExpression(expression);
-    else applyExpression(built.rig, expression === 'deadpan' ? built.neutral : PRESETS[expression], faceTraits(s));
-  }, [actor, built, expression, s]);
+    if (actor) {
+      if (!mood) getActor(actor)?.setExpression(expression);
+    } else applyExpression(built.rig, expression === 'deadpan' ? built.neutral : PRESETS[expression], faceTraits(s));
+  }, [actor, built, expression, s, mood]);
+  // The app's mood drives the actor; clips stay out of the way of anything the director is running.
+  useEffect(() => {
+    if (actor && mood) getActor(actor)?.setMood(mood, moodClips);
+  }, [actor, mood, moodClips, built]);
+  useEffect(() => {
+    if (!hitbox) return;
+    built.root.traverse((o) => (o.raycast = () => {}));
+  }, [built, hitbox]);
   useFrame((_, dt) => {
     if (actor) getActor(actor)?.update(dt);
   });
@@ -110,7 +129,7 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
       position={position}
       scale={scale}
       onClick={(e) => {
-        if (actor) click(actor);
+        if (actor && clicks) click(actor);
         onClick?.(e);
       }}
     >
@@ -198,25 +217,47 @@ export type CastCanvasProps = Omit<CanvasProps, 'children'> & {
   autoFallback?: boolean;
   /** Background the characters sit on: light (the app) keeps the rim subtle, dark raises it. */
   look?: 'light' | 'dark';
+  /**
+   * Keep rendering the canvas when 3D characters are off: the scene has more than characters (the map), and its
+   * characters switch to their 2D faces themselves (useCast3D).
+   */
+  keep?: boolean;
 };
 
 /**
  * The canvas for any scene with cast members: shared look and lights preset, adaptive resolution, no
  * rendering while the tab is hidden, and the 2D fallback when 3D is off or too slow.
  */
-export function CastCanvas({ children, fallback = null, autoFallback = true, look = 'light', frameloop, ...props }: CastCanvasProps) {
+export function CastCanvas({ children, fallback = null, autoFallback = true, look = 'light', keep = false, frameloop, ...props }: CastCanvasProps) {
   const on = useCast3D((s) => s.on);
   const tooSlow = useCast3D((s) => s.tooSlow);
   const hidden = useSyncExternalStore(onVisibility, () => document.hidden, () => false);
   useEffect(() => setCastLook(look), [look]);
-  if (!on) return <>{fallback}</>;
+  if (!on && !keep) return <>{fallback}</>;
   return (
-    <Canvas {...castCanvasProps} {...props} frameloop={hidden ? 'never' : (frameloop ?? 'always')}>
-      <CastPerformance onSlow={autoFallback ? tooSlow : undefined} />
-      <CastFX />
-      {children}
-    </Canvas>
+    <CastBoundary fallback={fallback}>
+      <Canvas {...castCanvasProps} {...props} frameloop={hidden ? 'never' : (frameloop ?? 'always')}>
+        <CastPerformance onSlow={autoFallback && on ? tooSlow : undefined} />
+        <CastFX />
+        {children}
+      </Canvas>
+    </CastBoundary>
   );
+}
+
+/** No WebGL (or it crashed): this scene shows its fallback, and everyone switches to 2D faces. */
+class CastBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(e: unknown) {
+    console.warn('[cast] 3D failed, using 2D faces', e);
+    useCast3D.setState({ on: false, auto: true });
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
 /** "Switched to 2D faces" note with a way back; renders nothing unless the switch was automatic. */
@@ -234,18 +275,20 @@ export function CastFallbackNote({ className = '' }: { className?: string }) {
   );
 }
 
-/** One character on its own canvas (full detail), with the 2D face as the fallback. */
-export function CharacterStage({ className, ...props }: Character3DProps & { className?: string }) {
+/** One character on its own canvas (full detail unless `detail` says otherwise), with the 2D face as the fallback. */
+export function CharacterStage({ className, camera, fallback, ...props }: Character3DProps & { className?: string; camera?: CanvasProps['camera']; fallback?: ReactNode }) {
   const name = props.module?.name ?? props.archetype ?? 'character';
   return (
     <div className={className}>
       <CastCanvas
-        camera={{ position: [0, 1.0, 5.2], fov: 30, rotation: [0, 0, 0] }}
+        camera={camera ?? { position: [0, 1.0, 5.2], fov: 30, rotation: [0, 0, 0] }}
         fallback={
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2">
-            <CharacterFace name={name} stats={props.stats ?? props.module?.stats} color={props.color} size={120} />
-            <CastFallbackNote />
-          </div>
+          fallback ?? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+              <CharacterFace name={name} stats={props.stats ?? props.module?.stats} color={props.color} size={120} />
+              <CastFallbackNote />
+            </div>
+          )
         }
       >
         <CastLights />

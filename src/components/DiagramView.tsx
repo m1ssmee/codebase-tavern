@@ -10,6 +10,7 @@ import { blipText, unlockAudio } from '@/lib/blips';
 import Mermaid, { type MermaidHandle } from './Mermaid';
 import CharacterFace from './CharacterFace';
 import LandlordFace from './LandlordFace';
+import { CharacterStage } from './cast/Character3D';
 
 const NS = 'http://www.w3.org/2000/svg';
 const CARD = 250; // px the tour card covers at the bottom; focus keeps the stop above it
@@ -251,7 +252,18 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
         </div>
       )}
       <div className="mt-2 flex items-start gap-2">
-        <LandlordFace size={52} keys={repo.modules.length} talking={speaking} />
+        <CharacterStage
+          className="h-16 w-16 shrink-0"
+          archetype="landlord"
+          keys={repo.modules.length}
+          detail="lite"
+          actor="tour:landlord"
+          mood={speaking ? 'talking' : 'idle'}
+          ambient={false}
+          clicks={false}
+          camera={{ position: [0, 1.15, 4.0], fov: 30, rotation: [0, 0, 0] }}
+          fallback={<LandlordFace size={52} keys={repo.modules.length} talking={speaking} />}
+        />
         <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm leading-snug text-cream">
           <div className="text-xs font-medium">The Landlord</div>
           {line}

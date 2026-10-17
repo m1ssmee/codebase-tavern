@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { QuadraticBezierLine, useCursor, type QuadraticBezierLineRef } from '@react-three/drei';
 import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from 'd3-force';
 import * as THREE from 'three';
@@ -11,6 +11,7 @@ import { faceTraits, sizeOf, statsLine } from '@/lib/characters';
 import type { Module } from '@/lib/types';
 import MapNode from './MapNode';
 import { Dom, DomLayer } from './Dom';
+import { CastCanvas, CastFallbackNote, CastLights } from '../cast/Character3D';
 
 const PX = 30; // d3 layout pixels per world unit
 const LIFT = 0.25; // gap between a face and the ground
@@ -270,11 +271,10 @@ function Scene() {
   return (
     <>
       <color attach="background" args={['#fbfaf8']} />
-      <ambientLight intensity={1.5} />
-      <directionalLight position={[4, 10, 6]} intensity={1.2} />
+      <CastLights />
       <mesh rotation-x={-Math.PI / 2} position-y={-0.01}>
         <circleGeometry args={[radius, 72]} />
-        <meshBasicMaterial color="#f2efe9" />
+        <meshBasicMaterial color="#f2efe9" toneMapped={false} />
       </mesh>
 
       {graph.edges.map((e, k) => (
@@ -334,18 +334,18 @@ function Scene() {
         <group key={`${rippleFrom?.at}-${s.id}`} ref={(el) => void (sparks.current[j] = el)} visible={false}>
           <mesh>
             <sphereGeometry args={[0.13, 16, 12]} />
-            <meshBasicMaterial color={HOT} />
+            <meshBasicMaterial color={HOT} toneMapped={false} />
           </mesh>
           <mesh>
             <sphereGeometry args={[0.3, 16, 12]} />
-            <meshBasicMaterial color={HOT} transparent opacity={0.25} depthWrite={false} />
+            <meshBasicMaterial color={HOT} transparent opacity={0.25} depthWrite={false} toneMapped={false} />
           </mesh>
         </group>
       ))}
       {(rippleFrom?.ids ?? []).map((id, j) => (
         <mesh key={`${rippleFrom?.at}-${id}`} ref={(el) => void (rings.current[j] = el)} rotation-x={-Math.PI / 2} visible={false}>
           <ringGeometry args={[0.9, 1, 64]} />
-          <meshBasicMaterial color={HOT} transparent depthWrite={false} />
+          <meshBasicMaterial color={HOT} transparent depthWrite={false} toneMapped={false} />
         </mesh>
       ))}
 
@@ -373,21 +373,22 @@ function Scene() {
           >
             <mesh rotation-x={-Math.PI / 2} position-y={0.005}>
               <circleGeometry args={[n.scale * 0.3, 32]} />
-              <meshBasicMaterial color="#000" transparent opacity={0.07} depthWrite={false} />
+              <meshBasicMaterial color="#000" transparent opacity={0.07} depthWrite={false} toneMapped={false} />
             </mesh>
             {selected === m.id && (
               <mesh rotation-x={-Math.PI / 2} position-y={0.012}>
                 <ringGeometry args={[n.scale * 0.5, n.scale * 0.5 + 0.07, 48]} />
-                <meshBasicMaterial color={INK} />
+                <meshBasicMaterial color={INK} toneMapped={false} />
               </mesh>
             )}
             <mesh ref={(el) => void (hotRings.current[i] = el)} rotation-x={-Math.PI / 2} position-y={0.018} visible={false}>
               <ringGeometry args={[n.scale * 0.58, n.scale * 0.58 + 0.09, 48]} />
-              <meshBasicMaterial color={HOT} />
+              <meshBasicMaterial color={HOT} toneMapped={false} />
             </mesh>
             <group ref={(el) => void (inner.current[i] = el)}>
               <MapNode
                 module={m}
+                cast={mods}
                 stats={m.stats}
                 mood={moods[m.id]}
                 talking={moods[m.id] === 'talking'}
@@ -467,10 +468,12 @@ export default function MapView() {
   const busiest = [...repo.modules].sort((a, b) => dependentsOf(graph, b.id).length - dependentsOf(graph, a.id).length)[0];
   return (
     <div className="relative isolate h-full w-full overflow-hidden bg-[#fbfaf8]">
-      <Canvas orthographic flat dpr={[1, 1.5]} camera={{ position: CAMERA, zoom: 40, near: 0.1, far: 200 }}>
+      {/* The shared cast canvas, kept on when 3D characters are off: the map still works, with 2D faces. */}
+      <CastCanvas keep orthographic camera={{ position: CAMERA, zoom: 40, near: 0.1, far: 200 }}>
         <Scene />
-      </Canvas>
+      </CastCanvas>
       <DomLayer />
+      <CastFallbackNote className="absolute bottom-3 left-3" />
       {caption && (
         <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full border border-edge bg-panel px-3 py-1 text-sm text-cream shadow-sm">
           {caption}

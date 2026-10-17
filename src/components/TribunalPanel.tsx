@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { ArrowLeft, Gavel, Sparkles } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation, parseCitations } from '@/lib/citations';
@@ -12,6 +13,10 @@ import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
 import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
+import { useCast3D } from './cast/settings';
+
+// three.js loads only when the 3D cast is on and a hearing starts.
+const TribunalStage = dynamic(() => import('./cast/TribunalStage'), { ssr: false, loading: () => <div className="h-44 border-b border-edge bg-ink/40" /> });
 
 type Turn = { moduleId: string; text: string; accuses?: string };
 type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string };
@@ -69,6 +74,7 @@ function courtLines(suspects: { name: string; files: string[] }[], spice: SpiceL
 
 export default function TribunalPanel() {
   const { repo, characters, moods, spice, setTribunal } = useTavern();
+  const cast3D = useCast3D((s) => s.on);
   const [bug, setBug] = useState('');
   const [phase, setPhase] = useState<Phase>('input');
   const [suspects, setSuspects] = useState<string[]>([]);
@@ -281,6 +287,21 @@ export default function TribunalPanel() {
     }
   };
 
+  // The 2D suspects row: 3D characters off, too slow, or still loading.
+  const faces = (
+    <div className="flex justify-center gap-4 border-b border-edge bg-ink/40 px-3 py-3">
+      {suspects.map((id) => {
+        const m = repo.modules.find((x) => x.id === id);
+        return (
+          <div key={id} className="flex w-24 flex-col items-center text-center">
+            <CharacterFace size={64} name={m?.name ?? id} stats={m?.stats} color={characters[id]?.color} mood={moods[id]} />
+            <span className="mt-1 text-xs leading-tight text-cream/80">{title(id)}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   const line = (turn: Turn, key: string | number) => (
     <div key={key} className="flex gap-2">
       <CharacterFace size={28} name={repo.modules.find((m) => m.id === turn.moduleId)?.name ?? turn.moduleId} color={characters[turn.moduleId]?.color} still />
@@ -310,19 +331,17 @@ export default function TribunalPanel() {
         </button>
       </div>
 
-      {suspects.length > 0 && (
-        <div className="flex justify-center gap-4 border-b border-edge bg-ink/40 px-3 py-3">
-          {suspects.map((id) => {
-            const m = repo.modules.find((x) => x.id === id);
-            return (
-              <div key={id} className="flex w-24 flex-col items-center text-center">
-                <CharacterFace size={64} name={m?.name ?? id} stats={m?.stats} color={characters[id]?.color} mood={moods[id]} />
-                <span className="mt-1 text-xs leading-tight text-cream/80">{title(id)}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {suspects.length > 0 && (cast3D ? (
+        <TribunalStage
+          suspects={suspects}
+          modules={repo.modules}
+          moods={moods}
+          colors={Object.fromEntries(suspects.map((id) => [id, characters[id]?.color]))}
+          title={title}
+          verdict={verdict}
+          fallback={faces}
+        />
+      ) : faces)}
       {phase === 'hearing' && suspects.length > 0 && (
         <p className="border-b border-edge px-3 py-2 text-center text-sm text-muted italic">{waiting[lineIdx % waiting.length]}</p>
       )}

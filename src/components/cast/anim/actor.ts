@@ -35,9 +35,11 @@ export type PlayOpts = {
   /** Skip the cooldown and the crude lock (scripted Tribunal moments). */
   force?: boolean;
   speed?: number;
+  /** Play without its sounds (a ripple's flinch on every module it reaches). */
+  silent?: boolean;
 };
 type State = { hand: Partial<Record<'L' | 'R', HandPose>>; expr?: Expression; face?: Face; show: Set<string>; stash: Set<string> };
-export type Running = { name: string; info: ClipInfo; action: THREE.AnimationAction; priority: number; prev: number; st: State; done: (ok: boolean) => void; still: boolean };
+export type Running = { name: string; info: ClipInfo; action: THREE.AnimationAction; priority: number; prev: number; st: State; done: (ok: boolean) => void; still: boolean; silent: boolean };
 export type Target = THREE.Vector3 | THREE.Object3D | { client: [number, number] };
 export type Pointer = { from: Target; to?: Target; side: 'L' | 'R'; t0: number; sweep: number; hold: number; w: number; out: boolean; resolve: () => void; pose?: HandPose; cur: THREE.Vector3; fired: Set<string>; arm: boolean };
 type Tween = { name: string; from: THREE.Vector3; to: Target; t0: number; dur: number; arc: number; spin: number; stay: number; resolve: () => void };
@@ -118,6 +120,8 @@ export class Actor {
   pointer: Pointer | null = null;
   /** What a bonk is aimed at (set by the director): thrown ducks, keys and books fly there. */
   target: Target | null = null;
+  /** Plays its idle gag now and then when nothing else is going on (off in the app for now: no new gags yet). */
+  ambient = true;
   /** Small per-character gag state (the Judge's bangs this hearing). */
   readonly memo: Record<string, number> = {};
   /** Props that stay put in the world while the character moves (the Judge's bench). */
@@ -250,7 +254,7 @@ export class Actor {
     action.timeScale = still ? 1 : (o.speed ?? 1);
     action.setEffectiveWeight(o.weight ?? 1);
     action.fadeIn(still ? 0.1 : 0.06).play();
-    const r: Running = { name, info: c, action, priority: o.priority ?? 1, prev: -1, st: { hand: {}, show: new Set(), stash: new Set() }, done: resolve, still };
+    const r: Running = { name, info: c, action, priority: o.priority ?? 1, prev: -1, st: { hand: {}, show: new Set(), stash: new Set() }, done: resolve, still, silent: !!o.silent };
     if (d.crude || d.cool) this.cool.set(name, clock.now + CRUDE_COOLDOWN);
     if (d.crude) crudeOwner = { actor: this, until: clock.now + d.dur + 0.3 };
     if (d.loop) {
@@ -263,7 +267,7 @@ export class Actor {
       type Tag = { sound?: boolean; emits?: boolean };
       const cues = (d.cues ?? []).filter(([t, cue]) => t <= c.beat + 0.25 || (cue as Tag).emits);
       const first = cues.findIndex(([, cue]) => (cue as Tag).sound);
-      cues.forEach(([, cue], i) => (!(cue as Tag).sound || i === first) && cue(this, r));
+      cues.forEach(([, cue], i) => (!(cue as Tag).sound || (i === first && !o.silent)) && cue(this, r));
     }
   }
   private stop(r: Running, fade: number) {
@@ -328,7 +332,7 @@ export class Actor {
   }
   private fireCues(r: Running, t: number) {
     if (r.still) return;
-    for (const [ct, cue] of r.info.def.cues ?? []) if (ct > r.prev && ct <= t) cue(this, r);
+    for (const [ct, cue] of r.info.def.cues ?? []) if (ct > r.prev && ct <= t && !(r.silent && (cue as { sound?: boolean }).sound)) cue(this, r);
     r.prev = t;
   }
 
@@ -355,23 +359,21 @@ export class Actor {
   when(ev: string, timeout = 4) {
     return Promise.race([new Promise<void>((resolve) => this.events.set(ev, [...(this.events.get(ev) ?? []), resolve])), wait(timeout)]);
   }
-  setMood(m: Mood) {
+  /**
+   * The app's mood for this module, played on the character: idle and talking let go of any held pose; the rest
+   * set the face and play a clip (accused, guilty and happy gags; What-if's horrified, faint, nervous and shrug).
+   * `clips` swaps the clip for a mood (on the map, What-if's relieved "happy" is a hop).
+   */
+  setMood(m: Mood, clips: Partial<Record<Mood, string>> = {}) {
     if (m === this.mood) return;
     this.mood = m;
     this.talking = m === 'talking';
-    if (m === 'idle' || m === 'talking') {
-      this.release();
-      this.expression = 'deadpan';
-    } else if (m === 'accused') {
-      this.expression = 'nervous';
-      void this.play('accused', { priority: 2 });
-    } else if (m === 'guilty') {
-      this.expression = 'horrified';
-      void this.play('guilty', { priority: 2 });
-    } else if (m === 'happy') {
-      this.expression = 'smug';
-      void this.play('happy', { priority: 2 });
-    }
+    const FACE: Partial<Record<Mood, Expression>> = { accused: 'nervous', guilty: 'horrified', happy: 'smug', horrified: 'horrified', nervous: 'nervous' };
+    const CLIP: Partial<Record<Mood, string>> = { accused: 'accused', guilty: 'guilty', happy: 'happy', horrified: 'horrified', fainted: 'faint', nervous: 'nervous', shrug: 'shrug' };
+    if (m === 'idle' || m === 'talking') this.release();
+    this.expression = FACE[m] ?? 'deadpan';
+    const clip = clips[m] ?? CLIP[m];
+    if (clip) void this.play(clip, { priority: 2 });
   }
   setExpression(e: Expression) {
     this.expression = e;
@@ -475,7 +477,7 @@ export class Actor {
     this.t += dt;
     const now = clock.now;
     // Ambient idle gags now and then.
-    if (!this.cur && !this.holds.length && !this.float && !this.pointer && this.mood === 'idle' && !this.talking && useCastAnim.getState().ambient && now > this.nextIdle) {
+    if (!this.cur && !this.holds.length && !this.float && !this.pointer && this.mood === 'idle' && !this.talking && this.ambient && useCastAnim.getState().ambient && now > this.nextIdle) {
       void this.play('idle', { priority: 0 });
       this.nextIdle = now + 9 + Math.random() * 9;
     }

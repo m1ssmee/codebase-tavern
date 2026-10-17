@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { motion } from 'framer-motion';
 import { SendHorizontal } from 'lucide-react';
 import { useTavern } from '@/lib/store';
@@ -10,6 +11,10 @@ import { graphFacts } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
 import CharacterFace from './CharacterFace';
 import Rich from './Rich';
+import { useCast3D } from './cast/settings';
+
+// three.js loads only when the 3D cast is on.
+const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.CharacterStage), { ssr: false, loading: () => <div className="h-24 w-24 shrink-0" /> });
 
 const BUSY = 'Gemini is rate-limiting us. Try again in a minute.';
 const UNAVAILABLE = 'The AI is unavailable right now. Try again in a minute.'; // server sends 503 when a key is missing
@@ -93,6 +98,7 @@ export default function ChatPanel() {
   const messages = mod ? (chats[mod.id] ?? []) : [];
   const name = char?.name ?? mod?.name ?? '';
   const lastText = messages.at(-1)?.text.length;
+  const cast3D = useCast3D((s) => s.on);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' }); // braces: Chrome's scrollIntoView now returns a Promise
@@ -130,7 +136,21 @@ export default function ChatPanel() {
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="flex items-center gap-3 border-b border-edge p-4">
-        <CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
+        {cast3D && repo ? (
+          <CharacterStage
+            className="h-24 w-24 shrink-0"
+            actor={`chat:${mod.id}`}
+            module={mod}
+            cast={repo.modules}
+            color={char?.color}
+            mood={moods[mod.id] ?? 'idle'}
+            ambient={false}
+            clicks={false}
+            fallback={<CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />}
+          />
+        ) : (
+          <CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
+        )}
         <div className="min-w-0">
           <div className="font-display text-xl leading-tight">
             {name}

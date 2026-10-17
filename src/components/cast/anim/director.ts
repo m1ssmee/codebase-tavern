@@ -24,7 +24,11 @@ const SCRIPT = { priority: 2, force: true } as const;
 const MELEE: Partial<Record<Archetype, number>> = { bouncer: 0.55, accountant: 0.62, clerk: 0.62, doorman: 0.72, plumber: 0.95, star: 0.62, landlord: 0.65, inspector: 1.15, judge: 0.75 };
 
 // The Landlord, in the gallery, winces at every crack in the bench and writes it down (damage to the building).
-benchHooks.add(() => allActors().forEach((x) => x.archetype === 'landlord' && void x.play('wince', { priority: 2, force: true })));
+// Same canvas only: the tour's Landlord, open elsewhere, doesn't flinch at the Tribunal's bench.
+benchHooks.add((j) => {
+  const three = getActor(j.id)?.three;
+  allActors().forEach((x) => x.archetype === 'landlord' && x.three === three && void x.play('wince', { priority: 2, force: true }));
+});
 const judgeOnStage = () => allActors().find((x) => x.archetype === 'judge');
 
 /** Float over (melee) or aim (throwers), bonk with the signature prop, the target reacts, float back. */

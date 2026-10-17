@@ -2,6 +2,7 @@
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Gavel, Stamp, Volume2, VolumeX } from 'lucide-react';
+import { useCast3D } from './cast/settings';
 import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
@@ -35,6 +36,8 @@ function Segmented<T extends string>({ options, value, onChange }: { options: { 
 export default function TopBar() {
   const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal, setRoastOpen } = useTavern();
   const before = useRef<SpiceLevel>('unhinged');
+  const cast3D = useCast3D((s) => s.on);
+  const setCast3D = useCast3D((s) => s.setOn);
 
   // Hidden clean mode: Ctrl+Shift+C toggles it, restoring whatever level was active before.
   useEffect(() => {
@@ -74,6 +77,15 @@ export default function TopBar() {
           className="rounded-full border border-edge bg-panel p-2 text-cream transition-colors hover:bg-wood"
         >
           {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+        </button>
+        <button
+          type="button"
+          onClick={() => setCast3D(!cast3D)}
+          aria-pressed={cast3D}
+          title={cast3D ? '3D characters on (switch to 2D faces)' : '2D faces (switch to 3D characters)'}
+          className="rounded-full border border-edge bg-panel px-2.5 py-1.5 text-xs font-semibold text-cream transition-colors hover:bg-wood"
+        >
+          {cast3D ? '3D' : '2D'}
         </button>
         <button
           type="button"
