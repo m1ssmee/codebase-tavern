@@ -400,3 +400,105 @@ const back = fromCompact(JSON.parse(JSON.stringify(toCompact(card))));
 assert.deepEqual([back.repo, back.grade, back.entries.length, back.entries[0].stat, back.entries[0].face], [card.repo, 'C', 4, card.entries[0].stat, card.entries[0].face]);
 assert.equal(fromCompact([2, 'x']), null);
 console.log('roast checks ok');
+
+// Guards: the line filter in front of the comedy editor, and the schema check behind llmJSON's one retry.
+const { lineProblem, survivors, matchesSchema, knownNumbers } = await import('../src/lib/guards.ts');
+const LR = { needs: ['utils', 'validation.ts', '417'], known: knownNumbers('validation.ts 417 lines, 2000ms, 2400'), maxWords: 20 };
+assert.equal(lineProblem('validation.ts is 417 lines. That is not a helper, it is a landfill.', LR), null);
+assert.equal(lineProblem('validation.ts is 417 lines of shit and shirt.', LR), 'garbled: near-duplicate words');
+assert.equal(lineProblem('validation.ts is 417 lines and the the exports pile up.', LR), 'garbled: repeated word');
+assert.equal(lineProblem('validation.ts is 417 lines and nobody has opened it since', LR), 'unfinished sentence');
+assert.equal(lineProblem('validation.ts is 417 lines, which is longer than the.', LR), 'unfinished sentence');
+assert.equal(lineProblem('This file is a landfill with exports.', LR), 'no real stat or name');
+assert.equal(lineProblem('validation.ts is 4170 lines. Impressive.', LR), 'invented number 4170');
+assert.equal(lineProblem('Fun fact: validation.ts is 417 lines.', LR), 'banned by the voice guide');
+assert.equal(lineProblem('validation.ts is 417 lines lol.', LR), 'banned by the voice guide');
+assert.equal(lineProblem('validation.ts is 417 lines 😅.', LR), 'emoji or non-English characters');
+assert.equal(lineProblem('validation.ts is 417 lines!!', LR), 'exclamation marks');
+assert.equal(lineProblem('Whoever wrote validation.ts owes us 417 lines of apology.', LR), 'aimed at people');
+assert.equal(lineProblem('validation.ts is 417 lines of sexy helpers.', LR), 'blocklist');
+assert.equal(lineProblem('validation.ts is 417 damn lines.', { ...LR, clean: true }), 'swearing in a clean line');
+assert.equal(lineProblem('validation.ts is 417 lines, and every single one of them is load-bearing in a way that nobody in this building has ever measured.', LR), 'too long');
+assert.equal(lineProblem('Six violations, C grade. Rent is due.', { needs: ['C', '6'] }), null); // number words and the grade count
+assert.equal(lineProblem('Violations everywhere. Rent is due.', { needs: ['C', '6'] }), 'no real stat or name');
+assert.equal(lineProblem('2000 MILLISECONDS. THAT IS IT. ALSO PAYMENTS IS SLOW. WHY ARE YOU LIKE THIS.', {}), 'more than one outburst');
+assert.equal(lineProblem('2000 MILLISECONDS IS THE WHOLE TIMEOUT. utils is fine.', {}), null);
+assert.equal(lineProblem('The order and the orders module disagree about `order_id`.', {}), null); // plurals aren't garbles
+assert.deepEqual(survivors(['validation.ts: 417 lines of landfill.', 'Validation.ts: 417 lines of landfill.', 'nothing here'], LR), { kept: ['validation.ts: 417 lines of landfill.'], dropped: ['unfinished sentence'] });
+const SCH = { type: 'object', required: ['a', 'b'], properties: { a: { type: 'array', items: { type: 'string' } }, b: { type: 'integer' }, c: { type: 'string', enum: ['x', 'y'] } } };
+assert.ok(matchesSchema({ a: ['1'], b: 2 }, SCH) && matchesSchema({ a: [], b: 2, c: 'x' }, SCH));
+for (const bad of [{ a: ['1'] }, { a: [1], b: 2 }, { a: [], b: 2.5 }, { a: [], b: 2, c: 'z' }, [], null]) assert.ok(!matchesSchema(bad, SCH), JSON.stringify(bad));
+console.log('guard checks ok');
+
+// Citation verification: cited lines (±2) must hold a name or value from the sentence; else re-anchor or drop.
+const { CiteChecker, CiteStream, claimTerms } = await import('../src/lib/citations.ts');
+assert.deepEqual(claimTerms('If the gateway stops after 2000ms, `checkout()` retries up to `MAX_PAYMENT_ATTEMPTS = 2` on UpstreamTimeoutError.').sort(), ['2000', 'MAX_PAYMENT_ATTEMPTS', 'UpstreamTimeoutError', 'checkout'].sort());
+assert.deepEqual(claimTerms('I mark the order paid, step 1 of 3.'), []); // nothing to check against
+const qlines = () => new CiteChecker(new Map(qr.files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+let cc = qlines();
+assert.equal(cc.text('The gateway gives up after 2000ms [gateway/config.ts:16].'), 'The gateway gives up after 2000ms [gateway/config.ts:16].'); // verified
+assert.equal(cc.text('The gateway gives up after 2000ms [gateway/config.ts:3].'), 'The gateway gives up after 2000ms [gateway/config.ts:16].'); // re-anchored
+assert.equal(cc.text('`MAX_PAYMENT_ATTEMPTS` is 2 [orders/checkout.ts:60-64].'), '`MAX_PAYMENT_ATTEMPTS` is 2 [orders/checkout.ts:50-54].'); // nearest match, same length
+assert.equal(cc.text('`requestCharge()` sends it [payments/processor.ts:20].'), '`requestCharge()` sends it.'); // not in that file: dropped
+assert.equal(cc.text('I mark the order paid [orders/checkout.ts:67].'), 'I mark the order paid [orders/checkout.ts:67].'); // unchecked
+assert.equal(cc.text('`checkout()` retries on `UpstreamTimeoutError` [orders/checkout.ts:44-52] after 2000ms [gateway/config.ts:16].'), '`checkout()` retries on `UpstreamTimeoutError` [orders/checkout.ts:44-52] after 2000ms [gateway/config.ts:16].');
+assert.equal(cc.text('validation.ts is 417 lines [utils/validation.ts:1-417].'), 'validation.ts is 417 lines [utils/validation.ts:1-417].'); // a line count is about the cite
+assert.deepEqual(cc.counts, { verified: 4, repaired: 2, dropped: 1, unchecked: 1 });
+cc = qlines();
+assert.equal(cc.text('The gateway aborts after 2000ms [gateway/proxy.ts:31].'), 'The gateway aborts after 2000ms [gateway/proxy.ts:31].'); // through UPSTREAM_TIMEOUT_MS = 2000
+assert.equal(cc.text('Raising the timeout to 5000ms leaves the abort in place [gateway/proxy.ts:31].'), 'Raising the timeout to 5000ms leaves the abort in place [gateway/proxy.ts:31].'); // 5000 isn't in the code yet
+assert.equal(cc.text('`processCharge()` [payments/processor.ts:29] calls `recordCharge()` [payments/processor.ts:38].'), '`processCharge()` [payments/processor.ts:29] calls `recordCharge()` [payments/processor.ts:38].');
+assert.equal(cc.text('`checkout()` and `processCharge()` both run here [orders/checkout.ts:33] [payments/processor.ts:29].'), '`checkout()` and `processCharge()` both run here [orders/checkout.ts:33] [payments/processor.ts:29].'); // each name to its own file
+assert.equal(cc.text('`processThePayment()` does it [payments/processor.ts:29].'), '`processThePayment()` does it [payments/processor.ts:29].'); // a made-up name can't be checked
+assert.deepEqual(cc.counts, { verified: 5, repaired: 0, dropped: 0, unchecked: 2 });
+cc = qlines(); // false drops seen in live runs: the citation backs another part of the sentence
+assert.equal(cc.text('`checkout()` calls payments, which records the charge [payments/processor.ts:38].'), '`checkout()` calls payments, which records the charge [payments/processor.ts:38].');
+assert.equal(cc.text('My helpers in `utils/money.ts` round amounts for `processCharge`; none of that stops a repeat [utils/money.ts:1-5].'), 'My helpers in `utils/money.ts` round amounts for `processCharge`; none of that stops a repeat [utils/money.ts:1-5].');
+assert.equal(cc.text('Gateway hands orders a false failure at 2212ms [gateway/config.ts:16].'), 'Gateway hands orders a false failure at 2212ms [gateway/config.ts:16].'); // a number from the log never drops it
+assert.equal(cc.text('`UpstreamTimeoutError` is caught here [orders/checkout.ts:60].'), '`UpstreamTimeoutError` is caught here [orders/checkout.ts:50].'); // not the import on line 2
+assert.deepEqual(cc.counts, { verified: 0, repaired: 1, dropped: 0, unchecked: 3 });
+// Streamed in arbitrary chunks, the same result
+const answer = 'Payments takes ~2400ms [payments/processor.ts:3], and `UPSTREAM_TIMEOUT_MS` is 2000 [gateway/config.ts:16].';
+for (const size of [1, 3, 7, 50]) {
+  const cs = new CiteStream(qlines());
+  let got = '';
+  for (let i = 0; i < answer.length; i += size) got += cs.push(answer.slice(i, i + size));
+  got += cs.end();
+  assert.equal(got, 'Payments takes ~2400ms [payments/processor.ts:26], and `UPSTREAM_TIMEOUT_MS` is 2000 [gateway/config.ts:16].', `chunk ${size}`);
+}
+console.log('citation verification checks ok');
+
+const { judgeFallback } = await import('../src/lib/verdict.ts');
+for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
+  const j = judgeFallback(spice, ['orders', 'gateway'], 'x');
+  assert.ok(j.includes('orders and gateway') && lineProblem(j, { needs: ['orders'], clean: spice === 'clean' }) === null, j);
+}
+console.log('judge template checks ok');
+{
+  const { codeFacts } = await import('../src/lib/guards.ts');
+  const facts = codeFacts('const UPSTREAM_TIMEOUT_MS = 2000; function processCharge(order_id) {} // see checkout.ts, takes ~2400ms');
+  assert.deepEqual([...facts].sort(), ['2000', '2400', 'UPSTREAM_TIMEOUT_MS', 'checkout.ts', 'order_id', 'processCharge'].sort());
+  assert.equal(lineProblem('I send `order_id` twice now. Tidy work.', { needs: ['orders'], facts }), null); // a real code name counts
+  assert.equal(lineProblem('I get one shot; a 2400ms payment still trips the wire.', { needs: ['orders'], facts }), null);
+  assert.equal(lineProblem('I pretend the rename did something. Tidy work.', { needs: ['orders'], facts }), 'no real stat or name');
+  assert.equal(lineProblem('A 2000ms fuse under a service that needs 2400ms.', {}), null); // numbers aren't garbles
+  console.log('real-fact checks ok');
+}
+{
+  const { CiteChecker, claimTerms } = await import('../src/lib/citations.ts');
+  assert.deepEqual(claimTerms('It sets `Content-Type` via `res.send()` and `MAX_TRIES = 2`.').sort(), ['MAX_TRIES', 'send'].sort());
+  const cc = new CiteChecker(new Map(qr.files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+  assert.equal(cc.text('A customer is charged twice when the gateway aborts and `checkout()` retries [gateway/proxy.ts:31].'), 'A customer is charged twice when the gateway aborts and `checkout()` retries [gateway/proxy.ts:31].');
+  assert.equal(cc.text('Then `checkout()` retries [payments/ledger.ts:11].'), 'Then `checkout()` retries.'); // names code from elsewhere, never mentions payments
+  assert.equal(lineProblem('I still build the same `Location` header. Stubborn.', { needs: ['lib'], source: "res.set('Location', url)" }), null);
+  console.log('citation clause checks ok');
+}
+{
+  const { CiteChecker } = await import('../src/lib/citations.ts');
+  const cc = new CiteChecker(new Map(qr.files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+  assert.equal(cc.text('`checkout()` asks payments for the money here [orders/checkout.ts:46].'), '`checkout()` asks payments for the money here [orders/checkout.ts:46].'); // inside checkout()
+  const js = new CiteChecker(new Map([['r.js', ['res.redirect = function redirect(url) {', '  var body;', '  this.format({', '    text: function(){', "      body = 'Redirecting'", '    }', '  });', '};']]]));
+  assert.equal(js.text('`redirect()` builds a text body [r.js:4-5].'), '`redirect()` builds a text body [r.js:4-5].');
+  assert.deepEqual([cc.counts.verified, js.counts.verified], [1, 1]);
+  console.log('enclosing-function checks ok');
+}

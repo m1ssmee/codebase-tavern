@@ -52,6 +52,7 @@ export default function WhatIfPanel() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const reached = useRef(new Set<string>());
   const landed = useRef(new Map<string, Result>());
+  const spoken = useRef(new Set<string>()); // modules whose reaction bubble has played this step
   const ctrl = useRef<AbortController | null>(null);
 
   const later = (ms: number, f: () => void) => {
@@ -66,12 +67,27 @@ export default function WhatIfPanel() {
     const s = useTavern.getState();
     s.setMood(id, MOOD[r.verdict]);
     if (r.verdict === 'breaks') later(900, () => useTavern.getState().setMood(id, 'fainted')); // horrified, then faints
-    if (r.reaction) {
-      s.setBubble(id, r.reaction);
-      blipText(r.reaction, s.characters[id]?.voicePitch ?? 1, s.muted);
-      later(7000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null));
-    }
+    speak(id);
   };
+  const speak = (id: string) => {
+    const r = landed.current.get(id);
+    if (!r?.reaction || !reached.current.has(id) || spoken.current.has(id)) return;
+    spoken.current.add(id);
+    const s = useTavern.getState();
+    s.setBubble(id, r.reaction);
+    blipText(r.reaction, s.characters[id]?.voicePitch ?? 1, s.muted);
+    later(7000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null));
+  };
+  /** Live runs: the reactions come after the verdicts, once the comedy editor has picked them; they play in turn. */
+  const voice = (reactions: Record<string, string>) =>
+    Object.entries(reactions).forEach(([id, reaction], k) => {
+      const r = landed.current.get(id);
+      if (!r || !reaction) return;
+      const next = { ...r, reaction };
+      landed.current.set(id, next);
+      setResults((x) => ({ ...x, [id]: next }));
+      later(k * 900, () => speak(id));
+    });
   const land = (r: Result) => {
     landed.current.set(r.moduleId, r);
     setResults((x) => ({ ...x, [r.moduleId]: r }));
@@ -274,6 +290,7 @@ export default function WhatIfPanel() {
     setImpact(imp);
     setResults({});
     landed.current = new Map();
+    spoken.current = new Set();
     setSummary(null);
     s.setLandlordSays(null);
     s.setWhatIfDiff(imp.files.map((f) => ({ path: f.path, before: f.before, after: f.after })));
@@ -343,6 +360,7 @@ export default function WhatIfPanel() {
             clearTimeout(limit);
             land(e.item);
           } else if (e.type === 'summary') setSummary(e.summary);
+          else if (e.type === 'reactions') voice(e.reactions);
           else if (e.type === 'error') failed = true;
         }
       }

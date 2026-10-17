@@ -3,6 +3,8 @@ import { llmJSON } from '@/lib/llm';
 import { levelBlock, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { fallbackHeadline, fallbackLine, gradeFor, inspect, statText, SWEARING, type Facts, type FaceSpec, type RoastCard, type RoastEntry } from '@/lib/roast';
 import { signCard } from '@/lib/roastSign';
+import { editLines, type Candidate } from '@/lib/editor';
+import { knownNumbers } from '@/lib/guards';
 import { fetchRepo, MSG, Oops } from '@/lib/fetchRepo';
 import { buildRepo, parseGitHubUrl } from '@/lib/analyze';
 import { buildGraph } from '@/lib/graph';
@@ -32,8 +34,9 @@ const NAME = /^[\w.\-()/ ]{1,80}$/;
 const TITLE = /^[\p{L}\p{N} ,.'’\-()/_:&!?]{1,80}$/u;
 const obj = (properties: Record<string, object>) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
 const S = { type: 'string' };
-const TWICE = obj({ spicy: S, clean: S });
-const SCHEMA = obj({ headline: TWICE, entries: { type: 'array', items: obj({ moduleId: S, title: S, spicy: S, clean: S }) } });
+const THREE = { type: 'array', items: S, description: '3 variants of this line: the same facts, three different jokes.' };
+const TWICE = obj({ spicy: THREE, clean: THREE });
+const SCHEMA = obj({ headline: TWICE, entries: { type: 'array', items: obj({ moduleId: S, title: S, spicy: THREE, clean: THREE }) } });
 
 function cleanFacts(f: Record<string, unknown> | undefined): Facts {
   const out: Facts = {};
@@ -46,15 +49,13 @@ function cleanFacts(f: Record<string, unknown> | undefined): Facts {
   if (f?.orphan === true) out.orphan = true;
   return out;
 }
-const line = (v: unknown) =>
-  typeof v === 'string'
-    ? v
-        .replace(/\[[^\]]*\]/g, '') // no citations or brackets on the card
-        .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '') // no emojis
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 150)
-    : '';
+// No citations or brackets on the card. Emojis, overlong or broken lines are dropped by the filter, not patched.
+const line = (v: string) => v.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
+// The real names and numbers an entry's line may stand on (at least one must appear).
+const factWords = (e: RoastEntry) => {
+  const f = e.facts;
+  return [e.name, f.bigFile?.name ?? '', f.bigFile?.name.replace(/\.\w+$/, '') ?? '', String(f.bigFile?.lines ?? ''), String(f.nesting ?? ''), String(f.todos ?? ''), f.todos ? 'TODO' : '', f.todos ? 'TODOs' : '', f.codependentWith ?? '', ...(f.noTests ? ['tests', 'test', 'untested'] : []), ...(f.orphan ? ['0', 'imports', 'nobody'] : [])].filter(Boolean);
+};
 
 // Pre-warm: /tavern pings this on load. No model call.
 export function GET(req: Request) {
@@ -64,6 +65,7 @@ export function GET(req: Request) {
 
 export async function POST(req: Request) {
   if (rateLimited(req)) return Response.json({ error: 'busy' }, { status: 429 });
+  const started = Date.now();
   const b = await req.json().catch(() => null);
   const spice: SpiceLevel = LEVELS.includes(b?.spice) ? b.spice : 'unhinged';
   let repo = '';
@@ -133,7 +135,9 @@ export async function POST(req: Request) {
     }
   } else {
     try {
-      const out = await llmJSON<{ headline?: { spicy?: string; clean?: string }; entries?: { moduleId?: string; title?: string; spicy?: string; clean?: string }[] }>('roast', {
+      const prompt = JSON.stringify({ repo, grade: base.grade, violations, modulesInspected: modules, entries: entries.map((e) => ({ moduleId: e.id, title: e.title, stat: e.stat, facts: e.facts })) });
+      type Three = { spicy?: unknown; clean?: unknown };
+      const out = await llmJSON<{ headline?: Three; entries?: (Three & { moduleId?: string; title?: string })[] }>('roast', {
         system: `You write the lines on a "Roast My Repo" health-inspection notice in Codebase Tavern: an inspector's notice pinned to the repo's door.
 
 ${levelBlock(spice)}
@@ -143,22 +147,35 @@ ${VOICE_GUIDE}
 Rules:
 - headline: the Landlord speaking: he owns the building, has seen it all and is not surprised. One deadpan line under 14 words, in his voice (rent, deposits, the building, tenants), with the grade or a real number. Shape, not words to copy: "Six violations in six modules. I have seen worse. I raised the rent anyway."
 - One line per entry, under 14 words: an inspector's deadpan note on that module, built only on its facts (file names, line counts, "no tests", nesting depth, TODO count, the module it is codependent with, "0 imports, 0 calls"), with one image or comparison that fits the fact (a huge file as a landfill or filing cabinet, two modules that depend on each other as a couple who can't move out, untested code as a fire exit nobody has tried). Never invent numbers, files or functions. Roast the code, never people. Swearing is emphasis on top of a joke, never the joke itself.
-- Write every line twice: "spicy" at the active spice level, and "clean" with no swearing at all. Same facts, the same joke where possible.
+- Every line comes 3 times: 3 variants with three different jokes on the same facts, each a complete sentence. An editor picks the best one, so make them really different.
+- Write every line twice: "spicy" at the active spice level, and "clean" with no swearing at all. Same facts, the same jokes where possible.
 - title per entry: "<module name>, the <2-4 word dry descriptor>" from its facts, e.g. "utils, the 417-line landfill". No swearing: it appears on the clean card too.
 - ${b?.mode === 'expert' ? 'Standard technical terms are fine.' : `Plain words: say "nested 6 levels deep" or "two modules that depend on each other", not jargon. ${PLAIN_WORDS}`}`,
-        prompt: JSON.stringify({ repo, grade: base.grade, violations, modulesInspected: modules, entries: entries.map((e) => ({ moduleId: e.id, title: e.title, stat: e.stat, facts: e.facts })) }),
+        prompt,
         schema: SCHEMA,
         timeoutMs: 25_000,
       });
-      headline = { spicy: line(out?.headline?.spicy), clean: line(out?.headline?.clean) };
+      // Three variants per line → the filter → the comedy editor; a line with no survivor keeps its template.
+      const known = knownNumbers(prompt);
+      const headNeeds = [base.grade, String(violations), String(modules)];
+      const about = `grade ${base.grade}, ${violations} violations in ${modules} modules`;
+      const lines: Candidate[] = [
+        { id: 'headline-spicy', variants: out?.headline?.spicy, rules: { needs: headNeeds, known, clean: spice === 'clean', maxWords: 20 }, about },
+        { id: 'headline-clean', variants: out?.headline?.clean, rules: { needs: headNeeds, known, clean: true, maxWords: 20 }, about },
+      ];
       for (const e of out?.entries ?? []) {
-        if (!e?.moduleId) continue;
-        wrote.set(e.moduleId, { spicy: line(e.spicy), clean: line(e.clean) });
+        const n = entries.findIndex((x) => x.id === e?.moduleId);
+        const it = entries[n];
+        if (!it) continue;
+        const rules = { needs: factWords(it), known, maxWords: 20 };
+        lines.push({ id: `entry${n}-spicy`, variants: e.spicy, rules: { ...rules, clean: spice === 'clean' }, about: it.stat }, { id: `entry${n}-clean`, variants: e.clean, rules: { ...rules, clean: true }, about: it.stat });
         // A title is "<module name>, <descriptor>", printable on the clean card too; anything else keeps the template.
-        const it = entries.find((x) => x.id === e.moduleId);
-        const t = line(e.title);
-        if (writeTitles && it && t.startsWith(`${it.name}, `) && t.length <= 70 && TITLE.test(t) && !SWEARING.test(t)) it.title = t;
+        const t = typeof e.title === 'string' ? line(e.title) : '';
+        if (writeTitles && t.startsWith(`${it.name}, `) && t.length <= 70 && TITLE.test(t) && !SWEARING.test(t)) it.title = t;
       }
+      const picked = await editLines('roast', lines, spice, Math.min(8000, 52_000 - (Date.now() - started)), line);
+      headline = { spicy: picked.get('headline-spicy') ?? '', clean: picked.get('headline-clean') ?? '' };
+      entries.forEach((e, n) => wrote.set(e.id, { spicy: picked.get(`entry${n}-spicy`) ?? '', clean: picked.get(`entry${n}-clean`) ?? '' }));
       source = 'llm';
     } catch (err) {
       console.error('[roast] all providers failed, using templates:', err);

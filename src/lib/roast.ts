@@ -209,8 +209,7 @@ export function fallbackHeadline(i: Pick<Inspection, 'grade' | 'violations' | 'm
   return pick(HEADLINE[band], spice, seed, { v: i.violations, m: i.modules, g: i.grade });
 }
 
-/** Any swearing (clean lines must have none). */
-export const SWEARING = /\b(fuck\w*|shit\w*|damn\w*|hell|crap\w*|bullshit|ass|arse|bastard\w*|piss\w*|wtf)\b/i;
+export { SWEARING } from './guards.ts'; // clean lines must have none
 
 // --- Compact share payload (signed and compressed by the server; this is just the shape). Kept lean so the QR code
 // stays scannable: titles without the repeated module name, violation facts instead of the stat sentence.

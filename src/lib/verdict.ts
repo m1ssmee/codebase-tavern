@@ -1,4 +1,5 @@
 // Tribunal fix-quality check. Pure, so `node scripts/check.mjs` can run it directly.
+import type { SpiceLevel } from './types';
 
 // Comment lines (JS/TS/C-style, Python/shell #, HTML). Preprocessor lines like #include are code.
 const isComment = (l: string) => /^(\/\/|\/\*|\*|<!--|#(?!include|define|if|endif|pragma|!))/.test(l);
@@ -102,4 +103,18 @@ export class TurnScanner {
     }
     return out;
   }
+}
+
+// The judge's closing remark when none of the 3 written variants survive the filter. {who} = the culprits.
+const JUDGE: Record<SpiceLevel, string[]> = {
+  clean: ['Guilty: {who}. The court has seen this exact retry before and expects to see it again.', '{who}, guilty as charged. Court is adjourned until the next incident report.'],
+  unhinged: ['Guilty: {who}. Fix the damn thing before it comes back to my courtroom.', '{who}, guilty as hell. Court is adjourned until the next shitty incident.'],
+  feral: ['Guilty: {who}. This whole damn case stinks and the court is done smelling it.', '{who}, guilty. Get this shit out of my courtroom and open a window.'],
+  nuclear: ['Guilty: {who}. GET THIS OUT OF MY COURTROOM. I am holding a damn grudge.', '{who}, guilty as hell. Court is adjourned and I am never forgiving this shit.'],
+};
+export function judgeFallback(spice: unknown, culprits: string[], seed: string): string {
+  const l = (typeof spice === 'string' && spice in JUDGE ? spice : 'unhinged') as SpiceLevel;
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return JUDGE[l][h % JUDGE[l].length].replace('{who}', culprits.join(' and ') || 'everyone in this repo');
 }

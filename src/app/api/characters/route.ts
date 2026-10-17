@@ -1,7 +1,9 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmJSON } from '@/lib/llm';
 import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
-import { fallbackCharacter, toRaw, type RawCharacter } from '@/lib/characters';
+import { fallbackCharacter, fallbackGossip, toRaw, type RawCharacter } from '@/lib/characters';
+import { editLines, type Candidate } from '@/lib/editor';
+import { codeFacts, knownNumbers } from '@/lib/guards';
 import type { Module, ModuleStats } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -19,6 +21,7 @@ Hard rules:
 - Every line must contain at least one real fact from the input.
 - Never name or insult real people, including the repo's authors; aim everything at the code.
 - gossip: 4 lines per character, max 18 words each, dry, about other modules or itself, each with a real fact.
+- Every gossip line, every landlordLine and the landlordIntro and landlordOutro come as 3 variants: three different jokes on the same real fact, each a complete sentence. An editor picks the best one, so make them really different.
 - Across the whole cast, at least two gossip lines should hint at the most suspicious interaction between modules visible in the code shown (for example a timeout shorter than another module's processing time, or a retry with no safety check), without naming a bug.
 - about: one plain sentence under 20 words for someone who has never seen this repo: what the module does, from the code shown. No jokes, no swearing.
 
@@ -31,6 +34,7 @@ The Landlord: owns the building (the repo) and narrates a guided tour of it. Not
 - Use only the counts given (lines, files, testFiles, TODOs, links). Never count or guess anything else, such as tests inside a file.`;
 
 // OpenAI-strict compatible (top-level object, additionalProperties false, all required); Gemini takes it too.
+const THREE = { type: 'array', items: { type: 'string' }, description: '3 variants of this line' };
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -50,17 +54,17 @@ const SCHEMA = {
           greeting: { type: 'string', description: 'Exactly 2 sentences, first person, introduces itself with real numbers (lines, files, TODOs, tests).' },
           gossip: {
             type: 'array',
-            items: { type: 'string' },
-            description: '4 lines, max 18 words each, about other modules (using their real stats/code from the input) or itself.',
+            items: { ...THREE, description: '3 variants of one gossip line' },
+            description: '4 lines, each as 3 variants, max 18 words each, about other modules (using their real stats/code from the input) or itself.',
           },
           voicePitch: { type: 'number', description: 'Between 0.6 and 1.8. Lower for big, heavy modules; higher for small, nervous ones.' },
           about: { type: 'string', description: 'One plain sentence under 20 words: what this module does.' },
-          landlordLine: { type: 'string', description: "The Landlord's 1-2 sentences about this module on the tour, grounded in its links and stats." },
+          landlordLine: { ...THREE, description: "3 variants of the Landlord's 1-2 sentences about this module on the tour, grounded in its links and stats." },
         },
       },
     },
-    landlordIntro: { type: 'string' },
-    landlordOutro: { type: 'string' },
+    landlordIntro: THREE,
+    landlordOutro: THREE,
   },
 };
 
@@ -97,6 +101,7 @@ function clean(m: InModule): Module & { keyFiles: KeyFile[]; testFiles: number; 
 
 export async function POST(req: Request) {
   if (rateLimited(req)) return Response.json({ error: 'rate limited' }, { status: 429 }); // client falls back to templates
+  const started = Date.now();
   const body = await req.json().catch(() => null);
   const list: InModule[] = Array.isArray(body?.modules) ? body.modules : [];
   const modules = list.filter((m) => m?.id).slice(0, 8).map(clean);
@@ -130,18 +135,49 @@ export async function POST(req: Request) {
   let landlord: { intro: string; outro: string } | null = null;
   let source: 'llm' | 'fallback' = 'llm';
   try {
-    const out = await llmJSON<{ characters: unknown; landlordIntro?: unknown; landlordOutro?: unknown }>('characters', {
+    const prompt = `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values, plus the Landlord's intro and outro.\n\nBuilding: ${JSON.stringify(building)}\n\nModules:\n${JSON.stringify(input)}\n\n${levelReminder(body?.spice)}`;
+    type Three = unknown; // 3 variants, resolved by the editor below
+    const out = await llmJSON<{ characters: { moduleId?: string; gossip?: Three[]; landlordLine?: Three }[]; landlordIntro?: Three; landlordOutro?: Three }>('characters', {
       system: `${levelBlock(body?.spice)}
 - The title stays printable; the attitude goes in the personality, catchphrase, greeting, gossip and the Landlord's lines. "about" stays plain.
 
 ${SYSTEM}
 - ${mode === 'expert' ? 'MODE: EXPERT: the about sentence and the Landlord may use standard technical terms.' : `MODE: BEGINNER: no jargon without a plain definition in parentheses. ${PLAIN_WORDS}`}`,
-      prompt: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values, plus the Landlord's intro and outro.\n\nBuilding: ${JSON.stringify(building)}\n\nModules:\n${JSON.stringify(input)}\n\n${levelReminder(body?.spice)}`,
+      prompt,
       schema: SCHEMA,
-      timeoutMs: 30_000,
+      timeoutMs: 34_000, // the client gives up at 45s; the editor needs a few seconds after this
     });
-    characters = toRaw(modules, out.characters);
-    const [intro, outro] = [clip(out.landlordIntro, 400).trim(), clip(out.landlordOutro, 400).trim()];
+    // Gossip and the Landlord's lines: 3 variants each → the filter → the comedy editor; no survivor → the template.
+    const known = knownNumbers(prompt);
+    const facts = codeFacts(prompt);
+    const clean = body?.spice === 'clean';
+    const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
+    const statNums = (m: (typeof modules)[number]) => [m.stats.totalLines, m.stats.fileCount, m.stats.todoCount, m.stats.biggestFile.lines, m.stats.maxNesting, m.testFiles].filter((n) => n > 0).map(String);
+    const anyFact = [...modules.flatMap((m) => [m.name, ...m.filePaths.map(base), ...statNums(m)]), String(building.files), String(building.modules)];
+    const raw = Array.isArray(out?.characters) ? out.characters : [];
+    const lines: Candidate[] = [];
+    modules.forEach((m, mi) => {
+      const c = raw.find((x) => x?.moduleId === m.id);
+      if (!c) return;
+      (Array.isArray(c.gossip) ? c.gossip : []).slice(0, 4).forEach((g, gi) => lines.push({ id: `g${mi}-${gi}`, variants: g, rules: { needs: anyFact, facts, source: prompt, known, clean, maxWords: 18 }, about: `gossip by ${m.name}` }));
+      const near = [m.name, ...m.links.usedBy, ...m.links.uses, ...statNums(m)];
+      lines.push({ id: `l${mi}`, variants: c.landlordLine, rules: { needs: near, facts, source: prompt, known, clean, maxWords: 50 }, about: `the Landlord on ${m.name}` });
+    });
+    const repoShort = clip(body?.repoName, 200).split('/').pop() ?? '';
+    lines.push(
+      { id: 'intro', variants: out?.landlordIntro, rules: { needs: [repoShort, String(building.files), String(building.modules)], known, clean, maxWords: 50 }, about: 'the Landlord opens the tour' },
+      { id: 'outro', variants: out?.landlordOutro, rules: { needs: anyFact, facts, source: prompt, known, clean, maxWords: 50 }, about: 'the Landlord closes the tour' },
+    );
+    const picked = await editLines('characters', lines, body?.spice, Math.min(8000, 42_000 - (Date.now() - started)));
+    const resolved = modules.map((m, mi) => {
+      const c = raw.find((x) => x?.moduleId === m.id);
+      if (!c) return c;
+      const fb = fallbackGossip(m, modules);
+      const gossip = (Array.isArray(c.gossip) ? c.gossip : []).slice(0, 4).map((_, gi) => picked.get(`g${mi}-${gi}`) ?? fb[gi % fb.length]);
+      return { ...c, gossip, landlordLine: picked.get(`l${mi}`) ?? '' };
+    });
+    characters = toRaw(modules, resolved);
+    const [intro, outro] = [clip(picked.get('intro'), 400).trim(), clip(picked.get('outro'), 400).trim()];
     if (intro && outro) landlord = { intro, outro };
   } catch (err) {
     console.error('[characters] all providers failed, using templates:', err);

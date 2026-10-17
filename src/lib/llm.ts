@@ -1,10 +1,34 @@
 import 'server-only';
 import OpenAI from 'openai';
 import { FALLBACK_MODEL, FAST, gemini, MODEL } from './gemini';
+import { matchesSchema } from './guards';
 
 // Provider chain for every route: gemini-3.8-flash → gemini-3.5-flash → OpenAI mini.
 // LLM_PROVIDER=openai forces OpenAI (use it for testing so we don't burn the Gemini free quota).
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'; // verified live: reasoning_effort none/low, json_schema, stream
+
+// One creativity setting for every call (chat, characters, gossip, Tribunal, What-if, roast, the Landlord). The
+// pure-joke lines get 3 candidates, a filter and an editor; facts get citation checks (see guards.ts, editor.ts).
+// LLM_TEMPERATURE (0-2) overrides it.
+const DEFAULT_TEMPERATURE = 1.5;
+const envTemp = Number(process.env.LLM_TEMPERATURE);
+export const TEMPERATURE = process.env.LLM_TEMPERATURE && envTemp >= 0 && envTemp <= 2 ? envTemp : DEFAULT_TEMPERATURE;
+
+// Models that only accept their default temperature (gpt-5.x with reasoning on, for one): learned at runtime,
+// logged once, and the parameter is left out for them from then on.
+const noTemperature = new Set<string>();
+const rejectsTemperature = (err: unknown) => /temperature/i.test(String(err)) && /unsupported|not support|only the default|invalid/i.test(String(err));
+async function withTemperature<T>(p: Provider, temperature: number | undefined, call: (t: number | undefined) => Promise<T>): Promise<T> {
+  if (temperature === undefined || noTemperature.has(p.model)) return call(undefined);
+  try {
+    return await call(temperature);
+  } catch (err) {
+    if (!rejectsTemperature(err)) throw err;
+    noTemperature.add(p.model);
+    console.warn(`[llm] ${p.name} rejects temperature ${temperature}; using its default from now on`);
+    return call(undefined);
+  }
+}
 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
 export type Msg = { role: 'user' | 'assistant'; text: string };
@@ -65,7 +89,7 @@ async function run<T>(label: string, fn: (p: Provider, t: Timing) => Promise<T>,
  */
 export function llmStream(
   label: string,
-  opts: { system: string; messages: Msg[]; maxTokens?: number; schema?: object; timeoutMs?: number; timings?: Timing[] },
+  opts: { system: string; messages: Msg[]; maxTokens?: number; schema?: object; timeoutMs?: number; timings?: Timing[]; temperature?: number },
 ): Promise<ReadableStream<Uint8Array>> {
   const enc = new TextEncoder();
   return run(
@@ -73,19 +97,22 @@ export function llmStream(
     async (p, timing) => {
     const t0 = Date.now();
     let chunks: AsyncIterable<string>;
+    const temp = opts.temperature ?? TEMPERATURE;
     if (p.kind === 'gemini') {
-      const res = await gemini().models.generateContentStream({
-        model: p.model,
-        contents: opts.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })),
-        config: {
-          ...FAST,
-          systemInstruction: opts.system,
-          temperature: 0.8,
-          maxOutputTokens: opts.maxTokens ?? 2048,
-          ...(opts.schema && { responseMimeType: 'application/json', responseJsonSchema: opts.schema }),
-          ...(opts.timeoutMs && { abortSignal: AbortSignal.timeout(opts.timeoutMs) }),
-        },
-      });
+      const res = await withTemperature(p, temp, (temperature) =>
+        gemini().models.generateContentStream({
+          model: p.model,
+          contents: opts.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })),
+          config: {
+            ...FAST,
+            systemInstruction: opts.system,
+            ...(temperature !== undefined && { temperature }),
+            maxOutputTokens: opts.maxTokens ?? 2048,
+            ...(opts.schema && { responseMimeType: 'application/json', responseJsonSchema: opts.schema }),
+            ...(opts.timeoutMs && { abortSignal: AbortSignal.timeout(opts.timeoutMs) }),
+          },
+        }),
+      );
       chunks = (async function* () {
         for await (const c of res) {
           const why = c.promptFeedback?.blockReason ?? c.candidates?.[0]?.finishReason;
@@ -94,18 +121,21 @@ export function llmStream(
         }
       })();
     } else {
-      const res = await openai().chat.completions.create(
-        {
-          model: p.model,
-          reasoning_effort: 'low',
-          stream: true,
-          max_completion_tokens: opts.maxTokens ?? 2048,
-          messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
-          ...(opts.schema && {
-            response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
-          }),
-        },
-        opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined,
+      const res = await withTemperature(p, temp, (temperature) =>
+        openai().chat.completions.create(
+          {
+            model: p.model,
+            reasoning_effort: 'low',
+            stream: true,
+            max_completion_tokens: opts.maxTokens ?? 2048,
+            ...(temperature !== undefined && { temperature }),
+            messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
+            ...(opts.schema && {
+              response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
+            }),
+          },
+          opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined,
+        ),
       );
       chunks = (async function* () {
         for await (const c of res) {
@@ -142,49 +172,70 @@ export function llmStream(
 /**
  * Structured JSON. `schema` must be OpenAI-strict compatible: top-level object, every object has
  * additionalProperties:false and lists all properties in required. Gemini accepts the same schema.
+ * Unparseable or off-schema output is retried once on the same provider, then falls through to the next one.
+ * `temperature` overrides the shared setting (the comedy editor judges, it doesn't invent).
  */
-export function llmJSON<T>(label: string, opts: { system: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[] }): Promise<T> {
+export function llmJSON<T>(label: string, opts: { system: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[]; temperature?: number }): Promise<T> {
   const timeout = opts.timeoutMs ?? 40_000;
+  const temp = opts.temperature ?? TEMPERATURE;
   return run(label, async (p) => {
-    if (p.kind === 'gemini') {
-      const res = await gemini().models.generateContent({
-        model: p.model,
-        contents: opts.prompt,
-        config: {
-          ...FAST,
-          systemInstruction: opts.system,
-          responseMimeType: 'application/json',
-          responseJsonSchema: opts.schema,
-          temperature: 0.8,
-          abortSignal: AbortSignal.timeout(timeout),
-        },
-      });
-      const why = res.promptFeedback?.blockReason ?? res.candidates?.[0]?.finishReason;
-      if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
-      return parseJSON<T>(res.text, p.name);
+    const deadline = Date.now() + timeout; // shared by the first try and the retry
+    const once = async (): Promise<string> => {
+      if (p.kind === 'gemini') {
+        const res = await withTemperature(p, temp, (temperature) =>
+          gemini().models.generateContent({
+            model: p.model,
+            contents: opts.prompt,
+            config: {
+              ...FAST,
+              systemInstruction: opts.system,
+              responseMimeType: 'application/json',
+              responseJsonSchema: opts.schema,
+              ...(temperature !== undefined && { temperature }),
+              abortSignal: AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
+            },
+          }),
+        );
+        const why = res.promptFeedback?.blockReason ?? res.candidates?.[0]?.finishReason;
+        if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
+        return res.text;
+      }
+      const res = await withTemperature(p, temp, (temperature) =>
+        openai().chat.completions.create(
+          {
+            model: p.model,
+            reasoning_effort: 'low',
+            ...(temperature !== undefined && { temperature }),
+            messages: [
+              { role: 'system', content: opts.system },
+              { role: 'user', content: opts.prompt },
+            ],
+            response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
+          },
+          { timeout: Math.max(1000, deadline - Date.now()) },
+        ),
+      );
+      const ch = res.choices[0];
+      if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
+      return ch.message.content;
+    };
+    for (let attempt = 1; ; attempt++) {
+      const text = await once();
+      const why = parseJSON(text, opts.schema);
+      if (typeof why !== 'string') return why.value as T;
+      if (attempt === 2 || deadline - Date.now() < 3000) throw new Blocked(p.name, why); // next provider, as before
+      console.warn(`[llm] ${label}: ${p.name} returned ${why}; retrying once`);
     }
-    const res = await openai().chat.completions.create(
-      {
-        model: p.model,
-        reasoning_effort: 'low',
-        messages: [
-          { role: 'system', content: opts.system },
-          { role: 'user', content: opts.prompt },
-        ],
-        response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
-      },
-      { timeout },
-    );
-    const ch = res.choices[0];
-    if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
-    return parseJSON<T>(ch.message.content, p.name);
   }, opts.timings);
 }
 
-function parseJSON<T>(text: string, provider: string): T {
+/** The parsed value, or why it is unusable. */
+export function parseJSON(text: string, schema?: object): { value: unknown } | string {
+  let value: unknown;
   try {
-    return JSON.parse(text) as T;
+    value = JSON.parse(text);
   } catch {
-    throw new Blocked(provider, 'unparseable JSON'); // treat like an empty reply: next provider
+    return 'unparseable JSON';
   }
+  return !schema || matchesSchema(value, schema) ? { value } : 'JSON that does not match the schema';
 }
