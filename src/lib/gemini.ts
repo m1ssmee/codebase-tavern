@@ -57,17 +57,17 @@ export async function streamText(opts: { contents: ContentListUnion; system?: st
 const hits = new Map<string, number[]>();
 /** 20 requests/minute per IP, shared by every route that calls it. */
 export function rateLimited(req: Request, limit = 20, windowMs = 60_000): boolean {
-  // Vercel sets (and overwrites) x-real-ip. x-forwarded-for is client-forgeable, so it's ignored;
-  // without x-real-ip (local dev) everyone shares one bucket.
-  const ip = req.headers.get('x-real-ip') || 'local';
+  // x-real-ip is only trustworthy on Vercel (it overwrites it); elsewhere everyone shares one bucket.
+  let ip = (process.env.VERCEL && req.headers.get('x-real-ip')) || 'local';
   const now = Date.now();
   // Map order = least recently seen first. Evict only idle IPs from the front (stops at the first active one).
   for (const [k, ts] of hits) {
     if (hits.size < 5000 || now - ts[ts.length - 1] < windowMs) break;
     hits.delete(k);
   }
-  const known = hits.has(ip);
-  if (!known && hits.size >= 5000) return true; // full of active IPs: fail closed for newcomers, never evict active ones
+  // ponytail: full of active IPs → newcomers share one rate-limited overflow bucket (no eviction of real users,
+  // no global lockout). A shared store (Upstash/KV) is the real fix if this ever matters.
+  if (!hits.has(ip) && hits.size >= 5000) ip = 'overflow';
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < windowMs);
   recent.push(now);
   hits.delete(ip);
