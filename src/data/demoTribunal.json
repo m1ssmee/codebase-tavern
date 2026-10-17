@@ -1,0 +1,83 @@
+{
+  "suspects": [
+    "orders",
+    "payments",
+    "gateway"
+  ],
+  "turns": [
+    {
+      "moduleId": "orders",
+      "text": "I retry the charge once when the gateway throws `UpstreamTimeoutError`, because `MAX_PAYMENT_ATTEMPTS` is 2 and the catch block only gives up after that. I also never send an idempotency key, so the second POST looks like a fresh payment request every time [orders/checkout.ts:18-31][orders/checkout.ts:44-58].",
+      "accuses": "gateway"
+    },
+    {
+      "moduleId": "gateway",
+      "text": "I cut upstream calls off after 2000ms, while the payment side admits its normal runtime is about 2400ms and p99 reaches 4s. So I raise a timeout right around the point where the card network is still doing its work [gateway/config.ts:15-16][gateway/proxy.ts:25-53].",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I process whatever POST lands on `/payments/charges`; there is no check for duplicate `order_id`, no idempotency key, and `recordCharge` just appends another ledger row. If the caller sends me twice, I happily charge twice [payments/processor.ts:29-49][payments/ledger.ts:11-18].",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "orders",
+      "text": "My status check only stops orders that are already marked `paid`, and I mark that after a successful response. When the first charge times out before I can persist `paid`, I have no memory of the earlier attempt [orders/checkout.ts:33-37][orders/checkout.ts:61-69].",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "gateway",
+      "text": "I am doing exactly what `UPSTREAM_TIMEOUT_MS` says on the tin. The problem is that I stop waiting before the payment processor usually finishes, then hand the caller a clean timeout to retry [gateway/config.ts:15-16][gateway/proxy.ts:29-49].",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I even log the same order twice in the sample data: `ord_8f3k2b61` shows up with two different charge IDs. That is not a mystery, just a ledger with no dedupe and a network that finished both calls [payments/logs/sample-charges.log:6-7][payments/ledger.ts:13-18]."
+    }
+  ],
+  "verdict": {
+    "culprits": [
+      "orders",
+      "gateway",
+      "payments"
+    ],
+    "rootCause": "The checkout flow retries a payment after an upstream timeout, but the payment request has no idempotency protection. The gateway times out sooner than the payment processor typically completes, so the first charge can succeed and the retry creates a second charge.",
+    "evidence": [
+      {
+        "path": "orders/checkout.ts",
+        "startLine": 18,
+        "endLine": 31
+      },
+      {
+        "path": "orders/checkout.ts",
+        "startLine": 44,
+        "endLine": 58
+      },
+      {
+        "path": "gateway/config.ts",
+        "startLine": 15,
+        "endLine": 16
+      },
+      {
+        "path": "payments/processor.ts",
+        "startLine": 23,
+        "endLine": 49
+      },
+      {
+        "path": "payments/ledger.ts",
+        "startLine": 11,
+        "endLine": 18
+      },
+      {
+        "path": "payments/logs/sample-charges.log",
+        "startLine": 6,
+        "endLine": 7
+      }
+    ],
+    "fix": {
+      "path": "orders/checkout.ts",
+      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@\n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n       payment_method_id: paymentMethodId,\n+      idempotency_key: order.id,\n     },\n   });\n }\n@@\n   let charge: ChargeResponse | undefined;\n   for (let attempt = 1; attempt <= MAX_PAYMENT_ATTEMPTS; attempt++) {\n     try {\n       charge = await requestCharge(order, paymentMethodId);\n       break;\n     } catch (err) {\n-      // retry added to fix flaky checkouts\n       if (err instanceof UpstreamTimeoutError && attempt < MAX_PAYMENT_ATTEMPTS) {\n         log('warn', 'payment timed out, retrying', { orderId: order.id, attempt });\n         continue;\n       }\n"
+    },
+    "judgeLine": "The court finds the timeout, the retry, and the missing dedupe all guilty of the same thing."
+  }
+}

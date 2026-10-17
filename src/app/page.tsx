@@ -22,8 +22,7 @@ const HERO = [
 ];
 const HERO_COLORS = assignColors(HERO.map((f) => ({ id: f.name, name: f.name })));
 
-// TODO: swap for the real demo repo
-const DEMO_REPO_URL = 'https://github.com/expressjs/express';
+const DEMO_REPO_URL = 'https://github.com/m1ssmee/quickcart';
 
 export default function Landing() {
   const router = useRouter();

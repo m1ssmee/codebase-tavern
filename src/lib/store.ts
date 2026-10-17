@@ -15,6 +15,7 @@ type TavernState = {
   mode: ExplainMode;
   muted: boolean;
   isLoading: boolean;
+  tribunal: boolean;
 
   loadRepo: (repo: Repo) => void;
   setCharacters: (characters: Character[]) => void;
@@ -29,6 +30,7 @@ type TavernState = {
   setMode: (mode: ExplainMode) => void;
   toggleMute: () => void;
   setLoading: (isLoading: boolean) => void;
+  setTribunal: (on: boolean) => void;
 };
 
 export const useTavern = create<TavernState>()((set, get) => {
@@ -54,6 +56,7 @@ export const useTavern = create<TavernState>()((set, get) => {
     mode: 'beginner',
     muted: false,
     isLoading: false,
+    tribunal: false,
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
     loadRepo: (repo) =>
@@ -64,6 +67,7 @@ export const useTavern = create<TavernState>()((set, get) => {
         chats: {},
         selectedModuleId: repo.modules[0]?.id ?? null,
         highlight: null,
+        tribunal: false,
         openFilePath: (repo.modules[0] && entryFile(repo.modules[0])) ?? repo.files[0]?.path ?? null,
       }),
     setCharacters: (list) => {
@@ -95,6 +99,7 @@ export const useTavern = create<TavernState>()((set, get) => {
     setMode: (mode) => set({ mode }),
     toggleMute: () => set((s) => ({ muted: !s.muted })),
     setLoading: (isLoading) => set({ isLoading }),
+    setTribunal: (tribunal) => set({ tribunal }),
   };
 });
 

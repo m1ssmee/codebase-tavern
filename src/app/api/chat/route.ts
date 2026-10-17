@@ -1,5 +1,5 @@
-import type { Content } from '@google/genai';
-import { rateLimited, streamText } from '@/lib/gemini';
+import { rateLimited } from '@/lib/gemini';
+import { llmStream, type Msg } from '@/lib/llm';
 import { VOICE_GUIDE } from '@/lib/voice';
 import { CONTEXT_BUDGET } from '@/lib/context';
 
@@ -73,24 +73,24 @@ ${arr<string>(b.dependents, 30).map((d) => '- ' + str(d, 300)).join('\n') || '- 
 Your code:
 ${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`;
 
-  // Gemini wants user/model turns starting with the user: map roles, drop leading model turns, merge repeats.
-  const contents: Content[] = [];
+  // Providers want alternating turns starting with the user: map roles, drop leading assistant turns, merge repeats.
+  const messages: Msg[] = [];
   for (const m of arr<{ role: string; text: string }>(b.messages, 8)) {
-    const role = m?.role === 'user' ? 'user' : m?.role === 'character' ? 'model' : null;
+    const role = m?.role === 'user' ? 'user' : m?.role === 'character' ? 'assistant' : null;
     const text = str(m?.text, 4000);
-    if (!role || !text || (!contents.length && role === 'model')) continue;
-    const prev = contents.at(-1);
-    if (prev?.role === role) prev.parts!.push({ text });
-    else contents.push({ role, parts: [{ text }] });
+    if (!role || !text || (!messages.length && role === 'assistant')) continue;
+    const prev = messages.at(-1);
+    if (prev?.role === role) prev.text += '\n\n' + text;
+    else messages.push({ role, text });
   }
-  if (contents.at(-1)?.role !== 'user') return Response.json({ error: 'bad request' }, { status: 400 });
+  if (messages.at(-1)?.role !== 'user') return Response.json({ error: 'bad request' }, { status: 400 });
 
   try {
-    // maxOutputTokens includes thinking tokens, so keep it roomy; the prompt holds answers under 100 words.
-    const stream = await streamText({ contents, system, config: { temperature: 0.8, maxOutputTokens: 2048 } });
+    // maxTokens includes thinking tokens, so keep it roomy; the prompt holds answers under 100 words.
+    const stream = await llmStream('chat', { system, messages, maxTokens: 2048 });
     return new Response(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
   } catch (err) {
-    console.error('[chat] Gemini failed:', err);
-    return Response.json({ error: 'gemini failed' }, { status: 502 });
+    console.error('[chat] all providers failed:', err);
+    return Response.json({ error: 'llm failed' }, { status: 502 });
   }
 }

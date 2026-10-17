@@ -42,7 +42,7 @@ export default function CharacterFace({
   // Body motion per mood (outer group), shiver for untested modules (inner group).
   const body: { animate: TargetAndTransition; transition: Transition } =
     mood === 'guilty'
-      ? { animate: { rotate: 90, x: 6, y: 0 }, transition: reduced ? { duration: 0 } : { type: 'spring', stiffness: 120, damping: 9 } }
+      ? { animate: { rotate: 90, x: 0, y: 4 }, transition: reduced ? { duration: 0 } : { type: 'spring', stiffness: 120, damping: 9 } }
       : calm
         ? { animate: { rotate: 0, x: 0, y: 0 }, transition: { duration: 0.2 } }
         : mood === 'happy'
@@ -122,7 +122,8 @@ export default function CharacterFace({
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" className="shrink-0 overflow-visible" aria-hidden>
       <ellipse cx={50} cy={97} rx={rx * 0.75} ry={3} fill="#000" opacity={0.35} />
-      <motion.g style={{ originX: 0.5, originY: 1 }} initial={false} {...body}>
+      {/* guilty pivots on its centre so the fallen face stays inside its own box */}
+      <motion.g style={{ originX: 0.5, originY: mood === 'guilty' ? 0.55 : 1 }} initial={false} {...body}>
         <motion.g
           animate={t.shivers && !calm && mood !== 'guilty' ? { x: [0, -0.9, 0.9, -0.6, 0] } : { x: 0 }}
           transition={t.shivers && !calm ? loop(0.32, { ease: 'linear' }) : {}}

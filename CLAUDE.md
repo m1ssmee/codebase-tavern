@@ -21,4 +21,7 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - Bad: "Yo bro, I'm lowkey stressed about payments lol 😅" (slang, emoji) / "Fun fact: I'm a real byte of the action!" (announced joke, pun) / "Great question! Let me explain: I handle lots of important things." (filler, no fact)
 - The runtime copy of this guide lives in src/lib/voice.ts; keep them in sync.
 
+## Commits
+- No Co-Authored-By or any other trailer lines in commit messages in this repo.
+
 @AGENTS.md

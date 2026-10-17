@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useSyncExternalStore } from 'react';
+import { usePanelRef } from 'react-resizable-panels';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Group, Panel, Separator } from 'react-resizable-panels';
@@ -11,6 +12,7 @@ import TopBar from '@/components/TopBar';
 import TreePanel from '@/components/TreePanel';
 import CodePanel from '@/components/CodePanel';
 import ChatPanel from '@/components/ChatPanel';
+import TribunalPanel from '@/components/TribunalPanel';
 import SummonLoader from '@/components/SummonLoader';
 import CharacterFace from '@/components/CharacterFace';
 
@@ -22,6 +24,8 @@ const readSearch = () => window.location.search;
 export default function TavernPage() {
   const router = useRouter();
   const repo = useTavern((s) => s.repo);
+  const tribunal = useTavern((s) => s.tribunal);
+  const rightPanel = usePanelRef();
   const search = useSyncExternalStore(never, readSearch, () => null);
   const [error, setError] = useState<string | null>(null);
   const [bannerHidden, setBannerHidden] = useState(false);
@@ -41,6 +45,11 @@ export default function TavernPage() {
       router.replace('/');
     }
   }, [router]);
+
+  // Tribunal widens the right panel; the code panel stays visible so citations can highlight.
+  useEffect(() => {
+    rightPanel.current?.resize(tribunal ? '40%' : '30%');
+  }, [tribunal, rightPanel]);
 
   if (error) {
     return (
@@ -94,8 +103,8 @@ export default function TavernPage() {
           <CodePanel />
         </Panel>
         <Separator className={handle} />
-        <Panel defaultSize="30%" minSize="18%">
-          <ChatPanel />
+        <Panel defaultSize="30%" minSize="18%" panelRef={rightPanel}>
+          {tribunal ? <TribunalPanel /> : <ChatPanel />}
         </Panel>
       </Group>
     </div>

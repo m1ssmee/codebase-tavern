@@ -1,4 +1,5 @@
-import { FAST, gemini, rateLimited, withFallback } from '@/lib/gemini';
+import { rateLimited } from '@/lib/gemini';
+import { llmJSON } from '@/lib/llm';
 import { VOICE_GUIDE } from '@/lib/voice';
 import { fallbackCharacter, toRaw, type RawCharacter } from '@/lib/characters';
 import type { Module, ModuleStats } from '@/lib/types';
@@ -18,19 +19,28 @@ Hard rules:
 - Every line must contain at least one real fact from the input.
 - Write clean spice level (no swearing).`;
 
+// OpenAI-strict compatible (top-level object, additionalProperties false, all required); Gemini takes it too.
 const SCHEMA = {
-  type: 'array',
-  items: {
-    type: 'object',
-    properties: {
-      moduleId: { type: 'string', description: 'Copy exactly from the input.' },
-      title: { type: 'string', description: 'Module name plus a short dry descriptor grounded in its stats, e.g. "payments, the accountant" or "utils, the junk drawer".' },
-      personality: { type: 'string', description: 'One sentence, grounded in real stats or code.' },
-      catchphrase: { type: 'string', description: 'Max 12 words, dry, references a real fact.' },
-      greeting: { type: 'string', description: 'Exactly 2 sentences, first person, introduces itself with real numbers (lines, files, TODOs, tests).' },
-      voicePitch: { type: 'number', minimum: 0.6, maximum: 1.8, description: 'Lower for big, heavy modules; higher for small, nervous ones.' },
+  type: 'object',
+  additionalProperties: false,
+  required: ['characters'],
+  properties: {
+    characters: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['moduleId', 'title', 'personality', 'catchphrase', 'greeting', 'voicePitch'],
+        properties: {
+          moduleId: { type: 'string', description: 'Copy exactly from the input.' },
+          title: { type: 'string', description: 'Module name plus a short dry descriptor grounded in its stats, e.g. "payments, the accountant" or "utils, the junk drawer".' },
+          personality: { type: 'string', description: 'One sentence, grounded in real stats or code.' },
+          catchphrase: { type: 'string', description: 'Max 12 words, dry, references a real fact.' },
+          greeting: { type: 'string', description: 'Exactly 2 sentences, first person, introduces itself with real numbers (lines, files, TODOs, tests).' },
+          voicePitch: { type: 'number', description: 'Between 0.6 and 1.8. Lower for big, heavy modules; higher for small, nervous ones.' },
+        },
+      },
     },
-    required: ['moduleId', 'title', 'personality', 'catchphrase', 'greeting', 'voicePitch'],
   },
 };
 
@@ -78,23 +88,17 @@ export async function POST(req: Request) {
   }));
 
   let characters: RawCharacter[];
-  let source: 'gemini' | 'fallback' = 'gemini';
+  let source: 'llm' | 'fallback' = 'llm';
   try {
-    const res = await withFallback((model) => gemini().models.generateContent({
-      model,
-      contents: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values.\n\nModules:\n${JSON.stringify(input)}`,
-      config: {
-        ...FAST,
-        systemInstruction: SYSTEM,
-        responseMimeType: 'application/json',
-        responseJsonSchema: SCHEMA,
-        temperature: 0.9,
-        abortSignal: AbortSignal.timeout(25_000),
-      },
-    }));
-    characters = toRaw(modules, JSON.parse(res.text ?? ''));
+    const out = await llmJSON<{ characters: unknown }>('characters', {
+      system: SYSTEM,
+      prompt: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values.\n\nModules:\n${JSON.stringify(input)}`,
+      schema: SCHEMA,
+      timeoutMs: 25_000,
+    });
+    characters = toRaw(modules, out.characters);
   } catch (err) {
-    console.error('[characters] Gemini failed, using templates:', err);
+    console.error('[characters] all providers failed, using templates:', err);
     characters = modules.map(fallbackCharacter);
     source = 'fallback';
   }

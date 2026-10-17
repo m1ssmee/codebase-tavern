@@ -31,7 +31,7 @@ function Segmented<T extends string>({ options, value, onChange }: { options: { 
 }
 
 export default function TopBar() {
-  const { repo, spice, mode, muted, setSpice, setMode, toggleMute } = useTavern();
+  const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal } = useTavern();
   return (
     <header className="flex flex-wrap items-center gap-3 border-b-2 border-edge bg-wood/80 px-4 py-2">
       <Link href="/" className="font-display text-2xl tracking-wide text-amber drop-shadow-[0_3px_0_#000]">
@@ -53,8 +53,8 @@ export default function TopBar() {
         </button>
         <button
           type="button"
-          disabled
-          title="Coming in Phase 5"
+          disabled={!repo || tribunal}
+          onClick={() => setTribunal(true)}
           className="bounce-hover rounded-full bg-tomato px-4 py-2 font-display text-lg tracking-wide text-cream shadow-[0_4px_0_#7a2414] disabled:cursor-not-allowed disabled:opacity-60"
         >
           ⚖️ Summon the Tribunal
