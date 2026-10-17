@@ -15,7 +15,10 @@ export type EdgeOpts = { calls?: boolean }; // include "calls" edges (default tr
 
 const JS = /\.(m|c)?[jt]sx?$/;
 const PY = /\.pyi?$/;
-// Languages without a resolver get the folder-name heuristic.
+const JAVA = /\.(java|kt|kts|scala)$/;
+const GO = /\.go$/;
+const RUST = /\.rs$/;
+// Languages without a resolver get the folder-name heuristic (so does Go without a go.mod in the loaded files).
 const OTHER = /\.(go|rs|java|kt|kts|scala|rb|php|c|h|cc|cpp|hpp|cs|swift|dart|lua|ex|exs|erl|clj|hs|ml|r|jl|sh)$/;
 const JS_EXT = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
 // ponytail: regexes, not a parser; an import inside a comment or string still counts.
@@ -26,6 +29,7 @@ const JS_IMPORTS = [
 ];
 
 const dirOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/')));
+const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const join = (dir: string, spec: string) => {
   const out = dir ? dir.split('/') : [];
   for (const s of spec.split('/')) {
@@ -101,8 +105,31 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
     let base: string;
     if (spec.startsWith('.')) base = join(dirOf(from), spec);
     else if (/^[@~]\//.test(spec)) return firstFile([`src/${spec.slice(2)}`, spec.slice(2)].flatMap(jsCands)) ?? null; // tsconfig alias
-    else return undefined; // external package
+    else return workspace(spec); // a package in this repo (monorepo), else external
     return firstFile(jsCands(base)) ?? null; // null: relative but not in the loaded files
+  };
+  // Monorepo packages: package.json names when loaded, else the folder convention (packages/react ← 'react',
+  // packages/babel-parser ← '@babel/parser').
+  const pkgDirs = new Map<string, string>();
+  for (const f of files)
+    if (base(f.path) === 'package.json' && dirOf(f.path))
+      try {
+        const n = JSON.parse(f.content)?.name;
+        if (typeof n === 'string') pkgDirs.set(n, dirOf(f.path));
+      } catch {
+        // not JSON: skip
+      }
+  const containerDirs = [...new Set(files.map((f) => f.path.match(/^((?:packages|apps|libs)\/[^/]+)\//)?.[1]).filter((d): d is string => !!d))];
+  const workspace = (spec: string): string | null | undefined => {
+    const name = pkgName(spec);
+    const dir = pkgDirs.get(name) ?? containerDirs.find((d) => [name, name.replace(/^@/, '').replace('/', '-'), name.split('/')[1]].includes(d.split('/')[1]));
+    if (!dir) return undefined;
+    const rest = spec.slice(name.length + 1);
+    return (
+      firstFile(rest ? [...jsCands(join(dir, rest)), ...jsCands(join(dir, 'src/' + rest))] : [...jsCands(join(dir, 'index')), ...jsCands(join(dir, 'src/index'))]) ??
+      files.find((f) => f.path.startsWith(dir + '/') && JS.test(f.path))?.path ??
+      null
+    );
   };
   const jsCands = (b: string) => [
     b,
@@ -130,6 +157,71 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
     for (let i = 1; i < dots; i++) dir = dirOf(dir);
     const b = join(dir, rest.replace(/\./g, '/'));
     return firstFile([`${b}.py`, `${b}/__init__.py`]);
+  };
+
+  // Java/Kotlin: com.x.owner.Owner is a file ending in com/x/owner/Owner.java; com.x.owner.* is that folder.
+  const javaFiles = files.filter((f) => JAVA.test(f.path)).map((f) => ({ path: f.path, stem: f.path.replace(JAVA, '') }));
+  const resolveJava = (dotted: string, wildcard: boolean) => {
+    const parts = dotted.split('.');
+    // a static import names a member: drop segments until a class or package matches
+    for (let n = parts.length; n >= 2; n--) {
+      const rel = parts.slice(0, n).join('/');
+      const hit = wildcard && n === parts.length ? javaFiles.find((f) => dirOf(f.path) === rel || dirOf(f.path).endsWith('/' + rel)) : javaFiles.find((f) => f.stem === rel || f.stem.endsWith('/' + rel));
+      if (hit) return hit.path;
+    }
+  };
+
+  // Go: the module path in go.mod maps import paths to folders (github.com/gin-gonic/gin/render → render/).
+  const goMods = files
+    .filter((f) => base(f.path) === 'go.mod')
+    .flatMap((f) => {
+      const m = f.content.match(/^module\s+(\S+)/m);
+      return m ? [{ mod: m[1], dir: dirOf(f.path) }] : [];
+    })
+    .sort((a, b) => b.mod.length - a.mod.length);
+  const goDirs = new Map<string, string>();
+  for (const f of files) if (GO.test(f.path) && !goDirs.has(dirOf(f.path))) goDirs.set(dirOf(f.path), f.path);
+  const resolveGo = (spec: string): string | null | undefined => {
+    const m = goMods.find((g) => spec === g.mod || spec.startsWith(g.mod + '/'));
+    if (!m) return undefined; // the standard library or another module
+    return goDirs.get(join(m.dir, spec.slice(m.mod.length + 1))) ?? null;
+  };
+
+  // Rust: crate names from Cargo.toml (dashes become underscores), `use crate::a::b`, `mod a;`.
+  const crates = files
+    .filter((f) => base(f.path) === 'Cargo.toml')
+    .flatMap((f) => {
+      const name = f.content.match(/^\[package\][^[]*?^name\s*=\s*"([^"]+)"/m)?.[1];
+      return [{ name: name?.replace(/-/g, '_'), dir: dirOf(f.path) }];
+    })
+    .sort((a, b) => b.dir.length - a.dir.length);
+  // Crates whose Cargo.toml didn't make the cut: the folder holding src/lib.rs, named by convention (dashes → underscores).
+  for (const f of files) {
+    const dir = f.path.match(/^(.+)\/src\/(lib|main)\.rs$/)?.[1];
+    if (dir && !crates.some((c) => c.dir === dir)) crates.push({ name: base(dir).replace(/-/g, '_'), dir });
+  }
+  crates.sort((a, b) => b.dir.length - a.dir.length);
+  const crateOf = (file: string) => crates.find((c) => !c.dir || file.startsWith(c.dir + '/'))?.dir;
+  const rustFile = (dir: string, segs: string[]) => {
+    for (let n = segs.length; n >= 1; n--) {
+      const b = join(dir, segs.slice(0, n).join('/'));
+      const hit = firstFile([`${b}.rs`, `${b}/mod.rs`]);
+      if (hit) return hit;
+    }
+  };
+  const rustRoot = (file: string) => {
+    const c = crateOf(file);
+    if (c !== undefined) return join(c, 'src');
+    const i = file.lastIndexOf('/src/');
+    return i >= 0 ? file.slice(0, i + 4) : file.startsWith('src/') ? 'src' : dirOf(file);
+  };
+  const resolveRust = (file: string, path: string): string | null | undefined => {
+    const [head, ...segs] = path.split('::').map((x) => x.trim());
+    if (head === 'crate') return rustFile(rustRoot(file), segs) ?? null;
+    if (head === 'self' || head === 'super') return null; // inside the same module, near enough
+    const other = crates.find((c) => c.name === head);
+    if (!other) return undefined; // std or an outside crate
+    return rustFile(join(other.dir, 'src'), segs) ?? firstFile([join(other.dir, 'src/lib.rs'), join(other.dir, 'src/main.rs')]) ?? files.find((f) => f.path.startsWith(other.dir + '/'))?.path ?? null;
   };
 
   const imports: ImportRef[] = [];
@@ -182,6 +274,41 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
           if (t) add(f.path, from, { spec: name, ...at }, t);
           else ext(from, name.split('.')[0]);
         }
+      });
+    } else if (JAVA.test(f.path)) {
+      f.content.split('\n').forEach((l, i) => {
+        const m = l.match(/^\s*import\s+(?:static\s+)?([\w.]+?)(\.\*)?\s*;?\s*$/);
+        if (!m) return;
+        const t = resolveJava(m[1], !!m[2]);
+        if (t) add(f.path, from, { spec: m[1] + (m[2] ?? ''), line: i + 1, endLine: i + 1 }, t);
+        else ext(from, m[1].split('.').slice(0, 2).join('.'));
+      });
+    } else if (GO.test(f.path) && goMods.length) {
+      let block = false;
+      f.content.split('\n').forEach((l, i) => {
+        if (/^\s*import\s*\(\s*$/.test(l)) return void (block = true);
+        if (block && /^\s*\)/.test(l)) return void (block = false);
+        const m = block ? l.match(/^\s*(?:[\w.]+\s+)?"([^"]+)"/) : l.match(/^\s*import\s+(?:[\w.]+\s+)?"([^"]+)"/);
+        if (!m) return;
+        const t = resolveGo(m[1]);
+        if (t === undefined) ext(from, m[1]);
+        else if (t) add(f.path, from, { spec: m[1], line: i + 1, endLine: i + 1 }, t);
+      });
+    } else if (RUST.test(f.path)) {
+      f.content.split('\n').forEach((l, i) => {
+        const at = { line: i + 1, endLine: i + 1 };
+        const md = l.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/);
+        if (md) {
+          const here = /(^|\/)(mod|lib|main)\.rs$/.test(f.path) ? dirOf(f.path) : f.path.replace(/\.rs$/, '');
+          const t = firstFile([join(here, `${md[1]}.rs`), join(here, `${md[1]}/mod.rs`)]);
+          if (t) add(f.path, from, { spec: `mod ${md[1]}`, ...at }, t);
+          return;
+        }
+        const u = l.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?(?:use|extern\s+crate)\s+(?:::)?([\w:]+)/);
+        if (!u) return;
+        const t = resolveRust(f.path, u[1].replace(/::$/, ''));
+        if (t === undefined) ext(from, u[1].split('::')[0]);
+        else if (t) add(f.path, from, { spec: u[1], ...at }, t);
       });
     } else if (OTHER.test(f.path)) {
       let block = false; // Go: import ( ... )

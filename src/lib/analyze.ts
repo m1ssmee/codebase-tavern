@@ -15,10 +15,21 @@ const BINARY_EXT = new Set(
 );
 const CODE_EXT = new Set(
   ('ts tsx mts cts js jsx mjs cjs py pyi go rs java kt kts scala rb php c h cc cpp hpp cs swift m dart lua ex exs erl clj ' +
-    'hs ml r jl sh bash zsh ps1 sql vue svelte astro html css scss sass less graphql proto sol zig nim').split(' '),
+    'hs ml r jl sh bash zsh ps1 sql vue svelte astro html css scss sass less graphql proto sol zig nim ipynb').split(' '),
 );
 const DOC_EXT = new Set(['md', 'mdx', 'txt', 'rst', 'adoc']);
 const DOMINANT = ['src', 'app', 'lib', 'packages'];
+// Monorepo and Go layouts: each child is its own tenant (packages/react, crates/core, cmd/cobra, internal/render).
+const CONTAINERS = ['packages', 'apps', 'crates', 'libs', 'services', 'plugins', 'cmd', 'internal', 'pkg'];
+const MAX_NOTEBOOK = 2 * 1024 * 1024;
+const TEST_PATH = /(^|\/)(__tests__|tests?|spec|testdata)\/|[._-](test|spec)\.[a-z]+$/i;
+// Code, but not what a newcomer needs first: examples, fixtures, benchmarks, vendored code and type stubs.
+const SIDE_DIRS = /(^|\/)(examples?|samples?|fixtures?|__fixtures__|demos?|benchmarks?|benches|bench|third_party|e2e|flow-typed|typings|__mocks__|docs?_src|docs?_examples)\//i;
+// Small files the import graph needs (workspace package names, crate names, Go module paths).
+const MANIFEST = /^(package\.json|cargo\.toml|go\.mod|pom\.xml|build\.gradle(\.kts)?|pyproject\.toml)$/i;
+// Inside packages/x/ (or crates/x/, …) depth counts from the package, so its src/ competes with top-level folders.
+const IN_CONTAINER = /^(packages|apps|crates|libs|services|plugins|cmd|internal|pkg)\/[^/]+\//;
+const depth = (p: string) => p.split('/').length - (IN_CONTAINER.test(p) ? 2 : 0);
 
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 const ext = (p: string) => {
@@ -28,6 +39,9 @@ const ext = (p: string) => {
 export const isCode = (p: string) => CODE_EXT.has(ext(p)) || /^(dockerfile|makefile)$/i.test(base(p));
 
 export const CAP_REASON = `over the ${MAX_FILES}-file / 3MB cap`;
+/** The Landlord's note when the cap cut files (loading screen and tavern). */
+export const CAP_NOTE_START = 'This place is huge.';
+export const capNote = (n: number) => `${CAP_NOTE_START} I only let ${n.toLocaleString('en')} files in.`;
 
 export type Skipped = { count: number; reasons: Record<string, number> };
 export type Entry = { path: string; content: string };
@@ -42,14 +56,38 @@ export function skipReason(path: string, size?: number): string | null {
   if (LOCK_FILES.has(b)) return 'lock files';
   if (BINARY_EXT.has(ext(path))) return 'images and binaries';
   if (/\.min\.(js|css)$/.test(b)) return 'minified files';
-  if (size !== undefined && size > MAX_FILE) return 'files over 150KB';
+  // A notebook's size is mostly its outputs, which convertNotebook drops; the code left is checked again after.
+  if (size !== undefined && size > (ext(path) === 'ipynb' ? MAX_NOTEBOOK : MAX_FILE)) return 'files over 150KB';
   return null;
 }
 
-const tier = (p: string) => (isCode(p) ? 0 : DOC_EXT.has(ext(p)) ? 2 : 1);
-/** Code > config > docs, then shallow > deep. */
-export const byPriority = (a: string, b: string) =>
-  tier(a) - tier(b) || a.split('/').length - b.split('/').length || a.localeCompare(b);
+/** A Jupyter notebook as plain text: code cells as code, markdown cells as # comments, outputs dropped. Null if unreadable. */
+export function convertNotebook(json: string): string | null {
+  try {
+    const nb = JSON.parse(json) as { cells?: { cell_type?: string; source?: string | string[] }[] };
+    if (!Array.isArray(nb.cells)) return null;
+    return nb.cells
+      .map((c, i) => {
+        const src = (Array.isArray(c.source) ? c.source.join('') : (c.source ?? '')).replace(/\s+$/, '');
+        if (c.cell_type === 'code') return `# In[${i + 1}]:\n${src}`;
+        return src
+          .split('\n')
+          .map((l) => `# ${l}`.trimEnd())
+          .join('\n');
+      })
+      .filter((t) => t.trim())
+      .join('\n\n');
+  } catch {
+    return null;
+  }
+}
+
+// Source code, then manifests, then tests, then side code (examples, fixtures, benchmarks), then config, then docs.
+export const fileTier = (p: string) =>
+  isCode(p) ? (TEST_PATH.test(p) ? 1 : SIDE_DIRS.test(p) ? 2 : 0) : MANIFEST.test(base(p)) ? 0.5 : DOC_EXT.has(ext(p)) ? 4 : 3;
+const tier = fileTier;
+/** Source > manifests > tests > examples > config > docs, then shallow > deep (inside a monorepo package, from the package). */
+export const byPriority = (a: string, b: string) => tier(a) - tier(b) || depth(a) - depth(b) || a.localeCompare(b);
 const lineCount = (s: string) => s.split('\n').length;
 
 /** Filters junk, then keeps the best files (code > config > docs, shallow > deep) within the caps. */
@@ -58,22 +96,32 @@ export function filterFiles(entries: Entry[], preSkipped: Record<string, number>
   const skip = (why: string) => (reasons[why] = (reasons[why] ?? 0) + 1);
   const ok: RepoFile[] = [];
   for (const e of entries) {
-    const lines = lineCount(e.content);
+    const content = ext(e.path) === 'ipynb' ? convertNotebook(e.content) : e.content;
+    if (content === null) {
+      skip('unreadable notebooks');
+      continue;
+    }
+    const lines = lineCount(content);
     const why =
-      skipReason(e.path, e.content.length) ??
-      (e.content.includes('\0') ? 'images and binaries' : e.content.length / lines > 300 ? 'minified files' : null);
+      skipReason(e.path, content.length) ??
+      (content.includes('\0') ? 'images and binaries' : content.length / lines > 300 ? 'minified files' : null);
     if (why) skip(why);
-    else ok.push({ path: e.path, content: e.content, lineCount: lines });
+    else ok.push({ path: e.path, content, lineCount: lines });
   }
   ok.sort((a, b) => byPriority(a.path, b.path));
+  // Over the cap, a tenth of the places is kept for tests, so a big repo's modules don't all look untested.
+  const reserve = Math.min(Math.floor(MAX_FILES / 10), ok.filter((f) => tier(f.path) === 1).length);
   const files: RepoFile[] = [];
   let total = 0;
+  let source = 0;
   for (const f of ok) {
-    if (files.length >= MAX_FILES || total + f.content.length > MAX_TOTAL) {
+    const isSource = tier(f.path) === 0;
+    if (files.length >= MAX_FILES || total + f.content.length > MAX_TOTAL || (isSource && source >= MAX_FILES - reserve)) {
       skip(CAP_REASON);
     } else {
       files.push(f);
       total += f.content.length;
+      if (isSource) source++;
     }
   }
   return { files, skipped: { count: Object.values(reasons).reduce((a, b) => a + b, 0), reasons } };
@@ -120,30 +168,85 @@ export function nesting(f: RepoFile): number {
   return max;
 }
 
-const codeLines = (fs: RepoFile[]) => fs.reduce((n, f) => n + (isCode(f.path) ? f.lineCount : 0), 0);
+// Code a tenant is made of: not CI scripts and editor config in dot-folders (.github/workflows/lint.sh).
+const isTenantCode = (p: string) => isCode(p) && !p.split('/').slice(0, -1).some((d) => d.startsWith('.'));
+const codeLines = (fs: RepoFile[]) => fs.reduce((n, f) => n + (isTenantCode(f.path) ? f.lineCount : 0), 0);
 
 function makeModule(id: string, path: string, name: string, fs: RepoFile[], all: RepoFile[]): Module {
   const filePaths = fs.map((f) => f.path);
   return { id, name, path, filePaths, stats: computeStats({ filePaths }, all) };
 }
 
-/** Top-level folders (or children of a dominant src/app/lib/packages), root files, max 8 incl. "misc". */
+const dirOf = (p: string) => p.slice(0, Math.max(0, p.lastIndexOf('/')));
+
+/** Java/Kotlin: the root package under src/main/java (org/springframework/samples/petclinic), if most code lives there. */
+function javaRoot(files: RepoFile[], total: number): string | null {
+  for (const r of ['src/main/java', 'src/main/kotlin']) {
+    const src = files.filter((f) => f.path.startsWith(r + '/') && /\.(java|kt)$/.test(f.path));
+    if (!src.length || codeLines(src) < total * 0.3) continue;
+    let common = dirOf(src[0].path).split('/');
+    for (const f of src) {
+      const p = dirOf(f.path).split('/');
+      let i = 0;
+      while (i < common.length && common[i] === p[i]) i++;
+      common = common.slice(0, i);
+    }
+    return common.join('/');
+  }
+  return null;
+}
+
+/**
+ * Modules: top-level folders, or the children of a dominant src/app/lib/packages folder, of monorepo and Go
+ * containers (packages/*, apps/*, crates/*, cmd/*, internal/*, pkg/*), or of a Java root package. Root files are
+ * one module; a repo that is all root files gets one module per big file. Max 8 incl. "misc".
+ */
 export function detectModules(files: RepoFile[]): Module[] {
   const total = codeLines(files);
-  const dominant = DOMINANT.find((d) => total > 0 && codeLines(files.filter((f) => f.path.startsWith(d + '/'))) > total / 2);
+  const share = (prefix: string) => codeLines(files.filter((f) => f.path.startsWith(prefix + '/')));
+  const dominant = DOMINANT.find((d) => total > 0 && share(d) > total / 2);
+  const java = javaRoot(files, total);
+  const containers = new Set(CONTAINERS.filter((c) => total > 0 && share(c) > total * 0.15));
   const groupOf = (p: string) => {
     const parts = p.split('/');
+    if (java) {
+      if (p.startsWith(java + '/')) {
+        const rest = p.slice(java.length + 1).split('/');
+        return rest.length > 1 ? `${java}/${rest[0]}` : java;
+      }
+      if (/^src\/test\//.test(p)) return 'src/test';
+      if (/^src\/main\//.test(p)) return parts.slice(0, 3).join('/'); // src/main/resources, src/main/webapp
+    }
+    if (containers.has(parts[0]) && parts.length > 2) return `${parts[0]}/${parts[1]}`;
     if (dominant && parts[0] === dominant) return parts.length > 2 ? `${dominant}/${parts[1]}` : dominant;
     return parts.length > 1 ? parts[0] : '';
   };
   const groups = new Map<string, RepoFile[]>();
   for (const f of files) groups.set(groupOf(f.path), [...(groups.get(groupOf(f.path)) ?? []), f]);
 
-  const mods = [...groups].map(([path, fs]) =>
-    makeModule(path || '(root)', path, path ? base(path) : files.length === 1 ? base(files[0].path) : 'root', fs, files),
-  );
-  const code = mods.filter((m) => m.filePaths.some(isCode)).sort((a, b) => b.stats.totalLines - a.stats.totalLines);
-  const nonCode = mods.filter((m) => !m.filePaths.some(isCode));
+  // The root is the main package (all the code, or most of it: a Go library like cobra): its biggest files become
+  // tenants of their own; the rest of the root stays one module.
+  const root = groups.get('') ?? [];
+  const rootCode = root.filter((f) => isTenantCode(f.path));
+  const allAtRoot = rootCode.length >= 3 && [...groups].every(([k, fs]) => k === '' || !fs.some((f) => isTenantCode(f.path)));
+  const files_: Record<string, RepoFile[]> = {};
+  if (allAtRoot || (rootCode.length >= 5 && codeLines(root) >= total * 0.6)) {
+    // Source files first: context.go is a tenant, context_test.go stays with the rest of the root.
+    const big = [...rootCode].sort((a, b) => +TEST_PATH.test(a.path) - +TEST_PATH.test(b.path) || b.lineCount - a.lineCount).slice(0, allAtRoot ? 6 : 5);
+    for (const f of big) files_[f.path] = [f];
+    groups.set('', root.filter((f) => !big.includes(f)));
+    if (!groups.get('')!.length) groups.delete('');
+  }
+
+  const mods = [
+    ...Object.entries(files_).map(([path, fs]) => makeModule(path, path, base(path), fs, files)),
+    ...[...groups].map(([path, fs]) => makeModule(path || '(root)', path, path ? base(path) : files.length === 1 ? base(files[0].path) : 'root', fs, files)),
+  ];
+  const bySize = (a: Module, b: Module) => b.stats.totalLines - a.stats.totalLines;
+  let code = mods.filter((m) => m.filePaths.some(isCode)).sort(bySize);
+  let nonCode = mods.filter((m) => !m.filePaths.some(isCode));
+  // A docs-only repo (a CI script in .github doesn't count): every folder is a tenant.
+  if (!mods.some((m) => m.filePaths.some(isTenantCode))) [code, nonCode] = [mods.sort(bySize), []];
   if (!nonCode.length && code.length <= 8) return code;
   const rest = [...code.slice(7), ...nonCode];
   const miscFiles = files.filter((f) => rest.some((m) => m.filePaths.includes(f.path)));

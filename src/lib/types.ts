@@ -44,6 +44,7 @@ export type Repo = {
   name: string;
   url?: string;
   branch?: string;
+  key?: string; // owner/repo[/subpath]@commitSHA: the cache key for this exact download
   files: RepoFile[];
   modules: Module[];
   skipped?: { count: number; reasons: Record<string, number> };

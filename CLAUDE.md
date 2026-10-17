@@ -66,6 +66,13 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - Gags follow the comedy rules in src/components/cast/anim: deadpan faces, cartoon only (no realistic weapons, blood or injury), crude but never sexual, one crude gag on screen at a time, a 30-second cooldown per character per gag, spice-gated with a clean fallback; prefers-reduced-motion gets still poses and no screen shake.
 - /lab and /lab?board=1 are review pages, not linked from the app.
 
+## Loading a repo
+- /api/ingest streams NDJSON: each real step for the loading show ("Tenants moving in"), then the repo, or an in-character error (never a blank screen). One cheap commit-SHA call comes first; owner/repo[/subpath]@sha keys a server LRU in memory and the browser's IndexedDB copy (src/lib/idb.ts). Repos over 25MB use the git tree plus raw files instead of the zipball.
+- 300 files at most: source, then manifests, then tests (a tenth of the places is kept for them), then examples/fixtures/type stubs, then config, then docs; shallow first, counted from the package inside packages/, crates/ and the like. Over the cap, the Landlord says so.
+- Modules: top-level folders; the children of a dominant src/app/lib/packages; the children of monorepo and Go containers (packages, apps, crates, libs, services, plugins, cmd, internal, pkg) holding over 15% of the code; the packages below a Java root package; a root that holds (most of) the code is split into its biggest source files; a docs-only repo keeps every folder. Max 8 including misc.
+- Imports: JS/TS (relative, aliases, workspace packages by name), Python, Java (package to folder), Go (the go.mod module path), Rust (crate::, mod, workspace crates); the folder-name heuristic for everything else.
+- The tavern opens as soon as the repo is analysed, with template personas from real stats; AI personas arrive in parallel 2-module batches and replace them with a settling-in beat. Cached server-side by a hash of the exact input and in IndexedDB by commit, spice and mode. A failed batch keeps its placeholders (the demo repo uses its saved cast).
+
 ## Commits
 - No Co-Authored-By or any other trailer lines in commit messages in this repo.
 

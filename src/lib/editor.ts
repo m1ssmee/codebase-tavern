@@ -54,6 +54,7 @@ Return one pick per line id: best = the 0-based index of the option you chose.`,
         prompt: JSON.stringify(contested.map(([id, k]) => ({ id, ...(k.about && { about: k.about }), options: k.options }))),
         schema: SCHEMA,
         timeoutMs,
+        retries: 0, // the deadline is the deadline: past it, the first survivor wins
         temperature: 0.3, // a judge, not a writer: the creativity is already in the options
       });
       for (const p of res?.picks ?? []) {

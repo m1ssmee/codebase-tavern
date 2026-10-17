@@ -623,3 +623,71 @@ console.log('judge template checks ok');
   assert.ok(Math.abs(n.spent(morn) - 0.002) < 1e-12);
   console.log('spend reservation checks ok');
 }
+
+// Live readiness: module layouts, file priority over the cap, notebooks, and Java/Go/Rust imports.
+{
+  const { detectModules, filterFiles, convertNotebook, MAX_FILES } = await import('../src/lib/analyze.ts');
+  const { buildGraph } = await import('../src/lib/graph.ts');
+  const { personaBatches } = await import('../src/lib/characters.ts');
+  const F = (path, content = 'x\nx\n') => ({ path, content, lineCount: content.split('\n').length });
+  const ids = (fs) => detectModules(fs).map((m) => m.id).sort();
+  // monorepo: packages/* and apps/* are tenants of their own
+  assert.deepEqual(ids([F('packages/core/src/a.ts'), F('packages/ui/src/b.ts'), F('apps/web/page.tsx'), F('package.json')]), ['(misc)', 'apps/web', 'packages/core', 'packages/ui']); // config-only root → misc, as before
+  // Go: cmd/*, internal/*, pkg/* children; the root package stays root
+  assert.deepEqual(ids([F('go.mod', 'module example.com/x\n'), F('main.go'), F('cmd/serve/main.go'), F('internal/store/db.go'), F('pkg/api/api.go')]), ['(root)', 'cmd/serve', 'internal/store', 'pkg/api']);
+  // Java: modules at the package level below the root package
+  const J = 'src/main/java/org/acme/petclinic';
+  const jm = detectModules([F(`${J}/App.java`), F(`${J}/owner/Owner.java`), F(`${J}/owner/OwnerController.java`), F(`${J}/vet/Vet.java`), F('src/test/java/org/acme/petclinic/owner/OwnerTests.java'), F('src/main/resources/application.properties'), F('pom.xml')]);
+  assert.deepEqual(jm.map((m) => m.name).sort(), ['misc', 'owner', 'petclinic', 'test', 'vet']); // resources here is only a .properties file: misc
+  // Rust workspace: crates/*
+  assert.deepEqual(ids([F('Cargo.toml'), F('crates/core/src/lib.rs'), F('crates/cli/src/main.rs'), F('src/main.rs')]), ['(misc)', 'crates/cli', 'crates/core', 'src']);
+  // all files at the root: the big code files are tenants, the rest stay in root
+  const flat = detectModules([F('a.py', 'x\n'.repeat(50)), F('b.py', 'x\n'.repeat(40)), F('c.py', 'x\n'.repeat(30)), F('README.md'), F('.github/ci.yml')]);
+  assert.deepEqual(flat.map((m) => m.id), ['a.py', 'b.py', 'c.py', '(misc)']); // the leftover docs and config: misc
+  // docs only: the folders are the tenants
+  assert.deepEqual(ids([F('guide/intro.md'), F('guide/setup.md'), F('reference/api.md'), F('README.md')]), ['(root)', 'guide', 'reference']);
+  // over the cap: source first, a tenth kept for tests, shallow first
+  const many = [...Array.from({ length: 400 }, (_, i) => ({ path: `src/m${i}.ts`, content: 'x' })), ...Array.from({ length: 50 }, (_, i) => ({ path: `test/t${i}.test.ts`, content: 'x' })), { path: 'examples/demo.ts', content: 'x' }, { path: 'README.md', content: 'x' }];
+  const kept = filterFiles(many).files.map((f) => f.path);
+  assert.equal(kept.length, MAX_FILES);
+  assert.equal(kept.filter((p) => p.startsWith('test/')).length, 30);
+  assert.ok(!kept.includes('README.md') && !kept.includes('examples/demo.ts'));
+  // notebooks: code cells as code, markdown as comments, outputs gone
+  const nb = JSON.stringify({ cells: [{ cell_type: 'markdown', source: ['# Title\n', 'Intro'] }, { cell_type: 'code', source: ['import pandas as pd\n', 'df = pd.read_csv("x.csv")'], outputs: [{ data: { 'image/png': 'A'.repeat(500000) } }] }] });
+  assert.equal(convertNotebook(nb), '# # Title\n# Intro\n\n# In[2]:\nimport pandas as pd\ndf = pd.read_csv("x.csv")');
+  assert.equal(filterFiles([{ path: 'analysis.ipynb', content: nb }]).files[0].lineCount, 6);
+  assert.equal(convertNotebook('not json'), null);
+  // imports: Java package → folder, Go module path → folder, Rust crate::, mod and workspace crates
+  const edges = (fs) => {
+    const mods = detectModules(fs);
+    return buildGraph(fs, mods).edges.filter((e) => e.kind === 'imports').map((e) => `${e.from}>${e.to}`).sort();
+  };
+  assert.deepEqual(edges([F(`${J}/owner/OwnerController.java`, `package org.acme.petclinic.owner;\nimport org.acme.petclinic.vet.Vet;\nimport org.acme.petclinic.model.*;\nimport java.util.List;\n`), F(`${J}/vet/Vet.java`), F(`${J}/model/Base.java`)]), [`${J}/owner>${J}/model`, `${J}/owner>${J}/vet`]);
+  assert.deepEqual(edges([F('go.mod', 'module github.com/acme/gin\n'), F('gin.go', 'package gin\nimport (\n  "net/http"\n  "github.com/acme/gin/render"\n  b "github.com/acme/gin/binding"\n)\n'), F('render/json.go'), F('binding/form.go', 'package binding\nimport "github.com/acme/gin/render"\n')]), ['(root)>binding', '(root)>render', 'binding>render']);
+  assert.deepEqual(edges([F('Cargo.toml', '[package]\nname = "rg"\n'), F('crates/searcher/Cargo.toml', '[package]\nname = "grep-searcher"\n'), F('crates/searcher/src/lib.rs'), F('crates/core/Cargo.toml', '[package]\nname = "core"\n'), F('crates/core/src/main.rs', 'mod flags;\nuse grep_searcher::Searcher;\nuse crate::flags::Args;\nuse std::io;\n'), F('crates/core/src/flags.rs')]), ['crates/core>crates/searcher']);
+  assert.deepEqual(personaBatches(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']), [['a', 'e'], ['b', 'f'], ['c', 'g'], ['d', 'h']]);
+  assert.deepEqual(personaBatches(['a', 'b', 'c', 'd', 'e']), [['a', 'c', 'e'], ['b', 'd']]);
+  assert.deepEqual([personaBatches(['a', 'b']), personaBatches(['a'])], [[['a', 'b']], [['a']]]);
+  console.log('live-readiness checks ok');
+}
+{
+  const { detectModules, byPriority } = await import('../src/lib/analyze.ts');
+  const { buildGraph } = await import('../src/lib/graph.ts');
+  const F = (path, content = 'x\nx\n') => ({ path, content, lineCount: content.split('\n').length });
+  const L = (n) => 'x\n'.repeat(n);
+  // a CI script in .github doesn't stop a docs repo from being docs-only
+  assert.deepEqual(detectModules([F('readme.md'), F('guide/a.md'), F('.github/workflows/lint.sh')]).map((m) => m.id).sort(), ['(root)', '.github', 'guide']);
+  // the root is the main package (most of the code): its biggest files are tenants
+  assert.ok(!detectModules([F('command.go', L(900)), F('command_test.go', L(2000)), F('a.go', L(300)), F('b.go', L(200)), F('c.go', L(100)), F('d.go', L(90)), F('e.go', L(80)), F('f.go', L(70))]).some((m) => m.id === 'command_test.go'));
+  const lib = detectModules([F('command.go', L(900)), F('completions.go', L(700)), F('flags.go', L(400)), F('args.go', L(200)), F('cobra.go', L(150)), F('util.go', L(50)), F('doc/man.go', L(300))]);
+  assert.deepEqual(lib.map((m) => m.id), ['command.go', 'completions.go', 'flags.go', 'doc', 'args.go', 'cobra.go', '(root)']);
+  // inside a monorepo package, depth counts from the package: its src competes with top-level scripts
+  assert.ok(byPriority('packages/react/src/ReactHooks.js', 'scripts/rollup/build/x.js') < 0);
+  assert.ok(byPriority('src/a.ts', 'flow-typed/npm/jest.js') < 0); // type stubs are side code
+  // monorepo packages imported by name, and Rust crates by folder name when their Cargo.toml wasn't loaded
+  const ws = [F('packages/react-dom/src/client.js', "import { useState } from 'react';\nimport x from 'shared/ReactSymbols';\nimport y from '@acme/babel-parser';\n"), F('packages/react/index.js'), F('packages/shared/ReactSymbols.js'), F('packages/acme-babel-parser/src/index.js')];
+  assert.deepEqual(buildGraph(ws, detectModules(ws)).edges.map((e) => `${e.from}>${e.to}`).sort(), ['packages/react-dom>packages/acme-babel-parser', 'packages/react-dom>packages/react', 'packages/react-dom>packages/shared']);
+  const rs = [F('crates/turborepo-cache/src/lib.rs'), F('crates/turborepo-lib/src/lib.rs', 'use turborepo_cache::AsyncCache;\n')];
+  assert.deepEqual(buildGraph(rs, detectModules(rs)).edges.map((e) => `${e.from}>${e.to}`), ['crates/turborepo-lib>crates/turborepo-cache']);
+  console.log('layout and workspace checks ok');
+}
