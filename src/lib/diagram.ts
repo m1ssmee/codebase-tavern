@@ -6,10 +6,16 @@ import type { Graph } from './graph.ts';
 export type DiagramCite = { target: string | number; path: string; startLine: number; endLine: number };
 export type SeqMessage = { from: string; to: string; text: string; fatal: boolean; cite?: { path: string; startLine: number; endLine: number } };
 
-/** For AI-written diagrams: no click/href/call lines, no init directives (they can loosen security), no HTML, no URLs. */
+/**
+ * For AI-written diagrams: no init directives or front-matter config (either can loosen security; Mermaid finds
+ * directives anywhere in the text, even across lines), no click/href/call or styling lines, no HTML, no URLs.
+ */
 export function sanitizeDiagram(raw: string): string {
   return raw
     .replace(/\r/g, '')
+    .replace(/^\s*---\n[\s\S]*?\n---[^\n]*\n?/, '') // leading front matter
+    .replace(/%%\{[\s\S]*?\}%%/g, '')
+    .replace(/%%\{/g, '')
     .split('\n')
     .filter((l) => !/^\s*(click|href|call|style|classDef|linkStyle)\b/i.test(l) && !/^\s*%%\{/.test(l))
     .map((l) =>
@@ -69,8 +75,9 @@ export function parseSequence(text: string): SeqMessage[] {
 /** Participant id for a module: letters, digits and _ only. */
 export const participantId = (moduleId: string) => moduleId.replace(/[^A-Za-z0-9_]/g, '_');
 
-/** Safe inside a quoted flowchart label. */
-export const escLabel = (s: string) => s.replace(/[#"<>`]/g, (c) => ({ '#': '#35;', '"': '#quot;', '<': '#lt;', '>': '#gt;', '`': '#96;' })[c]!);
+/** Safe inside a quoted flowchart label; `%` too, so a model-written title can't carry a %%{init}%% directive. */
+export const escLabel = (s: string) =>
+  s.replace(/[#"<>`%]/g, (c) => ({ '#': '#35;', '"': '#quot;', '<': '#lt;', '>': '#gt;', '`': '#96;', '%': '#37;' })[c]!);
 
 const IMPORT_STROKE = 'stroke:#8a8580,stroke-width:1.6px';
 const CALL_STROKE = 'stroke:#6f93bd,stroke-width:1.6px';

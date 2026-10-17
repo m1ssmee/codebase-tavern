@@ -12,6 +12,8 @@ const load = () =>
     m.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
+      // Keys a %%{init}%% directive may never override (sanitizeDiagram strips directives too; this is the backstop).
+      secure: ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize', 'maxEdges', 'suppressErrorRendering', 'theme', 'themeCSS', 'themeVariables', 'fontFamily', 'htmlLabels', 'flowchart', 'sequence', 'dompurifyConfig'],
       theme: 'base',
       fontFamily: font,
       themeVariables: {
@@ -143,7 +145,8 @@ export default forwardRef<MermaidHandle, Props>(function Mermaid({ code, fill, v
     let alive = true;
     (async () => {
       const m = await load();
-      if (!(await m.parse(code, { suppressErrors: true }))) {
+      // Our own charts never contain a directive and AI text has them stripped: anything left is refused.
+      if (/%%\{/.test(code) || !(await m.parse(code, { suppressErrors: true }))) {
         if (alive) setDropped(true);
         cb.current.onReady?.(null, '');
         return;

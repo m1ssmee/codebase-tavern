@@ -286,6 +286,12 @@ const evil = 'flowchart LR\n%%{init: {"securityLevel": "loose"}}%%\n  a["<img sr
 const clean = sanitizeDiagram(evil);
 assert.ok(!/click|init|<img|https?:|style a/.test(clean), clean);
 assert.match(clean, /a\[" hi"\] --> b/);
+// Directives anywhere (mid-line, multi-line) and front matter are gone too; labels can't carry one either.
+const sneaky = '---\nconfig:\n  securityLevel: loose\n---\nsequenceDiagram\n  participant a as x %%{init: {"securityLevel": "loose"}}%% y\n  a->>b: hi %%{\ninit: {"theme": "dark"}\n}%% there\n  b->>a: %%{ half';
+const sneakyClean = sanitizeDiagram(sneaky);
+assert.ok(!/%%\{|securityLevel|config:|init:/.test(sneakyClean), sneakyClean);
+assert.match(sneakyClean, /^sequenceDiagram/);
+assert.equal(escLabel('t %%{init: x}%%'), 't #37;#37;{init: x}#37;#37;');
 const seq = 'sequenceDiagram\n  participant orders as orders, the bouncer\n  orders->>gateway: POST /payments/charges\n  %% cite orders/checkout.ts:21-30\n  rect rgb(255, 228, 222)\n  Note over orders,gateway: Where it all went wrong\n  gateway-->>+orders: UpstreamTimeoutError after 2000ms\n  %% cite gateway/proxy.ts:46-48\n  end\n  orders->>gateway: same charge again\n  %% cite m3 orders/x.ts:1';
 assert.deepEqual(parseSequence(seq).map((m) => [m.from, m.to, m.fatal, m.cite?.startLine]), [['orders', 'gateway', false, 21], ['gateway', 'orders', true, 46], ['orders', 'gateway', false, undefined]]);
 assert.deepEqual(parseCites(seq).map((c) => `${c.target}:${c.path}:${c.startLine}-${c.endLine}`), ['0:orders/checkout.ts:21-30', '1:gateway/proxy.ts:46-48', 'm3:orders/x.ts:1-1']);
