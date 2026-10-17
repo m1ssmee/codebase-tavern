@@ -34,6 +34,11 @@ export default function TavernPage() {
   const params = search === null ? null : new URLSearchParams(search);
   const slug = params?.get('repo') ?? (params?.get('demo') === '1' ? 'm1ssmee/quickcart' : null);
 
+  // Pre-warm the chat and Tribunal functions so the first click doesn't pay a cold start. Failures don't matter.
+  useEffect(() => {
+    for (const route of ['tribunal', 'chat']) fetch(`/api/${route}?warm=1`, { cache: 'no-store' }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
     const s = useTavern.getState();

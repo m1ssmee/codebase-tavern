@@ -119,3 +119,22 @@ for (const size of [1, 3, 7, 50, doc.length]) {
   assert.deepEqual(got, JSON.parse(doc).turns, `chunk size ${size}`);
 }
 console.log('turn scanner checks ok');
+
+// Generalised fix-quality check
+const { fixProblem } = await import('../src/lib/verdict.ts');
+const culprits = ['orders/checkout.ts', 'gateway/config.ts'];
+const F = (path, diff) => ({ path, diff });
+const hdr = (p) => `--- a/${p}\n+++ b/${p}\n@@\n`;
+assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+      // retry is not safe here\n-      // retry added to fix flaky checkouts'), culprits, 'retry'), /comments/);
+assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+   \n-'), culprits, 'retry'), /comments or whitespace/);
+assert.match(fixProblem(F('test/app.js', hdr('test/app.js') + "+  it('fails on async throw', () => {});"), [], 'hang'), /test files/);
+assert.match(fixProblem(F('orders/checkout.test.ts', hdr('orders/checkout.test.ts') + "+test('no double charge', () => {});"), culprits, 'retry'), /test files/);
+assert.match(fixProblem(F('utils/money.ts', hdr('utils/money.ts') + '+  return Math.round(x);'), culprits, 'charged twice'), /culprit module/);
+assert.match(fixProblem(F('gateway/config.ts', bump), culprits, 'orders retries the charge'), /timeout/);
+assert.equal(fixProblem(F('gateway/config.ts', bump), culprits, 'requests are slow on cold start'), null); // timeout fix is fine when it is the cause
+assert.equal(fixProblem(F('orders/checkout.ts', idem), culprits, 'retry'), null);
+// tests alongside a real code change are fine; a multi-file diff is judged per file header
+const mixed = hdr('orders/checkout.test.ts') + "+test('one charge', () => {});\n" + hdr('orders/checkout.ts') + '+      idempotency_key: order.id,';
+assert.equal(fixProblem(F('orders/checkout.test.ts', mixed), culprits, 'retry'), null);
+assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+  // TODO\n' + hdr('orders/checkout.test.ts') + "+test('x', () => {});"), culprits, 'retry'), /test files/);
+console.log('fix-quality checks ok');

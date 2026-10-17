@@ -2,7 +2,7 @@ import { rateLimited } from '@/lib/gemini';
 import { llmJSON, llmStream, type Timing } from '@/lib/llm';
 import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
-import { IDEMPOTENCY_SUGGESTION, isTimeoutOnlyFix, SYMPTOM_FIX_NOTE, TurnScanner } from '@/lib/verdict';
+import { fixProblem, realFixNeeded, rejectNote, TurnScanner } from '@/lib/verdict';
 import type { Citation } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -53,6 +53,12 @@ const numbered = (code: string) =>
     .split('\n')
     .map((l, i) => `${i + 1}| ${l}`)
     .join('\n');
+
+// Pre-warm: /tavern pings this on load so the function is warm before the first click. No model call.
+export function GET(req: Request) {
+  if (new URL(req.url).searchParams.get('warm') !== '1') return new Response('Method Not Allowed', { status: 405 });
+  return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+}
 
 export async function POST(req: Request) {
   if (rateLimited(req)) return Response.json({ error: 'busy' }, { status: 429 });
@@ -129,7 +135,7 @@ Rules:
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
-- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes behaviour; never a diff that only edits comments. Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: one dry closing sentence from the judge.
+- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: one dry closing sentence from the judge.
 - Use only these moduleIds: ${ids.join(', ')}.`;
 
     const prompt = `Bug report: ${bug}
@@ -184,18 +190,21 @@ ${levelReminder(b.spice)}`;
           const out = JSON.parse(full) as Out;
           const hearing = [out?.verdict?.rootCause, ...(out?.turns ?? []).map((t) => t?.text), ...(out?.verdict?.evidence ?? []).map((c) => c?.path)].join(' ');
           let v = out?.verdict;
-          // Fix quality, enforced: a timeout-only fix for a retry/duplicate bug gets one verdict regeneration.
-          let symptomOnly = isTimeoutOnlyFix(str(v?.fix?.diff, 4000), hearing);
-          let fixCheck: 'ok' | 'regenerated' | 'kept-timeout-fix' = 'ok';
-          if (symptomOnly) {
+          // Fix quality, enforced: the fix must change executable code in a culprit module (not only comments,
+          // whitespace or tests, and not a timeout bump on a retry/duplicate bug). One regeneration, with the reason.
+          const culpritFiles = (x?: Out['verdict']) =>
+            suspects.filter((sp) => arr<string>(x?.culprits, 4).includes(sp.id)).flatMap((sp) => [...sp.allPaths, ...sp.files.map((f) => f.path)]);
+          let problem = fixProblem({ path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) }, culpritFiles(v), hearing);
+          let fixCheck: 'ok' | 'regenerated' | 'kept-bad-fix' = 'ok';
+          if (problem) {
             const left = 56_000 - (Date.now() - started); // stay inside maxDuration
-            console.warn(`[tribunal] timeout-only fix rejected; ${left > 10_000 ? 'regenerating the verdict once' : 'no time left to regenerate'}`);
+            console.warn(`[tribunal] fix rejected (${problem}); ${left > 10_000 ? 'regenerating the verdict once' : 'no time left to regenerate'}`);
             if (left > 10_000) {
               try {
                 const turnsText = (out?.turns ?? []).map((t) => `${t?.moduleId}: ${t?.text}`).join('\n');
                 const again = await llmJSON<{ verdict: Out['verdict'] }>('tribunal-verdict-retry', {
                   system,
-                  prompt: `${prompt}\n\nThe hearing so far:\n${turnsText}\n\n${SYMPTOM_FIX_NOTE} Return only the verdict.`,
+                  prompt: `${prompt}\n\nThe hearing so far:\n${turnsText}\n\n${rejectNote(problem)} Return only the verdict.`,
                   schema: VERDICT_SCHEMA,
                   timeoutMs: left,
                   timings,
@@ -203,7 +212,7 @@ ${levelReminder(b.spice)}`;
                 if (again?.verdict) {
                   v = again.verdict;
                   fixCheck = 'regenerated';
-                  symptomOnly = isTimeoutOnlyFix(str(v.fix?.diff, 4000), hearing);
+                  problem = fixProblem({ path: str(v.fix?.path, 300), diff: str(v.fix?.diff, 4000) }, culpritFiles(v), hearing);
                 }
               } catch (err) {
                 console.error('[tribunal] verdict regeneration failed, keeping the first verdict:', err);
@@ -220,13 +229,13 @@ ${levelReminder(b.spice)}`;
             fix: { path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) },
             judgeLine: str(v?.judgeLine, 300),
           };
-          // Still a symptom fix after the retry: keep it, but say what the real fix is.
-          if (symptomOnly) {
-            verdict.rootCause += IDEMPOTENCY_SUGGESTION;
-            fixCheck = 'kept-timeout-fix';
+          // Still unacceptable after the retry: keep it, but say what the real code change is.
+          if (problem) {
+            verdict.rootCause += realFixNeeded(hearing, verdict.culprits);
+            fixCheck = 'kept-bad-fix';
           }
           if (sent < 2 || !verdict.culprits.length) throw new Error('trial output unusable');
-          send({ type: 'verdict', verdict, fixCheck }); // fixCheck: diagnostics only
+          send({ type: 'verdict', verdict, fixCheck, fixIssue: problem }); // fixCheck/fixIssue: diagnostics only
         } catch (err) {
           console.error('[tribunal] trial failed mid-stream:', err);
           send({ type: 'error' });

@@ -1,29 +1,52 @@
 // Tribunal fix-quality check. Pure, so `node scripts/check.mjs` can run it directly.
 
-const isComment = (l: string) => /^(\/\/|#|\*|\/\*)/.test(l);
+// Comment lines (JS/TS/C-style, Python/shell #, HTML). Preprocessor lines like #include are code.
+const isComment = (l: string) => /^(\/\/|\/\*|\*|<!--|#(?!include|define|if|endif|pragma|!))/.test(l);
+const isTestFile = (p: string) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$/i.test(p);
+const RETRY_OR_DUPLICATE = /\b(retr(y|ies|ied|ying)|duplicate|twice|double)/i;
 
 /**
- * True when the fix only bumps a timeout (every changed code line mentions a timeout) while the
- * hearing is about a retry or a duplicate charge: a symptom fix, not a root-cause fix.
+ * Why a verdict's fix is unacceptable, or null if it's fine. A fix must change executable code in at least
+ * one culprit module: not only comments/whitespace, not only tests (tests alongside real code are fine), and
+ * not only a timeout bump when the hearing is about a retry or duplicate (that hides the symptom).
+ * `culpritFiles` empty = skip the culprit-module check.
  */
-export function isTimeoutOnlyFix(diff: string, hearing: string): boolean {
-  const changed = diff
-    .split('\n')
-    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l))
-    .map((l) => l.slice(1).trim())
-    .filter((l) => l && !isComment(l));
-  if (!changed.length) return false;
-  const timeoutOnly = changed.every((l) => /timeout/i.test(l));
-  return timeoutOnly && /\b(retr(y|ies|ied|ying)|duplicate|twice|double)/i.test(hearing);
+export function fixProblem(fix: { path: string; diff: string }, culpritFiles: string[], hearing: string): string | null {
+  let file = fix.path;
+  const changed: { file: string; code: string }[] = [];
+  for (const raw of fix.diff.split('\n')) {
+    const header = raw.match(/^\+\+\+ (?:b\/)?(\S+)/);
+    if (header) {
+      file = header[1];
+      continue;
+    }
+    if (/^(---|@@)/.test(raw) || !/^[+-]/.test(raw)) continue;
+    const code = raw.slice(1).trim();
+    if (code && !isComment(code)) changed.push({ file, code });
+  }
+  if (!changed.length) return 'it only edits comments or whitespace';
+  const real = changed.filter((c) => !isTestFile(c.file));
+  if (!real.length) return 'it only changes test files';
+  if (culpritFiles.length && !real.some((c) => culpritFiles.includes(c.file))) return 'it does not change code in any culprit module';
+  if (real.every((c) => /timeout/i.test(c.code)) && RETRY_OR_DUPLICATE.test(hearing))
+    return 'it only raises a timeout while the evidence shows a retry without an idempotency key';
+  return null;
 }
 
-export const SYMPTOM_FIX_NOTE =
-  'NOTE FROM THE COURT: your previous fix only changed a timeout value. That hides the symptom and was rejected. ' +
-  'The evidence shows a retry without an idempotency key: fix the duplicate first (send and honour an idempotency key, ' +
-  'or stop retrying a charge that is not safe to repeat).';
+/** Back-compat helper (and the narrow case the earlier checks cover). */
+export const isTimeoutOnlyFix = (diff: string, hearing: string) => fixProblem({ path: '', diff }, [], hearing)?.includes('timeout') ?? false;
 
-export const IDEMPOTENCY_SUGGESTION =
-  ' The real fix is an idempotency key (a unique ID that makes a repeated request safe to repeat), so a retried charge is recognised as the same charge instead of a new one.';
+export const rejectNote = (reason: string) =>
+  `NOTE FROM THE COURT: your previous fix was rejected because ${reason}. The fix must change executable code in at least one ` +
+  'culprit module and remove the root cause; tests may be added alongside the code change, but never on their own. ' +
+  'When the evidence shows a retry without an idempotency key, fix the duplicate first (send and honour an idempotency key, ' +
+  'or stop retrying a request that is not safe to repeat).';
+
+/** Said in the root cause when even the regenerated fix is unacceptable. */
+export const realFixNeeded = (hearing: string, culprits: string[]) =>
+  RETRY_OR_DUPLICATE.test(hearing)
+    ? ' The real fix is a code change: an idempotency key (a unique ID that makes a repeated request safe to repeat), so a retried charge is recognised as the same charge instead of a new one.'
+    : ` The real fix has to change the executable code in ${culprits.join(' and ') || 'the culprit module'}, not only comments or tests.`;
 
 /**
  * Pulls complete objects out of the "turns" array of a JSON document that is still streaming in, as soon

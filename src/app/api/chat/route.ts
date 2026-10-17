@@ -16,6 +16,12 @@ const numbered = (code: string) =>
     .map((l, i) => `${i + 1}| ${l}`)
     .join('\n');
 
+// Pre-warm: /tavern pings this on load so the function is warm before the first click. No model call.
+export function GET(req: Request) {
+  if (new URL(req.url).searchParams.get('warm') !== '1') return new Response('Method Not Allowed', { status: 405 });
+  return new Response(null, { status: 204, headers: { 'Cache-Control': 'no-store' } });
+}
+
 export async function POST(req: Request) {
   if (rateLimited(req)) return Response.json({ error: 'rate limited' }, { status: 429 });
   const b = await req.json().catch(() => null);
