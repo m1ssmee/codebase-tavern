@@ -12,7 +12,13 @@ assert.deepEqual(parseCitations('see [orders/api.ts:12] and [utils/money.ts:3-9]
   '!',
 ]);
 assert.deepEqual(extractCitations('[a.ts:9-2]'), [{ path: 'a.ts', startLine: 2, endLine: 9 }]);
-assert.deepEqual(parseCitations('no cites [here] or [x: 3]'), ['no cites [here] or [x: 3]']);
+assert.deepEqual(parseCitations('no cites [here] or [x: 3] or [3] or `foo()`'), ['no cites [here] or [x: 3] or [3] or `foo()`']);
+assert.deepEqual(extractCitations('[lib/a.js:59-83, 152-178] and [lib/r.js:30, lib/s.js:43] and `index.js:11`'), [
+  { path: 'lib/a.js', startLine: 59, endLine: 83 }, { path: 'lib/a.js', startLine: 152, endLine: 178 },
+  { path: 'lib/r.js', startLine: 30, endLine: 30 }, { path: 'lib/s.js', startLine: 43, endLine: 43 },
+  { path: 'index.js', startLine: 11, endLine: 11 },
+]);
+assert.deepEqual(parseCitations('see [a.ts:1, oops] ok'), ['see [a.ts:1, oops] ok']); // partial group = text
 
 // GitHub URLs
 const slug = (s) => parseGitHubUrl(s)?.slug;
@@ -80,5 +86,6 @@ assert.deepEqual(toRaw([mod], 'nonsense'), [fb]);
 const kept = toRaw([mod], [good])[0];
 assert.deepEqual([kept.title, kept.catchphrase.split(' ').length, kept.voicePitch], ['payments, the accountant', 12, 1.8]);
 assert.equal(toCharacters([mod], [kept])[0].name, 'payments, the accountant');
+assert.equal(toRaw([mod], [{ ...good, title: '(pay), the ledger' }])[0].title, 'payments, the ledger');
 
 console.log('character checks ok');

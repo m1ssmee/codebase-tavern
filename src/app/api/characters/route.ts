@@ -1,4 +1,4 @@
-import { gemini, MODEL } from '@/lib/gemini';
+import { FAST, gemini, rateLimited, withFallback } from '@/lib/gemini';
 import { VOICE_GUIDE } from '@/lib/voice';
 import { fallbackCharacter, toRaw, type RawCharacter } from '@/lib/characters';
 import type { Module, ModuleStats } from '@/lib/types';
@@ -62,6 +62,7 @@ function clean(m: InModule): Module & { keyFiles: KeyFile[] } {
 }
 
 export async function POST(req: Request) {
+  if (rateLimited(req)) return Response.json({ error: 'rate limited' }, { status: 429 }); // client falls back to templates
   const body = await req.json().catch(() => null);
   const list: InModule[] = Array.isArray(body?.modules) ? body.modules : [];
   const modules = list.filter((m) => m?.id).slice(0, 8).map(clean);
@@ -79,17 +80,18 @@ export async function POST(req: Request) {
   let characters: RawCharacter[];
   let source: 'gemini' | 'fallback' = 'gemini';
   try {
-    const res = await gemini().models.generateContent({
-      model: MODEL,
+    const res = await withFallback((model) => gemini().models.generateContent({
+      model,
       contents: `Repo: ${clip(body?.repoName, 200)}\nWrite one character per module, in the same order, with the same moduleId values.\n\nModules:\n${JSON.stringify(input)}`,
       config: {
+        ...FAST,
         systemInstruction: SYSTEM,
         responseMimeType: 'application/json',
         responseJsonSchema: SCHEMA,
         temperature: 0.9,
-        abortSignal: AbortSignal.timeout(30_000),
+        abortSignal: AbortSignal.timeout(25_000),
       },
-    });
+    }));
     characters = toRaw(modules, JSON.parse(res.text ?? ''));
   } catch (err) {
     console.error('[characters] Gemini failed, using templates:', err);

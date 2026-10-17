@@ -92,9 +92,11 @@ export function toRaw(modules: Module[], items: unknown): RawCharacter[] {
     const greeting = str(c?.greeting, 400);
     if (!title || !personality || !catchphrase || !greeting) return fb;
     const pitch = Number(c.voicePitch);
+    // Force "<module name>, <descriptor>": the model sometimes echoes ids like "(root)" instead of the name.
+    const descriptor = (title.includes(',') ? title.slice(title.indexOf(',') + 1) : title).trim();
     return {
       moduleId: m.id,
-      title,
+      title: `${m.name}, ${descriptor}`,
       personality,
       catchphrase: catchphrase.split(/\s+/).slice(0, 12).join(' '),
       greeting,

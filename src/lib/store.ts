@@ -23,6 +23,7 @@ type TavernState = {
   highlightCitation: (c: Citation) => void;
   addMessage: (moduleId: string, msg: ChatMessage) => void;
   appendToMessage: (moduleId: string, messageId: string, chunk: string) => void;
+  updateMessage: (moduleId: string, messageId: string, patch: Partial<ChatMessage>) => void;
   setMood: (moduleId: string, mood: Mood) => void;
   setSpice: (spice: SpiceLevel) => void;
   setMode: (mode: ExplainMode) => void;
@@ -84,6 +85,10 @@ export const useTavern = create<TavernState>()((set, get) => {
           ...s.chats,
           [moduleId]: (s.chats[moduleId] ?? []).map((m) => (m.id === messageId ? { ...m, text: m.text + chunk } : m)),
         },
+      })),
+    updateMessage: (moduleId, messageId, patch) =>
+      set((s) => ({
+        chats: { ...s.chats, [moduleId]: (s.chats[moduleId] ?? []).map((m) => (m.id === messageId ? { ...m, ...patch } : m)) },
       })),
     setMood: (moduleId, mood) => set((s) => ({ moods: { ...s.moods, [moduleId]: mood } })),
     setSpice: (spice) => set({ spice }),

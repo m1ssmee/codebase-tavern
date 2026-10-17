@@ -3,36 +3,28 @@ import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { SendHorizontal } from 'lucide-react';
 import { useTavern } from '@/lib/store';
-import { extractCitations, parseCitations } from '@/lib/citations';
-import type { Module, RepoFile } from '@/lib/types';
+import { extractCitations, isValidCitation, parseCitations } from '@/lib/citations';
+import { PALETTE, statsLine } from '@/lib/characters';
+import { pickContext } from '@/lib/context';
+import { blipText, unlockAudio } from '@/lib/blips';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
-import { PALETTE, statsLine } from '@/lib/characters';
 
-// ponytail: Phase 4 replaces this with a streamed Gemini reply.
-function mockReply(mod: Module, files: RepoFile[], turn: number): string {
-  const own = files.filter((f) => mod.filePaths.includes(f.path));
-  const f = own[turn % own.length];
-  const lines = f.content.split('\n');
-  const hit = lines.findIndex((l) => /\b(TODO|FIXME|HACK)\b/.test(l));
-  if (hit < 0) return `${f.path} is ${lines.length} lines with no TODOs. Start at [${f.path}:1-${Math.min(lines.length, 3)}].`;
-  const tag = lines[hit].match(/\b(TODO|FIXME|HACK)\b/)![1];
-  const cite = `[${f.path}:${Math.max(1, hit)}-${Math.min(lines.length, hit + 2)}]`;
-  return `${f.path} is ${lines.length} lines. The part worth reading is ${cite}: a ${tag} nobody has come back for.`;
-}
+const BUSY = 'Gemini is rate-limiting us. Try again in a minute.';
 
 export default function ChatPanel() {
-  const { repo, characters, moods, selectedModuleId, chats, isLoading, addMessage, setMood, setLoading } = useTavern();
+  const { repo, characters, moods, selectedModuleId, openFilePath, chats, isLoading, spice, mode } = useTavern();
   const [input, setInput] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const mod = repo?.modules.find((m) => m.id === selectedModuleId);
   const char = mod ? characters[mod.id] : undefined;
   const messages = mod ? (chats[mod.id] ?? []) : [];
   const name = char?.name ?? mod?.name ?? '';
+  const lastText = messages.at(-1)?.text.length;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' }); // braces: Chrome's scrollIntoView now returns a Promise
-  }, [messages.length, isLoading]);
+  }, [messages.length, lastText, isLoading]);
 
   if (!mod || !repo) {
     return (
@@ -49,21 +41,73 @@ export default function ChatPanel() {
     );
   }
 
-  const send = () => {
-    const text = input.trim();
-    if (!text || isLoading) return;
-    addMessage(mod.id, { id: crypto.randomUUID(), role: 'user', text, citations: [] });
+  const send = async (text: string) => {
+    text = text.trim();
+    const s = useTavern.getState();
+    if (!text || s.isLoading) return;
+    unlockAudio();
+    const history = messages.filter((m) => m.role !== 'system').slice(-7);
+    const id = crypto.randomUUID();
+    s.addMessage(mod.id, { id: crypto.randomUUID(), role: 'user', text, citations: [] });
+    s.addMessage(mod.id, { id, role: 'character', characterId: mod.id, text: '', citations: [] });
     setInput('');
-    setLoading(true);
-    setMood(mod.id, 'talking');
-    const turn = messages.filter((m) => m.role === 'character').length;
-    setTimeout(() => {
-      const reply = mockReply(mod, repo.files, turn);
-      addMessage(mod.id, { id: crypto.randomUUID(), role: 'character', characterId: mod.id, text: reply, citations: extractCitations(reply) });
-      setLoading(false);
-      setMood(mod.id, 'idle');
-    }, 600);
+    s.setLoading(true);
+    s.setMood(mod.id, 'talking');
+
+    const ctx = pickContext(mod, repo.files, openFilePath, text);
+    let full = '';
+    let highlighted = false;
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repoName: repo.name,
+          moduleId: mod.id,
+          character: { title: name, personality: char?.personality, catchphrase: char?.catchphrase },
+          openFilePath,
+          ...ctx,
+          others: repo.modules.filter((m) => m.id !== mod.id).map((m) => ({ title: characters[m.id]?.name ?? m.name, path: m.path })),
+          spice,
+          mode,
+          messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        full += value;
+        useTavern.getState().appendToMessage(mod.id, id, value);
+        blipText(value, char?.voicePitch ?? 1, useTavern.getState().muted);
+        // Light up the code the moment the first valid citation completes, while it's still talking.
+        if (!highlighted) {
+          const first = extractCitations(full).find((c) => isValidCitation(c, repo.files));
+          if (first) {
+            useTavern.getState().highlightCitation(first);
+            highlighted = true;
+          }
+        }
+      }
+      if (!full.trim()) throw new Error('empty reply');
+      s.updateMessage(mod.id, id, { citations: extractCitations(full).filter((c) => isValidCitation(c, repo.files)) });
+    } catch (err) {
+      console.warn('[chat]', err);
+      s.updateMessage(mod.id, id, { role: 'system', text: BUSY });
+    } finally {
+      s.setLoading(false);
+      s.setMood(mod.id, 'idle');
+    }
   };
+
+  const openName = openFilePath?.split('/').pop();
+  const QUICK = [
+    { label: 'Explain yourself', text: 'Explain yourself. What do you do, and which files matter most?' },
+    { label: "What's your worst part?", text: "What's your worst part? Point at the exact lines." },
+    { label: 'Who depends on you?', text: 'Who depends on you? Which other files import or use you?' },
+    { label: 'Roast this file', text: `Roast ${openFilePath}. Be specific.`, disabled: !openFilePath, title: openName ? `Roast ${openName}` : 'Open a file first' },
+  ];
 
   return (
     <div className="flex h-full flex-col bg-panel">
@@ -79,37 +123,59 @@ export default function ChatPanel() {
       </div>
 
       <div className="flex-1 space-y-3 overflow-auto p-3">
-        {messages.length === 0 && (
-          <p className="text-center text-sm text-muted">Ask {name} about their code.</p>
-        )}
-        {messages.map((m) => (
-          <motion.div
-            key={m.id}
-            initial={{ opacity: 0, y: 8, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : ''}`}
-          >
-            {m.role === 'character' && <CharacterFace size={28} name={mod.name} stats={mod.stats} color={char?.color} still />}
-            <div
-              className={`max-w-[85%] rounded-2xl px-3 py-2 leading-relaxed whitespace-pre-wrap ${
-                m.role === 'user' ? 'rounded-br-sm bg-amber text-ink' : 'rounded-bl-sm border border-edge bg-wood text-cream'
-              }`}
+        {messages.length === 0 && <p className="text-center text-sm text-muted">Ask {name} about their code.</p>}
+        {messages.map((m) =>
+          m.role === 'system' ? (
+            <p key={m.id} className="text-center text-sm text-tomato">
+              {m.text}
+            </p>
+          ) : (
+            <motion.div
+              key={m.id}
+              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : ''}`}
             >
-              {m.role === 'user'
-                ? m.text
-                : parseCitations(m.text).map((seg, i) => (typeof seg === 'string' ? seg : <CitationChip key={i} citation={seg} />))}
-            </div>
-          </motion.div>
-        ))}
-        {isLoading && <div className="text-sm text-muted italic">{name} is typing…</div>}
+              {m.role === 'character' && <CharacterFace size={28} name={mod.name} stats={mod.stats} color={char?.color} still />}
+              <div
+                className={`max-w-[85%] rounded-2xl px-3 py-2 leading-relaxed whitespace-pre-wrap ${
+                  m.role === 'user' ? 'rounded-br-sm bg-amber text-ink' : 'rounded-bl-sm border border-edge bg-wood text-cream'
+                }`}
+              >
+                {m.role === 'user'
+                  ? m.text
+                  : m.text
+                    ? // Invalid citations (unknown path or out-of-range lines) are dropped, not shown.
+                      parseCitations(m.text).map((seg, i) =>
+                        typeof seg === 'string' ? seg : isValidCitation(seg, repo.files) ? <CitationChip key={i} citation={seg} /> : null,
+                      )
+                    : '…'}
+              </div>
+            </motion.div>
+          ),
+        )}
         <div ref={endRef} />
       </div>
 
+      <div className="flex flex-wrap gap-1.5 border-t-2 border-edge px-3 pt-2">
+        {QUICK.map((q) => (
+          <button
+            key={q.label}
+            type="button"
+            disabled={isLoading || q.disabled}
+            title={q.title}
+            onClick={() => send(q.text)}
+            className="bounce-hover rounded-full border border-edge bg-wood px-2.5 py-1 text-xs font-bold text-cream/90 hover:border-amber disabled:opacity-40"
+          >
+            {q.label}
+          </button>
+        ))}
+      </div>
       <form
-        className="flex gap-2 border-t-2 border-edge p-3"
+        className="flex gap-2 p-3 pt-2"
         onSubmit={(e) => {
           e.preventDefault();
-          send();
+          send(input);
         }}
       >
         <input

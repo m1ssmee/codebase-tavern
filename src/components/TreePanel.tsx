@@ -51,7 +51,11 @@ export default function TreePanel() {
           <button
             key={n.path}
             type="button"
-            onClick={() => openFile(n.path)}
+            onClick={() => {
+              openFile(n.path);
+              const owner = repo?.modules.find((m) => m.filePaths.includes(n.path));
+              if (owner) selectModule(owner.id);
+            }}
             style={pad}
             className={`flex w-full items-center gap-2 rounded-md py-1 pr-2 text-left font-mono text-sm ${
               openFilePath === n.path ? 'bg-amber/20 text-amber' : 'text-cream/80 hover:bg-wood'
