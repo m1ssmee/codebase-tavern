@@ -79,22 +79,31 @@ export default function CharacterFace({
           ? { animate: { x: calm ? -3.5 : [-3.5, -3.5, 3.5, 3.5, -3.5], y: 1 }, transition: calm ? {} : loop(3.2) }
           : { animate: { x: 0, y: t.smug ? 3 : 0 }, transition: {} };
     const lid = t.smug && mood !== 'accused' ? 'smug' : t.shifty && mood !== 'accused' ? 'shifty' : null;
-    return [-ex, ex].map((dx) => (
-      <g key={dx}>
-        <circle cx={50 + dx} cy={ey} r={9.5} fill="#fff" stroke={INK} strokeWidth={3} />
-        <motion.circle cx={50 + dx} cy={ey} r={4.5} fill={INK} {...pupil} />
-        {lid && (
-          // eyelid: covers the top half (smug) or top third (shifty)
-          <path
-            d={lid === 'smug' ? `M${50 + dx - 11} ${ey + 1} h22 v-12 h-22 z` : `M${50 + dx - 11} ${ey - 3} h22 v-9 h-22 z`}
-            fill={fill}
-            stroke={INK}
-            strokeWidth={0}
-          />
-        )}
-        {lid && <line x1={50 + dx - 9.5} x2={50 + dx + 9.5} y1={ey + (lid === 'smug' ? 1 : -3)} y2={ey + (lid === 'smug' ? 1 : -3)} stroke={INK} strokeWidth={3} strokeLinecap="round" />}
-      </g>
-    ));
+    // Occasional blink, staggered per name so a room of faces never blinks in unison.
+    const blink = !calm && (mood === 'idle' || mood === 'talking');
+    return (
+      <motion.g
+        animate={{ scaleY: blink ? [1, 0.1, 1] : 1 }}
+        transition={blink ? { duration: 0.2, repeat: Infinity, repeatDelay: 2.5 + (h % 5) * 0.7, delay: (h % 7) * 0.4 } : { duration: 0.1 }}
+      >
+        {[-ex, ex].map((dx) => (
+          <g key={dx}>
+            <circle cx={50 + dx} cy={ey} r={9.5} fill="#fff" stroke={INK} strokeWidth={3} />
+            <motion.circle cx={50 + dx} cy={ey} r={4.5} fill={INK} {...pupil} />
+            {lid && (
+              // eyelid: covers the top half (smug) or top third (shifty)
+              <path
+                d={lid === 'smug' ? `M${50 + dx - 11} ${ey + 1} h22 v-12 h-22 z` : `M${50 + dx - 11} ${ey - 3} h22 v-9 h-22 z`}
+                fill={fill}
+                stroke={INK}
+                strokeWidth={0}
+              />
+            )}
+            {lid && <line x1={50 + dx - 9.5} x2={50 + dx + 9.5} y1={ey + (lid === 'smug' ? 1 : -3)} y2={ey + (lid === 'smug' ? 1 : -3)} stroke={INK} strokeWidth={3} strokeLinecap="round" />}
+          </g>
+        ))}
+      </motion.g>
+    );
   };
 
   const my = cy + ry * 0.38;

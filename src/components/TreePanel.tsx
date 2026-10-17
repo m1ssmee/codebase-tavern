@@ -9,6 +9,8 @@ type Node = { name: string; path: string; children?: Node[] };
 
 // "payments, the accountant" → "the accountant" (the module name is already on the row)
 const descriptor = (title: string) => title.replace(/^[^,]*,\s*/, '');
+const FACE = 30;
+const ROW = 'rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber';
 
 function buildTree(files: RepoFile[]): Node[] {
   const root: Node = { name: '', path: '', children: [] };
@@ -57,7 +59,7 @@ export default function TreePanel() {
               if (owner) selectModule(owner.id);
             }}
             style={pad}
-            className={`flex w-full items-center gap-2 rounded-md py-1 pr-2 text-left font-mono text-sm ${
+            className={`${ROW} flex w-full items-center gap-2 py-1 pr-2 text-left font-mono text-sm ${
               openFilePath === n.path ? 'bg-amber/20 text-amber' : 'text-cream/80 hover:bg-wood'
             }`}
           >
@@ -78,7 +80,7 @@ export default function TreePanel() {
             onClick={() => (mod ? (selectModule(mod.id), toggle(n.path, true)) : toggle(n.path, !open))}
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.click()}
             style={pad}
-            className={`flex cursor-pointer items-center gap-2 rounded-md py-1 pr-2 ${
+            className={`${ROW} flex cursor-pointer items-center gap-2 py-1 pr-2 ${
               mod && selectedModuleId === mod.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
             }`}
           >
@@ -88,14 +90,20 @@ export default function TreePanel() {
               onClick={(e) => (e.stopPropagation(), toggle(n.path, !open))}
             />
             {mod ? (
-              <CharacterFace size={24} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
+              <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
             <span className={`truncate ${mod ? 'font-bold text-cream' : 'text-cream/80'}`}>{n.name}</span>
             {char && <span className="ml-auto truncate text-xs text-muted">{descriptor(char.name)}</span>}
           </div>
-          {open && render(n.children, depth + 1)}
+          {open && (
+            <div className="relative">
+              {/* indent guide, centred under this row's chevron */}
+              <span aria-hidden className="pointer-events-none absolute inset-y-0 w-px bg-edge" style={{ left: 15 + depth * 14 }} />
+              {render(n.children, depth + 1)}
+            </div>
+          )}
         </div>
       );
     });
@@ -109,11 +117,11 @@ export default function TreePanel() {
             key={m.id}
             type="button"
             onClick={() => selectModule(m.id)}
-            className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left ${
+            className={`${ROW} flex w-full items-center gap-2 px-2 py-1 text-left ${
               selectedModuleId === m.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
             }`}
           >
-            <CharacterFace size={24} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
+            <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
             <span className="truncate font-bold text-cream">{m.name}</span>
             <span className="ml-auto truncate text-xs text-muted">
               {characters[m.id] ? descriptor(characters[m.id].name) : `${m.stats.fileCount} files`}

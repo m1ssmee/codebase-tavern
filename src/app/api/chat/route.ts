@@ -91,6 +91,8 @@ ${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${num
     return new Response(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('[chat] all providers failed:', err);
-    return Response.json({ error: 'llm failed' }, { status: 502 });
+    // Missing/invalid key → 503 so the client can say "unavailable" instead of blaming rate limits.
+    const noKey = /is not set|missing credentials|api.?key|\b401\b|PERMISSION_DENIED|unauthori[sz]ed/i.test(String(err));
+    return Response.json({ error: noKey ? 'unavailable' : 'llm failed' }, { status: noKey ? 503 : 502 });
   }
 }

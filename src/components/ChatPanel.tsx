@@ -11,6 +11,7 @@ import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
 
 const BUSY = 'Gemini is rate-limiting us. Try again in a minute.';
+const UNAVAILABLE = 'The AI is unavailable right now. Try again in a minute.'; // server sends 503 when a key is missing
 
 export default function ChatPanel() {
   const { repo, characters, moods, selectedModuleId, openFilePath, chats, isLoading, spice, mode } = useTavern();
@@ -73,7 +74,7 @@ export default function ChatPanel() {
           messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
         }),
       });
-      if (!res.ok || !res.body) throw new Error(`chat ${res.status}`);
+      if (!res.ok || !res.body) throw new Error(`chat ${res.status}`, { cause: res.status });
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
       for (;;) {
         const { done, value } = await reader.read();
@@ -94,7 +95,7 @@ export default function ChatPanel() {
       s.updateMessage(mod.id, id, { citations: extractCitations(full).filter((c) => isValidCitation(c, repo.files)) });
     } catch (err) {
       console.warn('[chat]', err);
-      s.updateMessage(mod.id, id, { role: 'system', text: BUSY });
+      s.updateMessage(mod.id, id, { role: 'system', text: (err as Error).cause === 503 ? UNAVAILABLE : BUSY });
     } finally {
       s.setLoading(false);
       s.setMood(mod.id, 'idle');
