@@ -1,5 +1,6 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import type { RepoFile } from '@/lib/types';
@@ -33,7 +34,31 @@ function buildTree(files: RepoFile[]): Node[] {
 }
 
 export default function TreePanel() {
-  const { repo, characters, moods, selectedModuleId, openFilePath, selectModule, openFile } = useTavern();
+  const { repo, characters, moods, selectedModuleId, openFilePath, selectModule, openFile, smell } = useTavern();
+  const reduced = useReducedMotion();
+
+  // Code smells on file open: >400 lines puffs a green cloud, nesting >= 6 turns the face green and wobbles it.
+  const smelly = (id: string, face: ReactNode) => {
+    const s = !reduced && smell?.moduleId === id ? smell : null;
+    return (
+      <span className="relative inline-flex shrink-0">
+        {/* CSS keyframes (globals.css): framer couldn't tween the filter reliably. Re-keyed so each open restarts it. */}
+        <span key={s?.green ? s.at : 'calm'} className={s?.green ? 'smell-green' : 'inline-flex'}>
+          {face}
+        </span>
+        {s?.cloud &&
+          [0, 1, 2].map((i) => (
+            <motion.span
+              key={`${s.at}-${i}`}
+              className="pointer-events-none absolute top-0 left-1/2 h-3 w-3 rounded-full bg-[#9be15d]/70"
+              initial={{ opacity: 0.9, scale: 0.4, x: '-50%', y: 0 }}
+              animate={{ opacity: 0, scale: 2, x: `${-50 + (i - 1) * 60}%`, y: -18 - i * 5 }}
+              transition={{ duration: 1.3, delay: i * 0.12, ease: 'easeOut' }}
+            />
+          ))}
+      </span>
+    );
+  };
   // User's explicit open/closed choices; default = top level open. Ancestors of the open file are always open,
   // so a citation into a collapsed folder still shows up.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -90,7 +115,7 @@ export default function TreePanel() {
               onClick={(e) => (e.stopPropagation(), toggle(n.path, !open))}
             />
             {mod ? (
-              <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
+              smelly(mod.id, <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />)
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
@@ -121,7 +146,7 @@ export default function TreePanel() {
               selectedModuleId === m.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
             }`}
           >
-            <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
+            {smelly(m.id, <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />)}
             <span className="truncate font-bold text-cream">{m.name}</span>
             <span className="ml-auto truncate text-xs text-muted">
               {characters[m.id] ? descriptor(characters[m.id].name) : `${m.stats.fileCount} files`}

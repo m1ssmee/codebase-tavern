@@ -3,7 +3,7 @@
 import type { Character, Module, ModuleStats } from './types';
 
 /** What /api/characters returns per module (colour is assigned client-side). */
-export type RawCharacter = Pick<Character, 'moduleId' | 'personality' | 'catchphrase' | 'greeting' | 'voicePitch'> & { title: string };
+export type RawCharacter = Pick<Character, 'moduleId' | 'personality' | 'catchphrase' | 'greeting' | 'gossip' | 'voicePitch'> & { title: string };
 
 // 8 colours that read on the dark tavern background.
 export const PALETTE = ['#f5a524', '#ff5a3c', '#3dd6b5', '#c38bff', '#5ab0ff', '#ff7eb6', '#9be15d', '#ffd166'];
@@ -50,8 +50,21 @@ const baseName = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 export const statsLine = (s: ModuleStats) =>
   [plural(s.totalLines, 'line'), plural(s.fileCount, 'file'), plural(s.todoCount, 'TODO'), s.hasTests ? 'has tests' : 'no tests'].join(' · ');
 
+/** Template gossip from stats: about up to three other modules, plus one line about itself. */
+export function fallbackGossip(m: Module, all: Module[]): string[] {
+  const others = all.filter((o) => o.id !== m.id).slice(0, 3);
+  const lines = others.map((o) =>
+    o.stats.todoCount > 0
+      ? `${o.name} has ${plural(o.stats.todoCount, 'TODO')} and nobody has asked about any of them.`
+      : !o.stats.hasTests
+        ? `${o.name} has ${plural(o.stats.totalLines, 'line')} and no tests. Brave.`
+        : `${o.name} keeps ${baseName(o.stats.biggestFile.path)} at ${plural(o.stats.biggestFile.lines, 'line')}. Nobody opens it on purpose.`,
+  );
+  return [...lines, `I am ${plural(m.stats.totalLines, 'line')} across ${plural(m.stats.fileCount, 'file')}. Someone should check on me.`];
+}
+
 /** Template character from stats alone. Used when Gemini fails, times out or skips a module. */
-export function fallbackCharacter(m: Module): RawCharacter {
+export function fallbackCharacter(m: Module, all: Module[] = [m]): RawCharacter {
   const s = m.stats;
   const big = `${baseName(s.biggestFile.path)} (${plural(s.biggestFile.lines, 'line')})`;
   const [title, catchphrase] =
@@ -74,6 +87,7 @@ export function fallbackCharacter(m: Module): RawCharacter {
     personality: `Keeps ${plural(s.totalLines, 'line')} across ${plural(s.fileCount, 'file')}; the biggest is ${big}.`,
     catchphrase,
     greeting: `I'm ${m.name}. ${plural(s.totalLines, 'line')}, ${plural(s.fileCount, 'file')}, ${plural(s.todoCount, 'TODO')}, ${s.hasTests ? 'some tests' : 'no tests'}.`,
+    gossip: fallbackGossip(m, all),
     voicePitch: Math.round((1.8 - 1.2 * sizeOf(s.totalLines)) * 100) / 100, // bigger module, deeper voice
   };
 }
@@ -85,7 +99,7 @@ export function toRaw(modules: Module[], items: unknown): RawCharacter[] {
   const byId = new Map((Array.isArray(items) ? items : []).map((c) => [c?.moduleId, c]));
   return modules.map((m) => {
     const c = byId.get(m.id);
-    const fb = fallbackCharacter(m);
+    const fb = fallbackCharacter(m, modules);
     const title = str(c?.title, 60);
     const personality = str(c?.personality, 240);
     const catchphrase = str(c?.catchphrase, 120);
@@ -100,6 +114,15 @@ export function toRaw(modules: Module[], items: unknown): RawCharacter[] {
       personality,
       catchphrase: catchphrase.split(/\s+/).slice(0, 12).join(' '),
       greeting,
+      // Up to 4 lines, max 18 words each; fall back to templates if the model gave none.
+      gossip: (() => {
+        const lines = (Array.isArray(c.gossip) ? c.gossip : [])
+          .map((l: unknown) => str(l, 200))
+          .filter((l: string | null): l is string => !!l)
+          .map((l: string) => l.split(/\s+/).slice(0, 18).join(' '))
+          .slice(0, 4);
+        return lines.length ? lines : fb.gossip;
+      })(),
       voicePitch: Number.isFinite(pitch) ? Math.min(1.8, Math.max(0.6, pitch)) : fb.voicePitch,
     };
   });

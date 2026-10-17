@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
-import { buildRepo, entryFile } from './analyze';
+import { buildRepo, entryFile, nesting } from './analyze';
 import { toCharacters, toRaw, type RawCharacter } from './characters';
 
 type TavernState = {
@@ -16,6 +16,8 @@ type TavernState = {
   muted: boolean;
   isLoading: boolean;
   tribunal: boolean;
+  // Code-smell reaction for the module whose file was just opened (spicy/unhinged only).
+  smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
 
   loadRepo: (repo: Repo) => void;
   setCharacters: (characters: Character[]) => void;
@@ -57,6 +59,7 @@ export const useTavern = create<TavernState>()((set, get) => {
     muted: false,
     isLoading: false,
     tribunal: false,
+    smell: null,
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
     loadRepo: (repo) =>
@@ -78,7 +81,15 @@ export const useTavern = create<TavernState>()((set, get) => {
       set({ selectedModuleId });
       greet(selectedModuleId);
     },
-    openFile: (openFilePath) => set({ openFilePath }),
+    openFile: (openFilePath) => {
+      const s = get();
+      const f = s.repo?.files.find((x) => x.path === openFilePath);
+      const mod = s.repo?.modules.find((m) => m.filePaths.includes(openFilePath));
+      const cloud = !!f && f.lineCount > 400;
+      const green = !!f && nesting(f) >= 6;
+      const smelly = s.spice !== 'clean' && mod && (cloud || green);
+      set({ openFilePath, smell: smelly ? { moduleId: mod.id, cloud, green, at: Date.now() } : null });
+    },
     // New object every call, so clicking the same chip twice re-triggers the glow.
     highlightCitation: (c) => set({ openFilePath: c.path, highlight: { ...c } }),
     addMessage: (moduleId, msg) =>

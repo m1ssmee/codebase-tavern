@@ -101,7 +101,7 @@ export function computeStats(module: Pick<Module, 'filePaths'>, files: RepoFile[
 }
 
 // ponytail: ignores braces inside strings/comments; good enough for a "how nested is this" stat.
-function nesting(f: RepoFile): number {
+export function nesting(f: RepoFile): number {
   if (/^(py|pyi|ya?ml)$/.test(ext(f.path))) {
     const indents = f.content
       .split('\n')

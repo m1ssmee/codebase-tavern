@@ -17,6 +17,7 @@ export type Character = {
   personality: string;
   catchphrase: string;
   greeting: string;
+  gossip: string[]; // 4 short lines about other modules or itself
   voicePitch: number;
   color: string;
 };

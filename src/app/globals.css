@@ -54,3 +54,20 @@ body {
   0%, 100% { transform: scaleY(0.4); }
   50% { transform: scaleY(1.2); }
 }
+
+/* Code smell: nesting >= 6 turns the module's face green and wobbles it for 1.5s (spicy/unhinged only). */
+@keyframes smell-green {
+  0% { transform: rotate(0); filter: none; }
+  15% { transform: rotate(-14deg); filter: sepia(1) hue-rotate(55deg) saturate(4); }
+  35% { transform: rotate(12deg); }
+  55% { transform: rotate(-10deg); }
+  75% { transform: rotate(8deg); filter: sepia(1) hue-rotate(55deg) saturate(4); }
+  100% { transform: rotate(0); filter: none; }
+}
+.smell-green {
+  display: inline-flex;
+  animation: smell-green 1.5s ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .smell-green { animation: none; }
+}

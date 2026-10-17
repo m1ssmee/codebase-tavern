@@ -17,7 +17,9 @@ ${VOICE_GUIDE}
 Hard rules:
 - Characters may only state facts present in the input (stats, file names, the code shown). Never invent numbers, functions or files.
 - Every line must contain at least one real fact from the input.
-- Write clean spice level (no swearing).`;
+- Write clean spice level (no swearing).
+- gossip: 4 lines per character, max 18 words each, dry, about other modules or itself, each with a real fact.
+- Across the whole cast, at least two gossip lines should hint at the most suspicious interaction between modules visible in the code shown (for example a timeout shorter than another module's processing time, or a retry with no safety check), without naming a bug.`;
 
 // OpenAI-strict compatible (top-level object, additionalProperties false, all required); Gemini takes it too.
 const SCHEMA = {
@@ -30,13 +32,18 @@ const SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['moduleId', 'title', 'personality', 'catchphrase', 'greeting', 'voicePitch'],
+        required: ['moduleId', 'title', 'personality', 'catchphrase', 'greeting', 'gossip', 'voicePitch'],
         properties: {
           moduleId: { type: 'string', description: 'Copy exactly from the input.' },
           title: { type: 'string', description: 'Module name plus a short dry descriptor grounded in its stats, e.g. "payments, the accountant" or "utils, the junk drawer".' },
           personality: { type: 'string', description: 'One sentence, grounded in real stats or code.' },
           catchphrase: { type: 'string', description: 'Max 12 words, dry, references a real fact.' },
           greeting: { type: 'string', description: 'Exactly 2 sentences, first person, introduces itself with real numbers (lines, files, TODOs, tests).' },
+          gossip: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '4 lines, max 18 words each, about other modules (using their real stats/code from the input) or itself.',
+          },
           voicePitch: { type: 'number', description: 'Between 0.6 and 1.8. Lower for big, heavy modules; higher for small, nervous ones.' },
         },
       },
@@ -99,7 +106,7 @@ export async function POST(req: Request) {
     characters = toRaw(modules, out.characters);
   } catch (err) {
     console.error('[characters] all providers failed, using templates:', err);
-    characters = modules.map(fallbackCharacter);
+    characters = modules.map((m) => fallbackCharacter(m, modules));
     source = 'fallback';
   }
   return Response.json({ characters, source });

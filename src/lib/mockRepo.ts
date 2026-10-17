@@ -165,6 +165,7 @@ export const mockCharacters: Character[] = toCharacters(mockRepo.modules, [
     personality: 'Takes every order at face value, including the price the client made up.',
     catchphrase: 'I accept price: 0. There is a FIXME about it.',
     greeting: "I'm orders: 58 lines across 2 files, 2 TODOs, no tests. orderRoutes.ts:14 admits I never check the price.",
+    gossip: ["payments retries charges 3 times. I would know, I keep asking.", "utils thinks 19.99 is 1998.9999999999998. I pass that straight through.", "I have a FIXME about prices on line 14. It has company.", "58 lines, no tests. Every order is a surprise."],
     voicePitch: 1.1,
   },
   {
@@ -173,6 +174,7 @@ export const mockCharacters: Character[] = toCharacters(mockRepo.modules, [
     personality: 'Handles all the money. Retries on failure without checking whether the first attempt went through.',
     catchphrase: 'I retry every charge 3 times. I do not keep receipts.',
     greeting: "I'm payments: 42 lines in 2 files, no tests. I retry charges up to 3 times without an idempotency key.",
+    gossip: ["orders never checks the price. I just charge whatever arrives.", "utils rounds money with a FIXME attached. I count every paisa anyway.", "Three retries, no idempotency key. Receipts are for other modules.", "42 lines and not one test. I prefer to live dangerously."],
     voicePitch: 0.8,
   },
   {
@@ -181,6 +183,7 @@ export const mockCharacters: Character[] = toCharacters(mockRepo.modules, [
     personality: 'Imported by everyone, thanked by no one. The maths is slightly wrong.',
     catchphrase: '19.99 rupees is 1998.9999999999998 paise. Nobody has complained yet.',
     greeting: "I'm utils: 30 lines, 2 files, 2 TODOs. Everyone imports me and nobody has tested my rounding.",
+    gossip: ["Everyone imports me. Nobody imports a test for me.", "payments retries 3 times. I will be blamed for at least two.", "orders sends prices it never checked. I just multiply them.", "My logger still prints to the terminal. There is a TODO about that."],
     voicePitch: 1.3,
   },
 ]);

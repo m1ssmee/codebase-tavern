@@ -4,6 +4,7 @@ import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
 import { ChevronRight } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import { languageFor } from '@/lib/lang';
+import Gossip from './Gossip';
 
 type Ed = Parameters<OnMount>[0];
 
@@ -97,6 +98,7 @@ export default function CodePanel() {
         ) : (
           <div className="grid h-full place-items-center text-muted">Pick a file from the tree.</div>
         )}
+        <Gossip />
       </div>
     </div>
   );
