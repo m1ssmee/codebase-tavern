@@ -62,8 +62,9 @@ export function rateLimited(req: Request, limit = 20, windowMs = 60_000): boolea
   const now = Date.now();
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < windowMs);
   recent.push(now);
+  // Re-insert so Map order = least recently seen first; hard cap evicts from the front (LRU, O(1) per request).
+  hits.delete(ip);
   hits.set(ip, recent);
-  // Memory cap: drop only idle IPs, so flooding with new IPs can't reset everyone's counters.
-  if (hits.size > 5000) for (const [k, ts] of hits) if (now - ts[ts.length - 1] >= windowMs) hits.delete(k);
+  while (hits.size > 5000) hits.delete(hits.keys().next().value!);
   return recent.length > limit;
 }
