@@ -89,3 +89,15 @@ assert.equal(toCharacters([mod], [kept])[0].name, 'payments, the accountant');
 assert.equal(toRaw([mod], [{ ...good, title: '(pay), the ledger' }])[0].title, 'payments, the ledger');
 
 console.log('character checks ok');
+
+// Tribunal fix quality
+const { isTimeoutOnlyFix } = await import('../src/lib/verdict.ts');
+const bump = '--- a/gateway/config.ts\n+++ b/gateway/config.ts\n@@\n-export const UPSTREAM_TIMEOUT_MS = 2000;\n+export const UPSTREAM_TIMEOUT_MS = 5000;';
+const idem = '--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@\n       payment_method_id: paymentMethodId,\n+      idempotency_key: order.id,';
+const both = bump + '\n' + idem.split('\n').slice(3).join('\n');
+assert.equal(isTimeoutOnlyFix(bump, 'orders retries the charge'), true);
+assert.equal(isTimeoutOnlyFix(bump, 'the page loads slowly'), false); // no retry/duplicate in the hearing
+assert.equal(isTimeoutOnlyFix(idem, 'orders retries the charge'), false);
+assert.equal(isTimeoutOnlyFix(both, 'charged twice'), false); // has a real fix too
+assert.equal(isTimeoutOnlyFix('+// raise the timeout\n+// later', 'retry'), false); // comment-only diff is not a timeout bump
+console.log('verdict checks ok');

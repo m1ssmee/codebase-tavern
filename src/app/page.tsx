@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import CharacterFace from '@/components/CharacterFace';
 import SummonLoader from '@/components/SummonLoader';
 import Stickman from '@/components/Stickman';
-import { loadWithCharacters, summonRepo } from '@/lib/store';
+import { loadSavedDemo, loadWithCharacters, summonRepo } from '@/lib/store';
 import { buildRepo, filterFiles, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
 import type { ModuleStats } from '@/lib/types';
 import { assignColors } from '@/lib/characters';
@@ -51,6 +51,15 @@ export default function Landing() {
       setError((e as Error).message);
       setLoading(null);
     }
+  };
+
+  // The demo repo loads from the bundled snapshot (files + saved cast): no GitHub or AI wait. Chat and the
+  // Tribunal stay live. Pasted links, including this one, still take the live path through summon().
+  const tryDemo = async () => {
+    setError(null);
+    setLoading('m1ssmee/quickcart');
+    await loadSavedDemo();
+    router.push('/tavern?repo=m1ssmee/quickcart&saved=1');
   };
 
   const upload = async (list: FileList) => {
@@ -143,7 +152,7 @@ export default function Landing() {
           type="button"
           onClick={() => {
             setUrl(DEMO_REPO_URL);
-            summon(DEMO_REPO_URL);
+            tryDemo();
           }}
           className="text-xs text-neutral-400 transition-colors hover:text-neutral-900"
         >

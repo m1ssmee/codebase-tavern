@@ -2,6 +2,7 @@ import { rateLimited } from '@/lib/gemini';
 import { llmJSON } from '@/lib/llm';
 import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
+import { IDEMPOTENCY_SUGGESTION, isTimeoutOnlyFix, SYMPTOM_FIX_NOTE } from '@/lib/verdict';
 import type { Citation } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -118,7 +119,7 @@ Rules:
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
-- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes behaviour; never a diff that only edits comments. Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. verdict.judgeLine: one dry closing sentence from the judge.
+- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes behaviour; never a diff that only edits comments. Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: one dry closing sentence from the judge.
 - Use only these moduleIds: ${ids.join(', ')}.`;
 
     const prompt = `Bug report: ${bug}
@@ -135,7 +136,29 @@ ${s.files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${n
 ${levelReminder(b.spice)}`;
 
     type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string } };
-    const out = await llmJSON<Out>('tribunal-trial', { system, prompt, schema: TRIAL_SCHEMA, timeoutMs: 50_000 });
+    const started = Date.now();
+    let out = await llmJSON<Out>('tribunal-trial', { system, prompt, schema: TRIAL_SCHEMA, timeoutMs: 32_000 });
+    // Fix quality, enforced: a timeout-only fix for a retry/duplicate bug gets one regeneration with a note.
+    const hearing = (o: Out) =>
+      [o?.verdict?.rootCause, ...(o?.turns ?? []).map((t) => t?.text), ...(o?.verdict?.evidence ?? []).map((c) => c?.path)].join(' ');
+    let symptomOnly = isTimeoutOnlyFix(str(out?.verdict?.fix?.diff, 4000), hearing(out));
+    let fixCheck: 'ok' | 'regenerated' | 'kept-timeout-fix' = 'ok';
+    if (symptomOnly) {
+      const left = 56_000 - (Date.now() - started); // stay inside maxDuration
+      console.warn(`[tribunal] timeout-only fix rejected; ${left > 12_000 ? 'regenerating once' : 'no time left to regenerate'}`);
+      if (left > 12_000) {
+        try {
+          const again = await llmJSON<Out>('tribunal-trial-retry', { system, prompt: `${prompt}\n\n${SYMPTOM_FIX_NOTE}`, schema: TRIAL_SCHEMA, timeoutMs: left });
+          if (again?.verdict && Array.isArray(again.turns)) {
+            out = again;
+            fixCheck = 'regenerated';
+            symptomOnly = isTimeoutOnlyFix(str(again.verdict.fix?.diff, 4000), hearing(again));
+          }
+        } catch (err) {
+          console.error('[tribunal] regeneration failed, keeping the first verdict:', err);
+        }
+      }
+    }
 
     const turns = arr<Out['turns'][number]>(out?.turns, 8)
       .filter((t) => ids.includes(t?.moduleId) && str(t?.text, 10))
@@ -151,8 +174,13 @@ ${levelReminder(b.spice)}`;
       fix: { path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) },
       judgeLine: str(v?.judgeLine, 300),
     };
+    // Still a symptom fix after the retry: keep it, but say what the real fix is.
+    if (symptomOnly) {
+      verdict.rootCause += IDEMPOTENCY_SUGGESTION;
+      fixCheck = 'kept-timeout-fix';
+    }
     if (turns.length < 2 || !verdict.culprits.length) throw new Error('trial output unusable');
-    return Response.json({ suspects: ids, turns, verdict });
+    return Response.json({ suspects: ids, turns, verdict, fixCheck }); // fixCheck: diagnostics only
   } catch (err) {
     console.error('[tribunal] failed:', err);
     return Response.json({ error: 'tribunal failed' }, { status: 502 });

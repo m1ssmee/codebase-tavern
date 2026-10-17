@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Group, Panel, Separator } from 'react-resizable-panels';
 import { X } from 'lucide-react';
-import { summonRepo, useTavern } from '@/lib/store';
+import { loadSavedDemo, summonRepo, useTavern } from '@/lib/store';
+
+const DEMO_URL = 'https://github.com/m1ssmee/quickcart';
 import { mockCharacters, mockRepo } from '@/lib/mockRepo';
-import { buildRepo, parseGitHubUrl } from '@/lib/analyze';
-import { toCharacters, toRaw, type RawCharacter } from '@/lib/characters';
-import demoCharacters from '@/data/demoCharacters.json';
+import { parseGitHubUrl } from '@/lib/analyze';
 import TopBar from '@/components/TopBar';
 import TreePanel from '@/components/TreePanel';
 import CodePanel from '@/components/CodePanel';
@@ -39,19 +39,16 @@ export default function TavernPage() {
     const s = useTavern.getState();
     if (q.get('demo') === '1') {
       // Emergency route (not linked anywhere): saved quickcart + saved cast, no GitHub or AI calls to load.
-      import('@/data/demoRepo.json').then(({ default: d }) => {
-        const repo = { ...buildRepo(d.name, d.files, d.url), branch: d.branch, skipped: d.skipped };
-        s.loadRepo(repo);
-        s.setCharacters(toCharacters(repo.modules, toRaw(repo.modules, demoCharacters.characters as RawCharacter[])));
-        useTavern.setState({ demo: true });
-      });
+      loadSavedDemo().then(() => useTavern.setState({ demo: true }));
     } else if (q.get('mock') === '1') {
       s.loadRepo(mockRepo);
       s.setCharacters(mockCharacters);
     } else if (q.get('repo')) {
       // Refresh / shared link: store is empty (or holds another repo), so ingest from the URL.
       const want = parseGitHubUrl(q.get('repo')!)?.url;
-      if (s.repo?.url !== want) summonRepo(q.get('repo')!).catch((e: Error) => setError(e.message));
+      // saved=1 ("Try the demo repo"): a refresh reloads the bundled quickcart instead of the slow live path.
+      if (s.repo?.url !== want && q.get('saved') === '1' && want === DEMO_URL) loadSavedDemo();
+      else if (s.repo?.url !== want) summonRepo(q.get('repo')!).catch((e: Error) => setError(e.message));
     } else if (!s.repo) {
       router.replace('/');
     }

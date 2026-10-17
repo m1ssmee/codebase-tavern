@@ -181,3 +181,12 @@ export async function loadWithCharacters(repo: Repo) {
   useTavern.getState().loadRepo(repo);
   useTavern.getState().setCharacters(characters);
 }
+
+/** quickcart from the bundled snapshot with the saved cast and gossip: no GitHub or AI calls (fast demo load). */
+export async function loadSavedDemo(): Promise<Repo> {
+  const { default: d } = await import('@/data/demoRepo.json');
+  const repo = { ...buildRepo(d.name, d.files, d.url), branch: d.branch, skipped: d.skipped };
+  useTavern.getState().loadRepo(repo);
+  useTavern.getState().setCharacters(toCharacters(repo.modules, toRaw(repo.modules, demoCharacters.characters as RawCharacter[])));
+  return repo;
+}
