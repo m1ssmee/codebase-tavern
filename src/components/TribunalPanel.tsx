@@ -108,6 +108,15 @@ export default function TribunalPanel() {
     setDone([]);
     setVerdict(null);
     setPhase('picking');
+    // Demo route: replay the saved hearing with the same pacing, no API calls.
+    if (useTavern.getState().demo && DEMO.turns?.length) {
+      await sleep(900);
+      setSuspects(DEMO.suspects);
+      setPhase('hearing');
+      mood(DEMO.suspects, 'accused');
+      await sleep(1800);
+      return play(DEMO);
+    }
     try {
       const { suspects: ids } = await post<{ suspects: string[] }>({
         stage: 'suspects',

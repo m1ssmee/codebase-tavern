@@ -6,41 +6,43 @@
   ],
   "turns": [
     {
-      "moduleId": "gateway",
-      "text": "I cut upstream calls off at 2000ms, and payments admits its p50 is ~2400ms with p99 around 4s. That means a perfectly ordinary charge can get aborted by my timer, and the checkout code then decides to retry the same order like a damn raccoon with a stolen wallet. [gateway/config.ts:15-16] [gateway/proxy.ts:25-28]",
+      "moduleId": "payments",
+      "text": "I record every successful charge, but I never check whether the same order was already charged, so a repeated request becomes a fresh entry in the list of charges. That is a nasty little pileup: `processCharge` calls `authorizeAndCapture` and then `recordCharge` with a brand-new `chargeId` every time, with no idempotency key (a unique ID that makes a repeated request safe to repeat). [payments/processor.ts:29-49] [payments/ledger.ts:11-19]",
       "accuses": "orders"
     },
     {
       "moduleId": "orders",
-      "text": "I retry on `UpstreamTimeoutError` for payment charges, and I do it without any idempotency key or duplicate check. The loop is right there, two attempts and the first timeout just rolls into another call like shit through a broken pipe. [orders/checkout.ts:18-19] [orders/checkout.ts:43-57]",
-      "accuses": "payments"
-    },
-    {
-      "moduleId": "payments",
-      "text": "I accept every charge as a fresh one, generate a new `chargeId` with `randomUUID`, and record it immediately after the network call. There is no dedupe on `order_id`, so the same order can be charged twice if upstream retries; the log already shows `ord_8f3k2b61` charged twice, damn it. [payments/processor.ts:33-49] [payments/logs/sample-charges.log:6-7]"
+      "text": "I am the one retrying the payment on timeout, and that is the damn second punch. `checkout` retries `requestCharge` when `UpstreamTimeoutError` hits, but it sends only `order_id`, amount, currency, and `payment_method_id`; there is no idempotency key, so a timed-out first charge can still succeed and the retry charges again. [orders/checkout.ts:20-30] [orders/checkout.ts:43-58]",
+      "accuses": "gateway"
     },
     {
       "moduleId": "gateway",
-      "text": "I am only the bouncer; I do not replay requests. The real stink is that I time out before payments usually finishes, and that timeout is treated as a safe retry even though the card network call is not idempotent by design. [gateway/proxy.ts:29-49] [gateway/config.ts:15-16]",
+      "text": "I cut the request off after `UPSTREAM_TIMEOUT_MS = 2000`, while payments says its typical processing time is about 2400ms and p99 is 4s. That means I can throw a timeout while the card network is still finishing, which is a lovely shitshow when the caller retries the same charge. [gateway/config.ts:15-16] [gateway/proxy.ts:25-53]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I’m not the first domino, but I am the place where the duplicate money lands. The log shows the same order charged twice with two different `chargeId` values, `ord_8f3k2b61` at 14:02:11 and again at 14:02:13, so the downstream retry path is real, not imaginary bullshit. [payments/logs/sample-charges.log:6-7]",
       "accuses": "orders"
     },
     {
       "moduleId": "orders",
-      "text": "I even persist `paid` only after the charge returns, so the second attempt sees the order still pending and walks straight back into payments. That is a clean recipe for duplicate authorization, and this code handles it with all the grace of a shit sandwich. [orders/checkout.ts:61-69] [orders/orders.ts:45-51]",
-      "accuses": "payments"
+      "text": "I did exactly what my code says: on timeout I try again once, because someone bolted on a retry to fix flaky checkouts. With a 2000ms gateway cutoff and payments taking ~2400ms on average, that retry is a damn duplicate generator unless the charge request is made safe to repeat. [orders/checkout.ts:44-57]  ",
+      "accuses": "gateway"
     },
     {
-      "moduleId": "payments",
-      "text": "I have no idempotency guard, no lookup by `orderId`, and no reconciliation before recording another success. The ledger happily stores every successful attempt, so once orders retries against a slow network, I will charge again like a damn machine with no brakes. [payments/ledger.ts:11-18] [payments/processor.ts:38-49]"
+      "moduleId": "gateway",
+      "text": "I am not inventing extra charges; I am exposing a timing bug by failing faster than the payment service usually finishes. The real fix is to make the charge request safe to repeat, because a longer timeout alone just hides the shit under the rug. [gateway/proxy.ts:25-29] ",
+      "accuses": "payments"
     }
   ],
   "verdict": {
     "culprits": [
-      "gateway",
       "orders",
+      "gateway",
       "payments"
     ],
-    "rootCause": "The gateway timeout is shorter than the payment service's normal processing time, so checkout often sees a timeout on a charge that may still succeed upstream. Orders retries that timeout without an idempotency key, and payments records each attempt as a brand-new charge, so the same order can be charged twice.",
+    "rootCause": "The gateway times out after 2000ms, but the payment call usually takes about 2400ms, so the first charge can still finish after the gateway has already given up. Orders then retries that same charge without an idempotency key (a unique ID that makes a repeated request safe to repeat), so the payment service creates a second successful charge. Payments also lacks duplicate detection, so it accepts both requests and records both charges.",
     "evidence": [
       {
         "path": "gateway/config.ts",
@@ -50,22 +52,17 @@
       {
         "path": "gateway/proxy.ts",
         "startLine": 25,
-        "endLine": 49
+        "endLine": 53
       },
       {
-        "path": "orders/checkout.ts",
-        "startLine": 18,
-        "endLine": 19
+        "path": "payments/processor.ts",
+        "startLine": 26,
+        "endLine": 49
       },
       {
         "path": "orders/checkout.ts",
         "startLine": 43,
         "endLine": 57
-      },
-      {
-        "path": "payments/processor.ts",
-        "startLine": 33,
-        "endLine": 49
       },
       {
         "path": "payments/logs/sample-charges.log",
@@ -75,8 +72,8 @@
     ],
     "fix": {
       "path": "orders/checkout.ts",
-      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@ -18,14 +18,15 @@\n const MAX_PAYMENT_ATTEMPTS = 2;\n \n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n       payment_method_id: paymentMethodId,\n     },\n   });\n }\n@@ -43,11 +44,13 @@\n   let charge: ChargeResponse | undefined;\n   for (let attempt = 1; attempt <= MAX_PAYMENT_ATTEMPTS; attempt++) {\n     try {\n       charge = await requestCharge(order, paymentMethodId);\n       break;\n     } catch (err) {\n       // retry added to fix flaky checkouts\n       if (err instanceof UpstreamTimeoutError && attempt < MAX_PAYMENT_ATTEMPTS) {\n+        if (order.chargeId) break;\n         log('warn', 'payment timed out, retrying', { orderId: order.id, attempt });\n         continue;\n       }\n       await releaseReservation(reservation.id);\n       updateStatus(order.id, 'payment_failed');\n"
+      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@\n import { SERVICES } from '../gateway/config';\n import { forward, UpstreamTimeoutError } from '../gateway/proxy';\n import { reserveStock, releaseReservation } from '../inventory/reservations';\n import { getOrder, orderTotal, updateStatus, type Order } from './orders';\n import { log } from '../utils/logger';\n@@\n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n       payment_method_id: paymentMethodId,\n     },\n   });\n }\n"
     },
-    "judgeLine": "The court finds the timeout, the retry, and the missing idempotency all guilty as hell."
+    "judgeLine": "The code timed out first and retried second, which is a classic little fuck-up in payment systems."
   }
 }

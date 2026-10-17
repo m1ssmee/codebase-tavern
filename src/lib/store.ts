@@ -17,6 +17,7 @@ type TavernState = {
   muted: boolean;
   isLoading: boolean;
   tribunal: boolean;
+  demo: boolean; // /tavern?demo=1: saved quickcart, saved cast, saved Tribunal, zero AI calls for those
   // Code-smell reaction for the module whose file was just opened (not in clean).
   smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
 
@@ -60,6 +61,7 @@ export const useTavern = create<TavernState>()((set, get) => {
     muted: false,
     isLoading: false,
     tribunal: false,
+    demo: false,
     smell: null,
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
@@ -72,6 +74,7 @@ export const useTavern = create<TavernState>()((set, get) => {
         selectedModuleId: repo.modules[0]?.id ?? null,
         highlight: null,
         tribunal: false,
+        demo: false,
         openFilePath: (repo.modules[0] && entryFile(repo.modules[0])) ?? repo.files[0]?.path ?? null,
       }),
     setCharacters: (list) => {

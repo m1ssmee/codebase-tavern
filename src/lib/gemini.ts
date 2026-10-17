@@ -19,8 +19,8 @@ export function gemini(): GoogleGenAI {
 
 // ponytail: in-memory, per server instance (Vercel may run several); swap for KV/Upstash if abuse matters.
 const hits = new Map<string, number[]>();
-/** 20 requests/minute per IP, shared by every route that calls it. */
-export function rateLimited(req: Request, limit = 20, windowMs = 60_000): boolean {
+/** 60 requests/minute per IP (judges may share one venue Wi-Fi IP), shared by every route that calls it. */
+export function rateLimited(req: Request, limit = 60, windowMs = 60_000): boolean {
   // x-real-ip is only trustworthy on Vercel (it overwrites it); elsewhere everyone shares one bucket.
   let ip = (process.env.VERCEL && req.headers.get('x-real-ip')) || 'local';
   const now = Date.now();

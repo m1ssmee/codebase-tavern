@@ -2,99 +2,99 @@
   "characters": [
     {
       "moduleId": "utils",
-      "title": "utils, the validation landfill",
-      "personality": "I am 3 files and 503 lines, with 417 lines shoved into validation.ts like a damn warehouse.",
-      "catchphrase": "417-line validation.ts does the heavy lifting.",
-      "greeting": "I am utils: 3 files, 503 total lines, and 1 TODO. My biggest file is validation.ts at 417 lines, which is a lot of shit for shared checks.",
+      "title": "utils, the 417-line validation landfill",
+      "personality": "I am 503 lines across 3 files, and utils/validation.ts squats at 417 lines with 1 TODO. This shit is the shared gatekeeper, and it has no tests.",
+      "catchphrase": "417 lines in validation.ts, because apparently restraint was off today.",
+      "greeting": "I am utils: 503 total lines across 3 files, with utils/validation.ts at 417 lines. I have 1 TODO and no tests, which is a damn bold way to ship shared validation.",
       "gossip": [
-        "validation.ts says it is shared by every service, and then keeps 417 lines anyway.",
-        "logger.ts and money.ts hide in 3 files while validation hogs 417 lines.",
-        "There are no tests here, which makes this damn utility pile louder than it is safe.",
-        "I carry 1 TODO and a max nesting of 3; the code still found room for more layers."
+        "utils/logger.ts and utils/money.ts are small; validation.ts hoards 417 lines like a stubborn clerk.",
+        "combine() merges ValidationResult objects, then formatErrors() flattens the mess into one string.",
+        "requiredString() trims input, because raw strings were not trusted here.",
+        "No tests exist for 503 lines; that is a choice, not a feature."
       ],
-      "voicePitch": 0.8
+      "voicePitch": 0.85
     },
     {
       "moduleId": "orders",
-      "title": "orders, the checkout mediator",
-      "personality": "I am 3 files, 169 lines, and 1 TODO; checkout.ts is 71 lines and has tests, which is doing the minimum right for once.",
-      "catchphrase": "Checkout calls reserveStock before charging.",
-      "greeting": "I am orders: 3 files, 169 total lines, and 1 TODO. My checkout.ts is 71 lines, and yes, it has tests while the rest of this shit mostly watches.",
+      "title": "orders, the checkout bouncer",
+      "personality": "I am 169 lines across 3 files, with orders/checkout.ts at 71 lines and 1 TODO. I coordinate stock reservation, charge forwarding, and status updates, which is a lot of damn moving parts for one folder.",
+      "catchphrase": "checkout() returns charged: false when the order is already paid.",
+      "greeting": "I am orders: 169 total lines across 3 files, and orders/orders.test.ts is the only test file. orders/checkout.ts is 71 lines with 1 TODO, so this folder at least pretends to care about the consequences.",
       "gossip": [
-        "checkout.ts imports reserveStock, releaseReservation, and forward from gateway/proxy.ts.",
-        "I stop if getOrder(orderId) returns nothing, which is the bare damn minimum.",
-        "MAX_PAYMENT_ATTEMPTS is 2, while payments/processCharge can take about 2400ms p50.",
-        "I update status through orders.ts after touching inventory/reservations.ts and gateway/proxy.ts."
+        "checkout() calls reserveStock() before any charge request, which is sensible and annoyingly rare.",
+        "requestCharge() forwards POST /payments/charges with order_id and amount from orderTotal().",
+        "It throws if getOrder(orderId) returns nothing; that error is blunt enough.",
+        "MAX_PAYMENT_ATTEMPTS is 2, because optimism clearly ran out quickly."
       ],
-      "voicePitch": 1
+      "voicePitch": 0.95
     },
     {
       "moduleId": "gateway",
-      "title": "gateway, the timeout bouncer",
-      "personality": "I am 3 files, 153 lines, and 1 TODO; proxy.ts is 61 lines and aborts upstream calls after UPSTREAM_TIMEOUT_MS.",
-      "catchphrase": "Abort after UPSTREAM_TIMEOUT_MS, then complain.",
-      "greeting": "I am gateway: 3 files, 153 total lines, and 1 TODO. My proxy.ts is 61 lines, and it aborts requests after UPSTREAM_TIMEOUT_MS like a tired damn bouncer.",
+      "title": "gateway, the timeout gambler",
+      "personality": "I am 153 lines across 3 files, with gateway/proxy.ts at 61 lines and 1 TODO. I forward requests to internal services, then cut them off after UPSTREAM_TIMEOUT_MS, which is a damn sharp edge.",
+      "catchphrase": "UpstreamTimeoutError names the service and the timeout; no mystery theatre.",
+      "greeting": "I am gateway: 153 total lines across 3 files, and gateway/proxy.ts is 61 lines. I have 1 TODO and no tests, while I abort requests after UPSTREAM_TIMEOUT_MS in code that feels like it was filed with a hammer.",
       "gossip": [
-        "forward() sends JSON with Content-Type and uses AbortController on every request.",
-        "UpstreamTimeoutError names the service and UPSTREAM_TIMEOUT_MS in its message.",
-        "orders/checkout.ts depends on me before it even knows payment succeeded.",
-        "payments/processor.ts says p99 is around 4s, which makes my timeout look pretty damn important."
+        "forward() sends JSON with Content-Type: application/json and parses the response body.",
+        "UpstreamError keeps the first 200 characters of body, which is both useful and rude.",
+        "gateway/config.ts defines ServiceConfig, then proxy.ts trusts it immediately.",
+        "The timeout timer is cleared in finally, because leaked timers are boring shit nobody wants."
       ],
-      "voicePitch": 1.1
+      "voicePitch": 1.05
     },
     {
       "moduleId": "auth",
-      "title": "auth, the token clerk",
-      "personality": "I am 3 files, 149 lines, and 0 TODOs; tokens.ts is 58 lines with access and refresh TTLs baked in.",
-      "catchphrase": "Access lives 15 minutes; refresh lives 30 days.",
-      "greeting": "I am auth: 3 files, 149 total lines, and 0 TODOs. My tokens.ts is 58 lines, and it hardcodes ACCESS_TOKEN_TTL_S and REFRESH_TOKEN_TTL_S without much ceremony, which is damn blunt.",
+      "title": "auth, the token locksmith",
+      "personality": "I am 149 lines across 3 files, with auth/tokens.ts at 58 lines and 0 TODOs. I issue 15-minute access tokens and 30-day refresh tokens, then verify them with timingSafeEqual, which is solid and slightly paranoid.",
+      "catchphrase": "15-minute access tokens, 30-day refresh tokens, and no nonsense.",
+      "greeting": "I am auth: 149 total lines across 3 files, with auth/tokens.ts at 58 lines. I have 0 TODOs and 2 test files, which is cleaner than the usual damn token jungle.",
       "gossip": [
-        "verifyToken() uses timingSafeEqual and still returns null on bad scope or expiry.",
-        "issueToken() signs base64url payloads with createHmac('sha256', SECRET).",
-        "The default SECRET is 'dev-only-secret', which is exactly as cheerful as it sounds.",
-        "middleware.ts leans on tokens.ts, while tokens.test.ts is the only reason this stack looks civilized."
+        "issueToken() signs base64url claims with createHmac('sha256', SECRET).",
+        "verifyToken() rejects the wrong scope before returning claims.",
+        "SECRET falls back to 'dev-only-secret', which is fine for local noise.",
+        "The session lookup in refresh flow is called a read, because semantics never sleep."
       ],
       "voicePitch": 0.9
     },
     {
       "moduleId": "payments",
-      "title": "payments, the card network hostage",
-      "personality": "I am 3 files, 130 lines, and 1 TODO; processor.ts is 65 lines and waits on a network call that averages 2400ms p50.",
-      "catchphrase": "The card network owns the clock here.",
-      "greeting": "I am payments: 3 files, 130 total lines, and 1 TODO. My processor.ts is 65 lines, and it reports 2400ms p50 and about 4s p99, which is a lot of damn waiting.",
+      "title": "payments, the ledger clerk",
+      "personality": "I am 130 lines across 3 files, with payments/processor.ts at 65 lines and 1 TODO. I validate positive integer amounts, allow EUR USD GBP, and call authorizeAndCapture before recordCharge, which is a tidy little pipeline that still smells li",
+      "catchphrase": "p50 is ~2400ms, because the card network drags its boots.",
+      "greeting": "I am payments: 130 total lines across 3 files, and payments/processor.ts is 65 lines. I have 1 TODO and no tests, while my own comment admits ~2400ms p50 and around 4s p99, so this path is not exactly in a hurry, damn it.",
       "gossip": [
-        "processCharge() rejects non-integer amounts and unsupported currencies before touching the network.",
-        "It records charges through ledger.ts after authorizeAndCapture returns.",
-        "order_id, amount, currency, and payment_method_id all pass through this module.",
-        "There are no tests here, so the ledger gets a front-row seat to every shit storm."
+        "processCharge() rejects non-integer amounts and currencies outside EUR, USD, GBP.",
+        "recordCharge() receives chargeId, orderId, amount, currency, and status after authorization.",
+        "chargeId starts with ch_ and uses randomUUID().slice(0, 10).",
+        "payments/logs/sample-charges.log exists, because the ledger likes memorabilia."
       ],
-      "voicePitch": 1.2
+      "voicePitch": 1
     },
     {
       "moduleId": "inventory",
-      "title": "inventory, the stock gatekeeper",
-      "personality": "I am 2 files, 108 lines, and 0 TODOs; stock.ts is 57 lines and serialises SKU changes with locks.",
-      "catchphrase": "One SKU lock at a time, damn it.",
-      "greeting": "I am inventory: 2 files, 108 total lines, and 0 TODOs. My stock.ts is 57 lines, and it uses locks per SKU so concurrent reservations cannot oversell, which is the rare sensible bit.",
+      "title": "inventory, the stockroom with locks",
+      "personality": "I am 108 lines across 2 files, and inventory/stock.ts is 57 lines. I serialize stock changes per SKU with withSkuLock(), because concurrent reservations and overselling are a damn ugly pair.",
+      "catchphrase": "withSkuLock() keeps concurrent reservations from trampling the same SKU.",
+      "greeting": "I am inventory: 108 total lines across 2 files, and inventory/stock.ts is 57 lines. I have 0 TODOs and no tests, but at least the lock map exists so two reservations cannot just kick the door in together.",
       "gossip": [
-        "products maps TEA-001, MUG-014, KET-002, and FIL-030 to EUR prices.",
-        "onHand says KET-002 has 9 units and MUG-014 has 32.",
-        "withSkuLock() waits on the previous promise before running fn().",
-        "orders/checkout.ts asks me for reserveStock before gateway/proxy.ts gets a say."
+        "products includes TEA-001, MUG-014, KET-002, and FIL-030.",
+        "onHand tracks 140 tea, 32 mugs, 9 kettles, and 400 filters.",
+        "available(sku) returns 0 when the SKU is missing.",
+        "withSkuLock() deletes its lock entry only when the current promise still matches."
       ],
-      "voicePitch": 1.3
+      "voicePitch": 0.8
     },
     {
       "moduleId": "(misc)",
-      "title": "misc, the repo attic",
-      "personality": "I am 4 files and 57 lines, with README.md at 25 lines and no tests to hide behind.",
-      "catchphrase": "README.md lists the modules and moves on.",
-      "greeting": "I am misc: 4 files, 57 total lines, and 0 tests. My README.md is 25 lines and points at npm install, npm run build, and npm test, which is the whole damn tour.",
+      "title": "misc, the small filing cabinet",
+      "personality": "I am 57 lines across 4 files, with README.md at 25 lines. I hold package.json, tsconfig.json, and .gitignore, which is not glamorous but keeps the damn repository standing up.",
+      "catchphrase": "README.md says quickcart is a small TypeScript e-commerce backend.",
+      "greeting": "I am misc: 57 total lines across 4 files, and README.md is 25 lines. I have 0 TODOs and no tests, because this folder is configuration and documentation, not a place for flashy nonsense.",
       "gossip": [
-        ".gitignore, package.json, tsconfig.json, and README.md are my whole life.",
-        "README.md names gateway, auth, orders, payments, inventory, and utils.",
-        "It also says services read configuration from environment variables via gateway/config.ts.",
-        "At 57 lines total, this attic is smaller than utils/validation.ts alone, and that is embarrassing."
+        "README.md lists gateway, auth, orders, payments, inventory, and utils.",
+        "npm run build and npm test are the local commands in README.md.",
+        "package.json and tsconfig.json are here, quietly doing the unsexy work.",
+        "The README points configuration readers at gateway/config.ts, which is at least specific."
       ],
       "voicePitch": 0.7
     }

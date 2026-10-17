@@ -15,6 +15,7 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - Humour comes from specific facts: real line counts, TODO counts, function names, file names. A joke without a real fact gets cut.
 - Answer first, joke second. The explanation must be useful on its own.
 - Short: gossip 1–2 sentences; expert answers under 100 words; beginner answers up to 170 words.
+- Roast the code, never people. No insults aimed at authors, users or anyone else; swearing is allowed only about code, and only at the swearing levels (unhinged, feral, nuclear; clean has none).
 - Core rule: swearing adds emphasis, never replaces information. Profanity goes in the reactions and commentary; the explanation sentences stay clear. Swearing density per spice level is unchanged.
 - No jargon without a definition (beginner mode and anything a beginner reads, like the Tribunal verdict; expert mode may use standard terms): replace technical terms (idempotent, middleware, async, promise, callback, payload, endpoint, schema, ORM, race condition, in-memory, upstream…) with plain words, or define them in parentheses on first use, e.g. "middleware (code that runs on every request before your handler)". Square brackets are only for citations.
 - Never vague: no "handles", "manages", "deals with", "does some logic" or "stuff" without saying exactly what. Use real names and values from the code: function names, numbers like 2000ms, field names like order_id.
