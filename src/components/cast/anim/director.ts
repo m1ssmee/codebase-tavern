@@ -5,7 +5,8 @@
 import * as THREE from 'three';
 import type { Archetype } from '@/lib/cast';
 import { allActors, getActor, type Actor } from './actor';
-import { clock, spice, wait } from './core';
+import { benchHooks, clock, spice, wait } from './core';
+import { newHearing } from './gags';
 import { FX } from './fx';
 
 type Id = string;
@@ -20,7 +21,11 @@ const after = (s: number, fn: () => unknown) => void wait(s).then(fn);
 const SCRIPT = { priority: 2, force: true } as const;
 
 /** Melee attackers float this far (metres, at scale 1) from the target; the rest throw from where they stand. */
-const MELEE: Partial<Record<Archetype, number>> = { bouncer: 0.55, accountant: 0.62, clerk: 0.62, doorman: 0.72, plumber: 0.95, star: 0.62, landlord: 0.65, inspector: 1.15 };
+const MELEE: Partial<Record<Archetype, number>> = { bouncer: 0.55, accountant: 0.62, clerk: 0.62, doorman: 0.72, plumber: 0.95, star: 0.62, landlord: 0.65, inspector: 1.15, judge: 0.75 };
+
+// The Landlord, in the gallery, winces at every crack in the bench and writes it down (damage to the building).
+benchHooks.add(() => allActors().forEach((x) => x.archetype === 'landlord' && void x.play('wince', { priority: 2, force: true })));
+const judgeOnStage = () => allActors().find((x) => x.archetype === 'judge');
 
 /** Float over (melee) or aim (throwers), bonk with the signature prop, the target reacts, float back. */
 export async function bonk(attackerId: Id, targetId: Id) {
@@ -33,7 +38,9 @@ export async function bonk(attackerId: Id, targetId: Id) {
   if (reach !== undefined) {
     const tp = t.rig!.root.getWorldPosition(new THREE.Vector3()), ap = a.rig!.root.getWorldPosition(new THREE.Vector3());
     const scale = a.rig!.root.getWorldScale(new THREE.Vector3()).x;
-    await a.floatTo(tp.add(new THREE.Vector3(Math.sign(ap.x - tp.x || 1) * reach * scale, 0, 0.12 * scale)));
+    // The Judge strikes with the end of its head, to its left: it always takes the target's right-hand side.
+    const side = a.archetype === 'judge' ? -1 : Math.sign(ap.x - tp.x || 1);
+    await a.floatTo(tp.add(new THREE.Vector3(side * reach * scale, 0, 0.12 * scale)));
   }
   const done = a.play('bonks', SCRIPT);
   await a.when('hit', 3);
@@ -47,66 +54,67 @@ export async function bonk(attackerId: Id, targetId: Id) {
   if (reach !== undefined) await a.home();
 }
 
-/** The judge's sequence, spice-gated; innocents duck when anything comes out. */
-export async function judgeVerdict(culpritIds: Id[], innocentIds: Id[], level = spice()) {
-  const L = allActors().find((x) => x.archetype === 'landlord');
-  if (!L) return;
+/**
+ * The Tribunal's verdict, for any judge actor. It bangs its head (once; three times at feral and nuclear), then:
+ * clean, the culprits just faint; unhinged, a toy gun fires a BANG flag and they faint anyway; feral, a soot
+ * blast; nuclear, an absurdly oversized toy whose recoil throws the judge off its bench while the culprits are
+ * blasted off-screen or burst into smoke. Innocents duck when the gun comes out and, feral and up, flip the
+ * culprits off one at a time.
+ */
+export async function judgeVerdict(judgeId: Id, culpritIds: Id[], innocentIds: Id[], level = spice()) {
+  const J = A(judgeId);
+  if (!J) return;
   const culprits = many(culpritIds), innocents = many(innocentIds);
   culprits.forEach((c) => c.setExpression('nervous'));
-  await L.play('judgeIn', SCRIPT);
-  await L.play('gavel', SCRIPT);
+  newHearing(J);
+  if (culprits[0]) J.lookAt(head(culprits[0]), 2.5);
+  await J.play(level >= 2 ? 'order3' : 'order', SCRIPT);
   if (level === 0) {
-    // Clean: the gavel is enough. The culprits faint.
-    culprits.forEach((c, i) => after(0.2 + i * 0.15, () => c.play('faint', { priority: 3, force: true })));
+    culprits.forEach((c, i) => after(0.15 + i * 0.15, () => c.play('faint', { priority: 3, force: true })));
     await wait(1.9);
   } else {
-    if (level < 3) {
-      await L.play('drawGun', SCRIPT);
-      if (culprits[0]) {
-        // Aims a little over their heads, so the toy (and its flag) stays in view.
-        L.turnTo(head(culprits[0]));
-        void L.pointAt(culprits[0].world('head', [0, 0.55, 0.2]), { side: 'R', hold: 1.8 });
-      }
+    await J.play('drawGun', SCRIPT);
+    // Aims a little over their heads (never at the camera), so the toy and its flag stay in view.
+    if (culprits[0]) {
+      J.turnTo(head(culprits[0]));
+      void J.pointAt(culprits[0].world('head', [0, 0.45, 0.2]), { side: 'R', hold: 1.8, arm: true });
     }
     innocents.forEach((x, i) => after(i * 0.06, () => x.play('duck', { priority: 3, force: true })));
     await wait(0.7);
     if (level === 1) {
-      // Unhinged: the toy fires a BANG flag; the culprits faint anyway.
-      const shot = L.play('fire', SCRIPT);
-      await L.when('fire', 1);
+      const shot = J.play('fire', SCRIPT);
+      await J.when('fire', 1);
       culprits.forEach((c, i) => after(0.25 + i * 0.12, () => c.play('bangFaint', { priority: 3, force: true })));
       await shot;
       await wait(1.9);
     } else if (level === 2) {
-      // Feral: a soot blast rolls over the culprits.
-      const shot = L.play('fireSoot', SCRIPT);
-      await L.when('fire', 1);
-      for (const c of culprits) sootCloud(L, c);
+      const shot = J.play('fireSoot', SCRIPT);
+      await J.when('fire', 1);
+      for (const c of culprits) sootCloud(J, c);
       culprits.forEach((c, i) => after(0.4 + i * 0.1, () => c.play('sooted', { priority: 3, force: true })));
       await shot;
       await wait(2.6);
     } else {
-      // Nuclear: the cannon. Culprits are blasted off-screen or burst into smoke and pop back together.
-      const shot = L.play('cannon', SCRIPT);
-      await L.when('fire', 3);
+      const shot = J.play('fireBig', SCRIPT);
+      await J.when('fire', 3);
+      J.unpoint();
+      J.turnTo(null);
       culprits.forEach((c, i) => after(0.1 + i * 0.12, () => c.play(i % 2 ? 'explode' : 'blasted', { priority: 3, force: true })));
       await shot;
-      await wait(2.4);
     }
-    L.unpoint();
-    L.turnTo(null);
+    J.unpoint();
+    J.turnTo(null);
     innocents.forEach((x) => x.release(0.35));
     await wait(0.5);
     if (level >= 2 && culprits[0]) {
-      // Feral+: the innocents flip the culprits off, one at a time (one crude gag on screen).
       for (const x of innocents.slice(0, 2)) {
         x.turnTo(head(culprits[0]));
         await x.play('middle', { priority: 2 });
         x.turnTo(null);
       }
     }
+    if (level < 3) await J.play('holster', SCRIPT);
   }
-  await L.play('judgeOut', SCRIPT);
   await wait(0.4);
   culprits.forEach((c) => {
     c.release(0.5);
@@ -114,7 +122,7 @@ export async function judgeVerdict(culpritIds: Id[], innocentIds: Id[], level = 
   });
 }
 function sootCloud(from: Actor, to: Actor) {
-  const muzzle = from.world('blunderbuss', [0, -0.5, 0]);
+  const muzzle = from.world('toyGun', [0, -0.4, 0.06]);
   const dir = to.world('head').sub(muzzle);
   const v = dir.clone().normalize().multiplyScalar(dir.length() / 0.45);
   from.fx((s) => s.spawn('puff', muzzle, { n: 16, vel: [v.x, v.y, v.z], spread: 0.6, jitter: 0.05, life: [0.45, 0.7], size: [0.08, 0.13], grow: 2.2, color: ['#5a524a', '#3d3833', '#6e655c'], drag: 0.6 }));
@@ -137,13 +145,22 @@ export function click(id: Id) {
     void pester(id);
   }
 }
-/** Clean: a glare. Unhinged+: the middle finger. Feral+, if the pestering continues: a twerk at you. */
+/**
+ * Clean: a glare. Unhinged+: the middle finger. Feral+, if the pestering continues: a twerk at you. The Judge
+ * bangs its head in exasperation first, then stares (and flips you off at unhinged and above); it never twerks.
+ */
 export async function pester(id: Id) {
   const a = A(id);
   if (!a) return;
   const again = clock.now - (pestered.get(id) ?? -1e9) < 12;
   pestered.set(id, clock.now);
   a.lookAt(null);
+  if (a.archetype === 'judge') {
+    await a.play('order', { priority: 2 });
+    await a.play('glare', { priority: 2 });
+    if (spice() >= 1) await a.play('middle', { priority: 2 });
+    return;
+  }
   if (spice() === 0) return a.play('glare', { priority: 2 });
   if (again && spice() >= 2) return a.play('twerk', { priority: 2 });
   return a.play('middle', { priority: 2 });
@@ -191,15 +208,27 @@ export async function roast(id: Id, neighbourIds: Id[] = []) {
   await a.play(s === 3 ? 'scream' : 'steam', SCRIPT);
   if (s === 3 && ns.length === 2) await twerkOff(ns[0].id, ns[1].id);
 }
-/** Nuclear: two characters out-twerk each other, bigger each round, never both at once; the loser moons. */
+/**
+ * Nuclear: two characters out-twerk each other, bigger each round, never both at once; the loser moons. If a
+ * judge is on stage it shuts the second round down with a bang of its head, and the twerking stops dead.
+ */
 export async function twerkOff(aId: Id, bId: Id) {
   const pair = many([aId, bId]);
   if (pair.length < 2 || spice() < 3) return;
-  const [a, b] = pair;
+  const [a, b] = pair, J = judgeOnStage();
   for (const [i, x] of [a, b, a].entries()) {
     const other = x === a ? b : a;
     x.turnTo(head(other));
-    await x.play('twerk', { priority: 2, force: true, weight: 1 + i * 0.25 });
+    const round = x.play('twerk', { priority: 2, force: true, weight: 1 + i * 0.25 });
+    if (J && J !== a && J !== b && i === 1) {
+      await wait(0.8);
+      void J.play('order', SCRIPT);
+      await J.when('bang', 3);
+      x.halt();
+      x.turnTo(null);
+      return;
+    }
+    await round;
     x.turnTo(null);
   }
   b.turnTo(head(a));
@@ -212,7 +241,11 @@ export async function accuse(accuserId: Id, accusedId: Id) {
   await wait(0.15);
   await A(accusedId)?.play('accused', SCRIPT);
 }
-export const verdict = (culprits: Id[], innocents: Id[]) => judgeVerdict(culprits, innocents, spice());
+/** The verdict, by whichever judge is on stage. */
+export const verdict = (culprits: Id[], innocents: Id[]) => {
+  const J = judgeOnStage();
+  return J ? judgeVerdict(J.id, culprits, innocents, spice()) : Promise.resolve();
+};
 /** What-if: breaks (horrified, faints), at risk (sweats), fine (shrugs), relieved (a hop). */
 export async function whatIf(o: { breaks?: Id[]; atRisk?: Id[]; fine?: Id[]; relieved?: Id[] }) {
   const go = (ids: Id[] | undefined, clip: string, d: number) => many(ids ?? []).forEach((x, i) => after(d + i * 0.15, () => x.play(clip, SCRIPT)));

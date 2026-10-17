@@ -2,8 +2,11 @@
 // `node scripts/check.mjs` can run it directly.
 import type { Module } from './types';
 
-/** The ten module archetypes, then the Landlord: the narrator, present for every repo, never assigned to a module. */
-export const ARCHETYPES = ['bouncer', 'accountant', 'clerk', 'doorman', 'hoarder', 'inspector', 'junkDrawer', 'plumber', 'star', 'librarian', 'landlord'] as const;
+/**
+ * The ten module archetypes, then the Landlord (the narrator, present for every repo) and the Judge (Tribunal
+ * only). Neither of the last two is ever assigned to a module: they have no keywords and no fallback picks them.
+ */
+export const ARCHETYPES = ['bouncer', 'accountant', 'clerk', 'doorman', 'hoarder', 'inspector', 'junkDrawer', 'plumber', 'star', 'librarian', 'landlord', 'judge'] as const;
 export type Archetype = (typeof ARCHETYPES)[number];
 export type Variant = 0 | 1;
 
@@ -19,6 +22,7 @@ export const CAST: Record<Archetype, { name: string; joke: string; keywords: str
   star: { name: 'The Star', joke: 'Flawless from the front, held together with clamps from behind.', keywords: ['ui', 'components', 'views', 'pages', 'styles', 'frontend', 'client'] },
   librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: ['docs', 'readme', 'root', 'config', 'settings', '.github'] },
   landlord: { name: 'The Landlord', joke: 'Owns the building, fixes nothing, and is tired of every tenant.', keywords: [] },
+  judge: { name: 'The Judge', joke: 'Its head is a gavel: the final word, applied with blunt force.', keywords: [] },
 };
 
 // ponytail: plural folding is "drop a trailing s", enough for this keyword list (tests, utils, orders...).

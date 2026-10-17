@@ -333,5 +333,12 @@ export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrif
 export function clipFor(arch: Archetype, name: string): ClipFn | undefined {
   return GAGS[arch]?.[name] ?? SHARED[name];
 }
-/** Names that depend on the spice level: the Landlord only gives in to a twerk at nuclear. */
-export const resolveName = (arch: Archetype, name: string) => (arch === 'landlord' && name === 'twerk' ? (spice() >= 3 ? 'twerkNuke' : 'twerkRefuse') : name);
+/**
+ * Names that depend on who and how spicy: the Landlord only gives in to a twerk at nuclear; the Judge never
+ * twerks (or moons) at any level, it bangs its head instead.
+ */
+export function resolveName(arch: Archetype, name: string) {
+  if (arch === 'landlord' && name === 'twerk') return spice() >= 3 ? 'twerkNuke' : 'twerkRefuse';
+  if (arch === 'judge' && (name === 'twerk' || name === 'moon')) return 'order';
+  return name;
+}

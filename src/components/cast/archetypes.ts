@@ -1300,31 +1300,7 @@ function landlord(c: Ctx): Result {
       for (let k = 0; k < 3; k++) mesh(o, G.box(), m, { p: [0.012, -0.13 - k * 0.018, 0], s: [0.012 + 0.008 * rnd(i * 3 + k), 0.01, 0.008], outline: false });
     }
   });
-  // Judge kit: a wig over the reading glasses, a toy blunderbuss with a BANG flag, a cannon; and the rent money.
-  tog(c, 'wig', rig.head, [0, 0.06, -0.01], (g) => {
-    const wig = toon('#f2f0ea'), curl = toon('#d9d5cb');
-    mesh(g, G.lid(), wig, { p: [0, 0.07, 0], s: [0.27, 0.22, 0.27] });
-    for (const sd of SIDES) for (let i = 0; i < 4; i++) mesh(g, G.torus(0.45, PI * 2, 16, 6), i % 2 ? curl : wig, { p: [X(sd, 0.25), 0.02 - i * 0.075, -0.02], r: [0, PI / 2, 0], s: 0.055 });
-    mesh(g, G.capsule(0.06, 0.14), wig, { p: [0, -0.06, -0.22], r: [0.3, 0, 0] });
-  });
-  tog(c, 'blunderbuss', rig.handR, [0, -0.02, 0], (g) => {
-    const brass = toon('#e3b23c', { gloss: true });
-    mesh(g, G.rbox(0.07, 0.24, 0.06, 0.02, 2), toon('#b8432f'), { p: [0, 0.08, -0.03], r: [0.25, 0, 0] });
-    mesh(g, G.cyl(1, 16), brass, { p: [0, -0.2, 0], s: [0.028, 0.42, 0.028] });
-    mesh(g, G.cyl(2.6, 20), toon('#e3b23c', { gloss: true, double: true }), { p: [0, -0.45, 0], r: [PI, 0, 0], s: [0.03, 0.12, 0.03] });
-    mesh(g, G.sphere(), toon('#d9473a'), { p: [0, 0.0, 0.05], s: 0.03 });
-  });
-  // The BANG flag pops up out of the muzzle on a pole; it turns to face the camera (userData.billboard).
-  const flag = tog(c, 'bangFlag', rig.handR, [0, -0.5, 0], (g) => {
-    mesh(g, G.cyl(1, 8), toon(C.wood), { p: [0, 0.16, 0], s: [0.01, 0.32, 0.01] });
-    mesh(g, G.box(), labelMat('BANG'), { p: [0.17, 0.25, 0], s: [0.32, 0.16, 0.006], outline: false });
-  });
-  flag.userData.billboard = true;
-  tog(c, 'cannon', rig.root, [0.85 * w, 0, 0.35], (g) => {
-    mesh(g, G.cyl(0.8, 24), toon('#2b2b2f', { gloss: true }), { p: [0, 0.24, 0], r: [0, 0, -1.2], s: [0.11, 0.55, 0.11] });
-    for (const z of [-0.12, 0.12]) mesh(piece(g, [0.04, 0.11, z], [PI / 2, 0, 0]), G.puck(0.11, 0.04, 0.012), wood());
-    mesh(g, c.own(tube((t) => [-0.2 - 0.06 * t, 0.16 + 0.1 * t, 0.03 * Math.sin(t * 6)], 0.006, 16, 4)), toon(C.black), { outline: false });
-  });
+  // The rent money it counts when a fix lands.
   tog(c, 'money', rig.handR, [0, -0.08, 0.02], (g) => {
     for (let i = 0; i < 5; i++) mesh(g, G.rbox(0.16, 0.012, 0.08, 0.003, 1), toon('#5fa865'), { p: [0, -i * 0.012, 0], r: [0, (rnd(i) - 0.5) * 0.2, 0] });
     mesh(g, G.box(), toon('#f2e6c9'), { p: [0, -0.025, 0], s: [0.03, 0.07, 0.085] });
@@ -1333,7 +1309,119 @@ function landlord(c: Ctx): Result {
   return { neutral: { lid: 0.36, brow: [-0.02, -0.12], browR: [0.14, -0.06], frown: 0.22, mouthW: 0.85, look: [0.12, 0] }, shadow: [-0.15, 0.1, 0.55 * w, 0.42] };
 }
 
-const BUILDERS: Record<Archetype, (c: Ctx) => Result> = { bouncer, accountant, clerk, doorman, hoarder, inspector, junkDrawer, plumber, star, librarian, landlord };
+// ---------- 12. The Judge: its head is a gavel. The final word, applied with blunt force ----------
+const ROBE: [number, number][] = [[0, -0.2], [0.31, -0.19], [0.345, -0.08], [0.34, 0.12], [0.31, 0.32], [0.26, 0.48], [0.18, 0.6], [0.09, 0.66], [0, 0.68]];
+/** Where the gavel head lands on the bench (character space), and the bench's size. */
+export const BENCH = { w: 1.3, h: 0.74, d: 0.42, z0: 0.34, hit: [0.43, 0.79, 0.42] as V3 };
+function judge(c: Ctx): Result {
+  const { rig, w } = c;
+  const robe = toon('#1f1f26', { gloss: true }), pleat = toon('#2c2c35'), collar = toon(C.white), oak = wood('#b07a45'), brass = toon('#c9a54a', { gloss: true });
+  legs(c, { spread: 0.09 * w, thigh: 0.15, shin: 0.14, r: 0.045, foot: [0.065, 0.04, 0.11], mat: toon('#2b2b31'), footMat: toon(C.black, { gloss: true }) });
+  at(rig.torso, [0, 0.35, 0]);
+  // A black robe hanging straight to the ankles, a few pleats, a white collar with two falling bands.
+  mesh(rig.torso, G.lathe('robe', ROBE, 48), robe, { s: [w, 1, 0.9] });
+  const surf = onLathe(ROBE, w, 0.9);
+  c.bake(rig.torso, (g) => {
+    for (const a of [-1.1, -0.55, 0.55, 1.1]) {
+      const top = surf(a, 0.3, 0.004), bot = surf(a, -0.17, 0.004);
+      const o = piece(g, lerp3(top, bot, 0.5), [0, a, 0]);
+      mesh(o, G.rbox(0.018, Math.hypot(top[1] - bot[1], top[2] - bot[2]), 0.008, 0.004, 1), pleat, { r: [Math.atan2(top[2] - bot[2], top[1] - bot[1]), 0, 0] });
+    }
+    for (const s of SIDES) mesh(g, G.rbox(0.05, 0.13, 0.012, 0.006, 2), collar, { p: [X(s, 0.03), 0.55, surf(0, 0.55, 0.012)[2]], r: [-0.3, 0, X(s, 0.07)] });
+  });
+  ring(rig.torso, [0, 0.635, 0.01], 0.125, 0.115, collar, 0.34);
+  // The handle is the neck (its own prop, so it can telescope); the gavel head sits on it, face toward you.
+  at(rig.neck, [0, 1.0, 0.02]);
+  mesh(prop(rig, 'gavelHandle', rig.neck), G.cyl(1, 16), oak, { p: [0, 0.16, 0], s: [0.034, 0.32, 0.034] });
+  at(rig.head, [0, 1.33, 0.02]);
+  const R = 0.165, L = 0.27;
+  mesh(rig.head, G.cyl(1, 40), oak, { r: [0, 0, PI / 2], s: [R, L * 2, R] });
+  for (const s of SIDES) {
+    // Striking faces, a shade darker, and a brass band near each end.
+    mesh(rig.head, G.puck(R * 1.02, 0.03, 0.012, 40), wood('#8a5a2f'), { p: [X(s, L), 0, 0], r: [0, 0, PI / 2] });
+    mesh(rig.head, G.torus(0.12, PI * 2, 40, 8), brass, { p: [X(s, L - 0.075), 0, 0], r: [0, PI / 2, 0], s: R * 1.04 });
+  }
+  face(rig, { c: [0, 0, 0], r: [10, R, R], eyeX: 0.075, eyeY: 0.035, eyeW: 0.042, eyeH: 0.052, mouthY: -0.085, mouthW: 0.075, browY: -0.004, skin: oak, iris: c.iris });
+  // A small powdered wig perched on top.
+  c.bake(prop(rig, 'wig', rig.head), (g) => {
+    const powder = toon('#f3f0e8'), curl = toon('#dcd7cc');
+    mesh(g, G.lid(), powder, { p: [0, R - 0.025, -0.01], s: [0.13, 0.085, 0.12] });
+    for (const s of SIDES) for (let i = 0; i < 2; i++) mesh(g, G.torus(0.42, PI * 2, 16, 6), i ? curl : powder, { p: [X(s, 0.125), R - 0.03 - i * 0.05, -0.02], r: [0, PI / 2, 0], s: 0.038 });
+    mesh(g, G.capsule(0.03, 0.07), powder, { p: [0, R - 0.06, -0.13], r: [0.5, 0, 0] });
+    for (const s of SIDES) mesh(g, G.sphere(), toon(C.black), { p: [X(s, 0.025), R - 0.04, -0.115], s: [0.026, 0.016, 0.01] });
+  });
+  // Bell sleeves, small white cuffs; hands resting on the bench.
+  for (const s of SIDES) {
+    arm(c, s, [X(s, 0.24 * w), 0.93, 0.02], [X(s, 0.34 * w), 0.76, 0.17], [X(s, 0.2), 0.79, 0.38], [0.065, 0.06, 0.055], { m1: robe, sleeve: null, cuff: collar });
+    mesh(rig[`elbow${s}`], G.cyl(1.5, 24, true), toon('#1f1f26', { gloss: true, double: true }), { p: [0, -0.16, 0], s: [0.06, 0.12, 0.06] });
+  }
+  // The bench: wooden, raised panels, a blank brass nameplate. It stays put when the Judge moves.
+  const { w: BW, h: BH, d: BD, z0 } = BENCH;
+  const bench = prop(rig, 'bench', rig.root);
+  bench.userData.planted = true;
+  c.bake(bench, (g) => {
+    const dark = wood('#6e4428'), light = wood('#8c5b35');
+    mesh(g, G.rbox(BW + 0.08, 0.05, BD + 0.06, 0.015, 2), light, { p: [0, BH + 0.025, z0 + BD / 2] });
+    mesh(g, G.rbox(BW, BH, 0.05, 0.012, 2), dark, { p: [0, BH / 2, z0 + BD - 0.025] });
+    for (const s of SIDES) mesh(g, G.rbox(0.05, BH, BD, 0.012, 2), dark, { p: [X(s, BW / 2 - 0.025), BH / 2, z0 + BD / 2] });
+    for (const x of [-0.42, 0, 0.42]) mesh(g, G.rbox(0.34, 0.36, 0.02, 0.01, 2), light, { p: [x, 0.28, z0 + BD + 0.005] });
+    mesh(g, G.rbox(BW + 0.04, 0.07, 0.04, 0.012, 2), light, { p: [0, 0.035, z0 + BD - 0.005] });
+    mesh(g, G.rbox(BW + 0.04, 0.035, 0.035, 0.01, 2), light, { p: [0, BH - 0.035, z0 + BD - 0.002] });
+    mesh(g, G.rbox(0.4, 0.09, 0.015, 0.006, 2), brass, { p: [0, BH - 0.15, z0 + BD + 0.005] });
+  });
+  // Cracks where the head lands: each bang in a hearing shows the next, bigger one.
+  const [hx, , hz] = BENCH.hit;
+  const crackLines = (g: THREE.Group, paths: V3[][], width: number) => {
+    const ink = flat('#1d1009');
+    for (const pts of paths)
+      for (let i = 1; i < pts.length; i++) {
+        const a = new THREE.Vector3(...pts[i - 1]), b = new THREE.Vector3(...pts[i]);
+        const o = piece(g, a.clone().lerp(b, 0.5).toArray() as V3);
+        o.quaternion.setFromUnitVectors(new THREE.Vector3(1, 0, 0), b.clone().sub(a).normalize());
+        mesh(o, G.box(), ink, { s: [a.distanceTo(b) + width, width, width], outline: false });
+      }
+  };
+  const top = BH + 0.051, front = z0 + BD + 0.006, fx0 = hx + 0.1;
+  // 1: a star on the top with one branch reaching the front edge. 2: it runs down the front. 3: the bench splits.
+  tog(c, 'crack1', bench, [0, 0, 0], (g) => crackLines(g, [
+    [[hx, top, hz], [hx + 0.06, top, hz + 0.1], [hx + 0.04, top, hz + 0.2], [fx0, top, front - 0.006], [fx0, top - 0.01, front]],
+    [[hx, top, hz], [hx - 0.08, top, hz + 0.06], [hx - 0.13, top, hz + 0.05]],
+    [[hx, top, hz], [hx + 0.1, top, hz - 0.03]],
+  ], 0.014));
+  tog(c, 'crack2', bench, [0, 0, 0], (g) => crackLines(g, [
+    [[fx0, BH + 0.02, front], [fx0 - 0.03, BH - 0.06, front], [fx0 + 0.02, BH - 0.14, front], [fx0 - 0.01, BH - 0.22, front]],
+    [[fx0 - 0.03, BH - 0.06, front], [fx0 - 0.1, BH - 0.1, front]],
+    [[hx - 0.13, top, hz + 0.05], [hx - 0.2, top, hz + 0.14], [hx - 0.22, top, front - 0.006]],
+  ], 0.018));
+  tog(c, 'crack3', bench, [0, 0, 0], (g) => {
+    crackLines(g, [
+      [[fx0 - 0.01, BH - 0.22, front], [fx0 + 0.04, BH - 0.32, front], [fx0 - 0.02, BH - 0.44, front], [fx0 + 0.03, BH - 0.56, front], [fx0, 0.07, front]],
+      [[fx0 + 0.04, BH - 0.32, front], [fx0 + 0.16, BH - 0.38, front]],
+      [[hx - 0.22, top, front - 0.006], [hx - 0.22, BH - 0.05, front], [hx - 0.27, BH - 0.15, front]],
+    ], 0.022);
+    mesh(g, G.sphere(16, 8), flat('#2a170c'), { p: [hx, top - 0.004, hz], s: [0.08, 0.008, 0.06], outline: false });
+  });
+  // A chunky toy gun from under the robe (bright, round, orange safety tip), and its BANG flag.
+  tog(c, 'toyGun', rig.handR, [0, -0.02, 0], (g) => {
+    const blue = toon('#3b8fd9', { gloss: true }), orange = toon('#ff8a1f', { gloss: true }), yellow = toon('#f2c94c', { gloss: true });
+    mesh(g, G.rbox(0.06, 0.1, 0.075, 0.022, 2), yellow, { p: [0, 0.02, -0.02], r: [0.35, 0, 0] });
+    mesh(g, G.rbox(0.08, 0.26, 0.1, 0.035, 3), blue, { p: [0, -0.12, 0.045] });
+    mesh(g, G.cyl(1, 20), blue, { p: [0, -0.3, 0.06], s: [0.034, 0.14, 0.034] });
+    mesh(g, G.cyl(1, 20), orange, { p: [0, -0.385, 0.06], s: [0.04, 0.035, 0.04] });
+    mesh(g, G.torus(0.22, PI * 2, 24, 8), yellow, { p: [0, -0.03, 0.0], r: [0, PI / 2, 0], s: 0.045 });
+    mesh(g, G.rbox(0.022, 0.05, 0.03, 0.008, 1), orange, { p: [0, -0.2, 0.11] });
+  });
+  // The BANG flag pops up out of the muzzle on a pole; it turns to face the camera (userData.billboard).
+  const flag = tog(c, 'bangFlag', rig.handR, [0, -0.42, 0.06], (g) => {
+    mesh(g, G.cyl(1, 8), toon(C.wood), { p: [0, 0.16, 0], s: [0.01, 0.32, 0.01] });
+    mesh(g, G.box(), labelMat('BANG'), { p: [0.17, 0.25, 0], s: [0.32, 0.16, 0.006], outline: false });
+  });
+  flag.userData.billboard = true;
+  sweat(c, rig.head, [[0.2, 0.08, 0.1]]);
+  return { neutral: { lid: 0.4, brow: [-0.2, 0.3], frown: 0.16, mouthW: 0.82, look: [0, -0.06] }, shadow: [0, 0.25, 0.75, 0.6] };
+}
+
+const BUILDERS: Record<Archetype, (c: Ctx) => Result> = { bouncer, accountant, clerk, doorman, hoarder, inspector, junkDrawer, plumber, star, librarian, landlord, judge };
 
 /** Merge sibling meshes that share a material (fewer draw calls); joints and toggled parts stay separate. */
 function mergeSiblings(root: THREE.Object3D, keep: Set<THREE.Object3D>, owned: THREE.BufferGeometry[]) {

@@ -5,8 +5,8 @@ import { useTavern } from '@/lib/store';
 let ctx: AudioContext | null = null;
 let out: AudioNode | null = null;
 let noiseBuf: AudioBuffer | null = null;
-/** Volume of the sound being scheduled (quiet ambient idles, louder payoffs). */
-let vol = 1;
+/** Volume and pitch of the sound being scheduled (quiet ambient idles; the Judge's tok gets deeper per bang). */
+let vol = 1, pitch = 1;
 
 /** The shared context, created on first use (browsers only allow it to start after a click or key). */
 function ac() {
@@ -115,7 +115,13 @@ const SOUNDS = {
       o.frequency.linearRampToValueAtTime(1250, t + d + len);
     }
   },
-  /** One gavel knock (the key ring on the desk). */
+  /** The Judge's head on the bench: a hollow wooden knock (deeper with `pitch` < 1). */
+  tok: (c: C, t: number) => {
+    tone(c, t, 'triangle', 620 * pitch, 330 * pitch, 0.12, 0.6);
+    tone(c, t, 'sine', 190 * pitch, 95 * pitch, 0.2 + 0.15 * (1 - pitch), 0.7);
+    noise(c, t, 0.04, 0.4, 'bandpass', 1400 * pitch, 1000 * pitch, 1.6);
+  },
+  /** One gavel knock. */
   gavel: (c: C, t: number) => {
     tone(c, t, 'sine', 310, 165, 0.14, 0.7);
     noise(c, t, 0.05, 0.45, 'bandpass', 1100, 900, 1.5);
@@ -248,12 +254,13 @@ const SOUNDS = {
 };
 export type Sfx = keyof typeof SOUNDS;
 
-/** Play a sound now (or `delay` seconds from now), at volume `v`. Silent while the app is muted. */
-export function sfx(name: Sfx, delay = 0, v = 1) {
+/** Play a sound now (or `delay` seconds from now), at volume `v` (and pitch `p`, for the tok). Silent while the app is muted. */
+export function sfx(name: Sfx, delay = 0, v = 1, p = 1) {
   if (useTavern.getState().muted) return;
   const c = ac();
   if (!c || c.state !== 'running') return;
   vol = v;
+  pitch = p;
   SOUNDS[name](c, c.currentTime + 0.01 + delay);
-  vol = 1;
+  vol = pitch = 1;
 }

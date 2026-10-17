@@ -164,7 +164,9 @@ assert.deepEqual(castOf([M('api', ['api/routes.ts']), M('handlers', ['handlers/d
 assert.deepEqual(castOf([M('api', ['api/a.ts']), M('routes', ['routes/b.ts'])]), { api: 'clerk', routes: 'clerk*' });
 assert.ok(isDocsModule({ filePaths: ['.github/ci.yml', 'docs/a.md', 'LICENSE', 'tsconfig.json', 'src/x.ts'] }));
 assert.ok(!isDocsModule({ filePaths: ['data/fixtures.json', 'data/b.json', 'README.md'] })); // data .json is not config
-// the Landlord narrates; it is never a module's character
-assert.ok(ARCHETYPES.includes('landlord'));
-assert.ok(![demo.files, express.modules].some((x) => Object.values(castOf(Array.isArray(x) && x[0]?.stats ? x : detectModules(x))).includes('landlord')));
+// the Landlord narrates and the Judge only sits the Tribunal; neither is ever a module's character
+for (const extra of ['landlord', 'judge']) {
+  assert.ok(ARCHETYPES.includes(extra));
+  assert.ok(![demo.files, express.modules].some((x) => Object.values(castOf(Array.isArray(x) && x[0]?.stats ? x : detectModules(x))).includes(extra)));
+}
 console.log('cast checks ok');

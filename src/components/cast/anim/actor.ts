@@ -39,7 +39,7 @@ export type PlayOpts = {
 type State = { hand: Partial<Record<'L' | 'R', HandPose>>; expr?: Expression; face?: Face; show: Set<string>; stash: Set<string> };
 export type Running = { name: string; info: ClipInfo; action: THREE.AnimationAction; priority: number; prev: number; st: State; done: (ok: boolean) => void; still: boolean };
 export type Target = THREE.Vector3 | THREE.Object3D | { client: [number, number] };
-export type Pointer = { from: Target; to?: Target; side: 'L' | 'R'; t0: number; sweep: number; hold: number; w: number; out: boolean; resolve: () => void; pose?: HandPose; cur: THREE.Vector3; fired: Set<string> };
+export type Pointer = { from: Target; to?: Target; side: 'L' | 'R'; t0: number; sweep: number; hold: number; w: number; out: boolean; resolve: () => void; pose?: HandPose; cur: THREE.Vector3; fired: Set<string>; arm: boolean };
 type Tween = { name: string; from: THREE.Vector3; to: Target; t0: number; dur: number; arc: number; spin: number; stay: number; resolve: () => void };
 
 const CRUDE_COOLDOWN = 30;
@@ -118,6 +118,10 @@ export class Actor {
   pointer: Pointer | null = null;
   /** What a bonk is aimed at (set by the director): thrown ducks, keys and books fly there. */
   target: Target | null = null;
+  /** Small per-character gag state (the Judge's bangs this hearing). */
+  readonly memo: Record<string, number> = {};
+  /** Props that stay put in the world while the character moves (the Judge's bench). */
+  private planted: THREE.Object3D[] = [];
   private tweens: Tween[] = [];
 
   constructor(id: string) {
@@ -153,6 +157,7 @@ export class Actor {
       if (real) add(`prop_${alias}`, real);
     }
     for (const s of ['face', 'ikL', 'ikR', 'aimL', 'aimR']) add(s);
+    this.planted = Object.values(rig.props).filter((o) => o.userData.planted);
     this.mixer = new THREE.AnimationMixer(this.proxyRoot);
     this.mixer.addEventListener('finished', (e) => this.finished(e.action as THREE.AnimationAction));
     this.clips.clear();
@@ -252,8 +257,14 @@ export class Actor {
       if (this.loop) this.stop(this.loop, 0.2);
       this.loop = r;
     } else this.cur = r;
-    // The static pose shows every part at once; only the first sound plays.
-    if (still) (d.cues ?? []).filter(([, cue], i, all) => !(cue as { sound?: boolean }).sound || all.findIndex(([, c]) => (c as { sound?: boolean }).sound) === i).forEach(([, cue]) => cue(this, r));
+    // The static pose shows what leads up to its beat; only the first sound plays, and every named moment
+    // ('hit', 'fire', 'bang') still fires so scripted sequences carry on.
+    if (still) {
+      type Tag = { sound?: boolean; emits?: boolean };
+      const cues = (d.cues ?? []).filter(([t, cue]) => t <= c.beat + 0.25 || (cue as Tag).emits);
+      const first = cues.findIndex(([, cue]) => (cue as Tag).sound);
+      cues.forEach(([, cue], i) => (!(cue as Tag).sound || i === first) && cue(this, r));
+    }
   }
   private stop(r: Running, fade: number) {
     r.action.fadeOut(fade);
@@ -287,9 +298,13 @@ export class Actor {
   release(fade = 0.45) {
     for (const h of this.holds.splice(0)) this.stop(h, fade);
   }
-  stopAll() {
-    for (const r of [this.cur, this.loop, ...this.holds]) if (r) this.stop(r, 0.15);
+  stopAll(fade = 0.15) {
+    for (const r of [this.cur, this.loop, ...this.holds]) if (r) this.stop(r, fade);
     for (const q of this.queue.splice(0)) q.resolve(false);
+  }
+  /** Stop dead, mid-move (a judge's bang shuts a twerk down instantly). */
+  halt() {
+    this.stopAll(0.03);
   }
   /** Back to standing still at home: no gags, no pointing, no parts showing, cooldowns cleared. */
   reset() {
@@ -318,9 +333,9 @@ export class Actor {
   }
 
   // ---------- small helpers used by cues and the director ----------
-  sound(n: Sfx, delay = 0, vol = 1) {
+  sound(n: Sfx, delay = 0, vol = 1, pitch = 1) {
     // Ambient idles stay quiet.
-    sfx(n, delay, this.cur?.priority === 0 ? vol * 0.35 : vol);
+    sfx(n, delay, this.cur?.priority === 0 ? vol * 0.35 : vol, pitch);
   }
   fx(fn: (s: FxSystem, a: Actor) => void) {
     const st = this.three?.(), s = st && fxFor(st.scene);
@@ -402,18 +417,19 @@ export class Actor {
    * Point at a target, or sweep from `from` to `range` (a line range), hold, then let go. Each archetype has
    * its own way: an arm, the Inspector's neck, the Junk Drawer's spring, the Star's spotlight, a bookmark.
    */
-  pointAt(target: Target, o: { range?: Target; sweep?: number; hold?: number; side?: 'L' | 'R'; pose?: HandPose } = {}): Promise<void> {
+  pointAt(target: Target, o: { range?: Target; sweep?: number; hold?: number; side?: 'L' | 'R'; pose?: HandPose; arm?: boolean } = {}): Promise<void> {
     if (!this.rig) return Promise.resolve();
     this.pointer?.resolve();
-    const how = POINTER[this.archetype];
+    // arm: aim with the arm whatever the archetype's own way of pointing is (aiming a toy gun).
+    const how = o.arm ? { kind: 'arm' as const, side: o.side ?? 'R' } : POINTER[this.archetype];
     const side = o.side ?? how.side;
     return new Promise<void>((resolve) => {
       this.pointer = {
         from: target, to: o.range, side, t0: clock.now, sweep: o.range ? (o.sweep ?? 1.2) : 0, hold: o.hold ?? 1.2, w: 0, out: false, resolve,
-        pose: o.pose ?? how.pose, cur: this.resolve(target), fired: new Set(),
+        pose: o.pose ?? ('pose' in how ? how.pose : undefined), cur: this.resolve(target), fired: new Set(), arm: !!o.arm,
       };
       this.lookAt(target, (o.hold ?? 1.2) + (o.range ? (o.sweep ?? 1.2) : 0) + 0.6);
-      how.start?.(this, this.pointer.cur);
+      if (!o.arm) POINTER[this.archetype].start?.(this, this.pointer.cur);
     });
   }
   /** Stop pointing now. */
@@ -510,7 +526,11 @@ export class Actor {
     rig.armR.position.y += 0.004 * breath;
     rig.head.rotateY(gaze[0] * 0.28);
     rig.head.rotateX(-gaze[1] * 0.16);
-    if (this.talking) {
+    if (this.talking && this.archetype === 'judge') {
+      // Nods like a hammer on key words: a sharp dip from the handle every second or so.
+      const k = (this.t * 1.05) % 1, beat = Math.floor(this.t * 1.05) % 3 !== 2;
+      if (beat && k < 0.16) rig.neck.rotateX(0.32 * Math.sin((k / 0.16) * Math.PI));
+    } else if (this.talking) {
       rig.head.rotateX(0.035 * Math.sin(this.t * 5.3));
       if (!this.cur) for (const s of ['L', 'R'] as const) rig[`elbow${s}`].rotateX(-0.16 * Math.max(0, Math.sin(this.t * 2.6 + (s === 'L' ? 0 : 1.9))));
     }
@@ -523,6 +543,7 @@ export class Actor {
     }
     this.locomotion(rig, now, dt);
     this.floorShadow(rig);
+    this.plant(rig);
     for (const [p, until] of this.stashed) if (until > now) this.part(p)?.scale.setScalar(1e-4);
     for (const r of running) for (const p of r.st.stash) this.part(p)?.scale.setScalar(1e-4);
     // 5. Arms: IK and hand aim from clips, then pointing on top.
@@ -568,10 +589,17 @@ export class Actor {
   private locomotion(rig: CharacterRig, now: number, dt: number) {
     const fl = this.float;
     let lift = 0, dx = 0, dz = 0;
+    const chess = this.archetype === 'judge';
     if (fl) {
-      const u = Math.min(1, (now - fl.t0) / fl.dur), e = u < 0.5 ? 2 * u * u : 1 - (-2 * u + 2) ** 2 / 2;
-      this.pos.lerpVectors(fl.from, fl.to, e);
-      lift = Math.sin(Math.PI * u) * fl.arc;
+      const u = Math.min(1, (now - fl.t0) / fl.dur), io = (x: number) => (x < 0.5 ? 2 * x * x : 1 - (-2 * x + 2) ** 2 / 2);
+      if (chess) {
+        // Like a chess piece being moved: lifted straight up, carried across, set straight down.
+        this.pos.lerpVectors(fl.from, fl.to, io(Math.max(0, Math.min(1, (u - 0.25) / 0.5))));
+        lift = fl.arc * 1.2 * io(Math.min(1, u / 0.25, (1 - u) / 0.25));
+      } else {
+        this.pos.lerpVectors(fl.from, fl.to, io(u));
+        lift = Math.sin(Math.PI * u) * fl.arc;
+      }
       dx = fl.to.x - fl.from.x;
       dz = fl.to.z - fl.from.z;
       if (u >= 1) {
@@ -591,12 +619,23 @@ export class Actor {
     } else if (this.turn) {
       const dir = rig.root.parent!.worldToLocal(this.resolve(this.turn, _w)).sub(this.pos);
       want = Math.atan2(dir.x, dir.z) * 0.8;
-    } else if (fl && Math.hypot(dx, dz) > 0.1) want = Math.atan2(dx, Math.max(Math.abs(dz), 0.5)) * 0.45;
+    } else if (fl && !chess && Math.hypot(dx, dz) > 0.1) want = Math.atan2(dx, Math.max(Math.abs(dz), 0.5)) * 0.45;
     // The Star snaps: an underdamped spring; everyone else turns smoothly.
     const [k, c] = this.archetype === 'star' ? [160, 9] : [40, 12];
     this.yawV += (k * (want - this.yaw) - c * this.yawV) * dt;
     this.yaw += this.yawV * dt;
     if (Math.abs(this.yaw) > 1e-4) rig.root.quaternion.premultiply(_q.setFromAxisAngle(UP, this.yaw));
+  }
+
+  /** Planted props keep their rest place in the character's parent space, whatever the root does. */
+  private plant(rig: CharacterRig) {
+    if (!this.planted.length) return;
+    rig.root.updateMatrix();
+    _m2.copy(rig.root.matrix).invert();
+    for (const o of this.planted) {
+      const r = o.userData.rest as { p: THREE.Vector3; r: THREE.Euler; s: THREE.Vector3 };
+      _m.compose(r.p, _q.setFromEuler(r.r), r.s).premultiply(_m2).decompose(o.position, o.quaternion, o.scale);
+    }
   }
 
   /** The contact shadow stays flat on the floor under the body (the root may topple, hop or float); it shrinks with height. */
@@ -620,7 +659,7 @@ export class Actor {
     const k = this.dims!;
     if (this.pointer) {
       this.pointerStep();
-      POINTER[this.archetype].pre?.(this, this.pointer.cur, clock.now - this.pointer.t0);
+      if (!this.pointer.arm) POINTER[this.archetype].pre?.(this, this.pointer.cur, clock.now - this.pointer.t0);
     }
     const torso = rig.torso;
     let tq: THREE.Quaternion | null = null;
@@ -634,16 +673,16 @@ export class Actor {
         this.solveArm(s, torso.localToWorld(_v.copy(ik.position).divideScalar(w)), w);
       }
       const p = this.pointer;
-      if (p && p.side === s && POINTER[this.archetype].kind === 'arm' && p.w > 0) this.solveArm(s, _v.copy(p.cur), p.w, POINTER[this.archetype].straight);
+      if (p && p.side === s && (p.arm || POINTER[this.archetype].kind === 'arm') && p.w > 0) this.solveArm(s, _v.copy(p.cur), p.w, !p.arm && POINTER[this.archetype].straight);
       const wa = aim.scale.x - 1;
       if (wa > 1e-3) aimDown(rig[`hand${s}`], _w.copy(aim.position).divideScalar(wa).applyQuaternion(torsoQ()), wa);
     }
     const p = this.pointer;
     if (p) {
       const how = POINTER[this.archetype];
-      how.frame?.(this, rig, p.cur, p.w, clock.now - p.t0);
+      if (!p.arm) how.frame?.(this, rig, p.cur, p.w, clock.now - p.t0);
       if (p.out && p.w <= 0) {
-        how.end?.(this);
+        if (!p.arm) how.end?.(this);
         this.pointer = null;
         p.resolve();
       }

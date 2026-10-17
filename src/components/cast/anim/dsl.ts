@@ -139,8 +139,8 @@ const SPECIAL = new Set(['face', 'ikL', 'ikR', 'aimL', 'aimR']);
 /** Every toggled part, so channel names can say "bump.p" instead of "tog_bump.p". */
 export const TOGGLE_NAMES = new Set([
   'bump', 'plaster', 'bandage', 'soot', 'redFace', 'ink', 'bum', 'spool', 'mummy', 'tornStrip', 'ticket', 'paperPile', 'pile', 'heldCone', 'heldLamp',
-  'newItem', 'fallingDuck', 'tick', 'headLens', 'thrownKey', 'spring', 'patch', 'popHand', 'popHandL', 'heavyBook', 'flyBookmark', 'wig', 'blunderbuss',
-  'bangFlag', 'cannon', 'money',
+  'newItem', 'fallingDuck', 'tick', 'headLens', 'thrownKey', 'spring', 'patch', 'popHand', 'popHandL', 'heavyBook', 'flyBookmark', 'money',
+  'toyGun', 'bangFlag', 'crack1', 'crack2', 'crack3',
 ]);
 export const nodeName = (n: string) => (JOINT_SET.has(n) || SPECIAL.has(n) || /^hand[LR]_/.test(n) ? n : TOGGLE_NAMES.has(n) ? `tog_${n}` : `prop_${n}`);
 
@@ -234,5 +234,5 @@ export const expr = (e: Expression): Cue => (_, r) => (r.st.expr = e);
 export const face = (f: Face): Cue => (_, r) => (r.st.face = { ...r.st.face, ...f });
 export const fx = (fn: (s: FxSystem, a: Actor) => void): Cue => (a) => a.fx(fn);
 /** A named moment the director can wait for ('hit', 'fire'...). */
-export const emit = (ev: string): Cue => (a) => a.emit(ev);
+export const emit = (ev: string): Cue => Object.assign((a: Actor) => a.emit(ev), { emits: true });
 export const call = (fn: (a: Actor) => void): Cue => (a) => fn(a);

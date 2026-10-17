@@ -9,6 +9,8 @@ export const SPICE_RANK: Record<SpiceLevel, number> = { clean: 0, unhinged: 1, f
 export const spice = () => SPICE_RANK[useTavern.getState().spice];
 
 export const clock = { now: 0 };
+/** Called every time a judge cracks its bench (the Landlord, in the gallery, notes the damage). */
+export const benchHooks = new Set<(judge: { id: string }) => void>();
 let stamp = -1;
 const waits: { at: number; resolve: () => void }[] = [];
 

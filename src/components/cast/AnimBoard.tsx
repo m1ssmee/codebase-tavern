@@ -26,9 +26,17 @@ const row = (ids: Archetype[], gap: number, z = 0): Spot[] => ids.map((id, i) =>
 const STAGES: Record<string, Stage> = {
   all: { key: 'all', cast: row([...ARCHETYPES], 1.75), cam: [0, 2.3, 19.5], target: [0, 1.0, 0] },
   tribunal: {
-    key: 'tribunal', caption: 'Tribunal: the Inspector accuses the Junk Drawer · culprits: Junk Drawer, Accountant',
-    cast: [{ id: 'landlord', x: 0, z: -0.4 }, { id: 'inspector', x: -3.3, z: 0.5 }, { id: 'junkDrawer', x: -1.75, z: 0.6 }, { id: 'accountant', x: 1.75, z: 0.6 }, { id: 'star', x: 3.3, z: 0.5 }],
-    cam: [0, 2.0, 10.5], target: [0, 1.0, 0],
+    key: 'tribunal', caption: 'Tribunal: the Inspector accuses the Junk Drawer · culprits: Junk Drawer, Accountant · the Landlord watches from the gallery',
+    cast: [
+      { id: 'judge', x: 0, z: -0.75 }, { id: 'landlord', x: 5.6, z: -0.5 },
+      { id: 'inspector', x: -3.4, z: 0.6 }, { id: 'junkDrawer', x: -1.85, z: 0.75 }, { id: 'accountant', x: 1.85, z: 0.75 }, { id: 'star', x: 3.4, z: 0.6 },
+    ],
+    cam: [0, 2.1, 11], target: [0, 1.0, -0.2],
+  },
+  judge: {
+    key: 'judge', caption: 'The Judge',
+    cast: [{ id: 'judge', x: 0, z: -0.4 }, { id: 'landlord', x: 2.9, z: -0.9 }, { id: 'clerk', x: -2.3, z: 0.5 }, { id: 'plumber', x: -3.9, z: 0.3 }],
+    cam: [0, 1.9, 9], target: [0, 1.0, -0.2],
   },
   pester: { key: 'pester', caption: 'Pester: three clicks in five seconds, then three more', cast: [{ id: 'bouncer', x: 0 }, { id: 'clerk', x: -1.9, z: -0.7 }, { id: 'doorman', x: 1.9, z: -0.7 }], cam: [0, 1.8, 6.8], target: [0, 0.95, 0] },
   roast: { key: 'roast', caption: 'Roast: the Accountant gets roasted', cast: [{ id: 'accountant', x: 0 }, { id: 'clerk', x: -1.9 }, { id: 'plumber', x: 1.9 }], cam: [0, 1.9, 7.6], target: [0, 0.95, 0] },
@@ -40,7 +48,10 @@ const STAGES: Record<string, Stage> = {
 };
 const STATS: ModuleStats = { totalLines: 250, fileCount: 4, todoCount: 1, maxNesting: 3, biggestFile: { path: 'board.ts', lines: 120 }, hasTests: true };
 const colorOf = (id: Archetype) => PALETTE[ARCHETYPES.indexOf(id) % PALETTE.length];
-const LANDLORD_EXTRAS = ['annoyed', 'rent', 'judgeIn', 'gavel', 'drawGun', 'fire', 'fireSoot', 'cannon', 'judgeOut', 'twerkRefuse', 'twerkNuke'];
+const EXTRAS: Partial<Record<Archetype, string[]>> = {
+  landlord: ['annoyed', 'rent', 'wince', 'twerkRefuse', 'twerkNuke'],
+  judge: ['order', 'order3', 'drawGun', 'fire', 'fireSoot', 'fireBig', 'holster'],
+};
 const SPICES: SpiceLevel[] = ['clean', 'unhinged', 'feral', 'nuclear'];
 
 const CHECKOUT = ((demoRepo as { files: { path: string; content: string }[] }).files.find((f) => f.path === 'orders/checkout.ts')?.content ?? '').split('\n');
@@ -76,14 +87,14 @@ function StageCamera({ stage }: { stage: Stage }) {
   const controls = useThree((s) => s.controls) as unknown as { target: THREE.Vector3; update: () => void } | null;
   const { width, height } = useThree((s) => s.size);
   useEffect(() => {
-    const xs = stage.cast.map((c) => c.x), half = (Math.max(...xs) - Math.min(...xs)) / 2 + 0.9;
+    const xs = stage.cast.map((c) => c.x), half = (Math.max(...xs) - Math.min(...xs)) / 2 + 0.9, mid = (Math.max(...xs) + Math.min(...xs)) / 2;
     const fit = half / (Math.tan((15 * Math.PI) / 180) * (width / height));
     const [x, y, z] = stage.cam, k = Math.max(1, fit / z);
-    camera.position.set(x, stage.target[1] + (y - stage.target[1]) * k, z * k);
+    camera.position.set(x + mid, stage.target[1] + (y - stage.target[1]) * k, z * k);
     if (controls) {
-      controls.target.set(...stage.target);
+      controls.target.set(stage.target[0] + mid, stage.target[1], stage.target[2]);
       controls.update();
-    } else camera.lookAt(...stage.target);
+    } else camera.lookAt(stage.target[0] + mid, stage.target[1], stage.target[2]);
   }, [stage, camera, controls, width, height]);
   return null;
 }
@@ -153,7 +164,7 @@ export default function AnimBoard() {
     if (name === 'bonks') {
       // Bonk the nearest neighbour on the stage (never the Landlord).
       const me = stage.cast.find((c) => c.id === sel)!;
-      const near = stage.cast.filter((c) => c.id !== sel && c.id !== 'landlord').sort((x, y) => Math.abs(x.x - me.x) - Math.abs(y.x - me.x))[0];
+      const near = stage.cast.filter((c) => c.id !== sel && c.id !== 'landlord' && c.id !== 'judge').sort((x, y) => Math.abs(x.x - me.x) - Math.abs(y.x - me.x))[0];
       return void (near && director.bonk(sel, near.id));
     }
     const id = ++req.current, ok = await a.play(name, { priority: 2 });
@@ -187,6 +198,31 @@ export default function AnimBoard() {
         useTavern.getState().setSpice(s);
         await SKITS.tribunal();
       }
+    },
+    judge: async () => {
+      await enter(STAGES.judge);
+      const J = getActor('judge')!;
+      setCaption('"Order": each bang cracks the bench more and the tok gets deeper; the Landlord notes the damage');
+      await J.play('order', { priority: 2, force: true });
+      await wait(0.5);
+      await J.play('order', { priority: 2, force: true });
+      await wait(0.7);
+      setCaption('Pestered: three clicks on the Judge');
+      for (let i = 0; i < 3; i++) {
+        director.click('judge');
+        await wait(0.3);
+      }
+      await wait(useTavern.getState().spice === 'clean' ? 4.2 : 6.0);
+      setCaption('Floats like a chess piece being moved');
+      await J.floatTo(J.world('root', [1.5, 0, 1.0]));
+      await wait(0.4);
+      await J.home();
+      if (useTavern.getState().spice === 'nuclear') {
+        setCaption('Nuclear twerk-off: the Judge shuts it down');
+        await director.twerkOff('clerk', 'plumber');
+        await wait(1.4);
+      }
+      await wait(0.6);
     },
     pester: async () => {
       await enter(STAGES.pester);
@@ -280,7 +316,7 @@ export default function AnimBoard() {
   }, [stage, ids]);
 
   const actor = getActor(sel);
-  const clipList = [...GAG_NAMES, ...SHARED_NAMES, ...(sel === 'landlord' ? LANDLORD_EXTRAS : [])];
+  const clipList = [...GAG_NAMES, ...SHARED_NAMES, ...(EXTRAS[sel] ?? [])];
   const isPerf = stage.key === 'perf';
 
   return (
@@ -313,9 +349,9 @@ export default function AnimBoard() {
           <section className="flex flex-col gap-1.5">
             <H>Skits {running && `(running: ${running})`}</H>
             <div className="flex flex-wrap gap-1.5">
-              {(['tribunal', 'tribunals', 'pester', 'roast', 'whatif', 'pointing', 'float'] as const).map((k) => (
+              {(['tribunal', 'tribunals', 'judge', 'pester', 'roast', 'whatif', 'pointing', 'float'] as const).map((k) => (
                 <button key={k} className={btn(running === k)} disabled={!!running} onClick={() => void runSkit(k)}>
-                  {{ tribunal: 'Tribunal', tribunals: 'Tribunal at every spice', pester: 'Pester', roast: 'Roast', whatif: 'What-if', pointing: 'Pointing at code', float: 'Float demo' }[k]}
+                  {{ tribunal: 'Tribunal', tribunals: 'Tribunal at every spice', judge: 'The Judge', pester: 'Pester', roast: 'Roast', whatif: 'What-if', pointing: 'Pointing at code', float: 'Float demo' }[k]}
                 </button>
               ))}
               <button className={btn(stage.key === 'all')} disabled={!!running} onClick={() => { setStage(STAGES.all); setCaption(''); }}>Free play (all 11)</button>

@@ -4,8 +4,9 @@ import * as THREE from 'three';
 import type { Archetype } from '@/lib/cast';
 import type { HandPose } from '../rig';
 import type { Actor } from './actor';
-import { spice } from './core';
-import { bumps, call, emit, expr, face, fx, hand, hide, hold, one, osc, plus, show, snd, stash, unstash, type ClipFn, type Cue, type Dims, type IKKey, type Key, type Track, type V3 } from './dsl';
+import { benchHooks, clock, spice } from './core';
+import { BENCH } from '../archetypes';
+import { bumps, call, emit, expr, face, fx, hand, hide, hold, one, osc, plus, show, snd, stash, unstash, type ClipDef, type ClipFn, type Cue, type Dims, type IKKey, type Key, type Track, type V3 } from './dsl';
 import { FX, shake, type FxSystem } from './fx';
 
 const z: V3 = [0, 0, 0];
@@ -894,67 +895,148 @@ export const GAGS: Partial<Record<Archetype, Record<string, ClipFn>>> = {
       ik: { L: [[0.9, null], [1.15, { r: [0.15, k.hip + 0.15, -0.2] }], [1.9, { r: [0.15, k.hip + 0.15, -0.2] }], [2.4, null]] },
       cues: [[0.2, face({ lid: 0.3 })], [0.6, snd('boomTss', 0.6)], [0.95, snd('crack')], [1.0, face({ brow: [0.3, -0.5], lid: 0.9, open: 0.3 })], [1.4, snd('groan', 0.6)]],
     }),
-    // ---------- the judge's kit ----------
-    /** The wig goes on, over the reading glasses. */
-    judgeIn: () => ({
-      dur: 1.1, beat: 0.5,
-      tracks: { 'torso.r': hold([-7, 0, 0], 0.3, 0.9, 0.2, 0.2), 'wig.s': one([0.25, [0.01, 0.01, 0.01], 'snap'], [0.45, [1.15, 1.15, 1.15], 'back'], [0.6, [1, 1, 1]]) },
-      cues: [[0.25, call((a) => a.showFor('wig', 40))], [0.28, snd('pop')], [0.3, fx((s, a) => FX.dust(s, a.world('wig'), 8))], [0.5, face({ lid: 0.38 })]],
-    }),
-    /** Bangs the key ring like a gavel. */
-    gavel: () => {
-      const up: V3 = [0.2, 0.45, 0.6], desk: V3 = [0.15, -0.35, 0.7];
+    /** In the gallery: winces at every crack in the bench, then writes it down (damage to the building). */
+    wince: () => {
+      const board: V3 = [-0.25, 0.95, 0.45], pen = add(board, [-0.08, 0.1, 0.09]);
       return {
-        dur: 1.7, beat: 0.6,
-        ik: { L: [[0, null], [0.3, up], [0.45, desk, 'in'], [0.75, up, 'out'], [0.9, desk, 'in'], [1.3, desk], [1.65, null]] },
-        tracks: { 'keyRing.r': bumps([0.45, 0.9], [0, 0, 25], 0.05, 0.25) },
-        cues: [[0.45, snd('gavel')], [0.9, snd('gavel')], [0.46, snd('jangle', 0.5)], [0.91, snd('jangle', 0.5)], [0.9, call(() => spice() >= 3 && shake(0.03, 0.15))], [0.2, face({ lid: 0.35, brow: [-0.15, 0.2] })]],
+        dur: 2.0, beat: 0.25,
+        tracks: {
+          'armL.p': hold([0, 0.045, 0], 0, 0.35, 0.06, 0.25, 'out'), 'armR.p': hold([0, 0.045, 0], 0, 0.35, 0.06, 0.25, 'out'),
+          'head.r': [[0, z], [0.06, [14, 0, 0], 'out'], [0.4, z], [0.6, [12, -24, 0]], [1.6, [12, -24, 0]], [1.95, z]],
+          'torso.r': [[0, z], [0.06, [-6, 0, 0], 'out'], [0.4, z]],
+          'handL.p': osc(7, [0.012, 0.008, 0], 0.75, 1.55),
+        },
+        ik: { R: [[0.2, null], [0.55, { r: board }], [1.6, { r: board }], [1.95, null]], L: [[0.3, null], [0.65, { r: pen }], [1.6, { r: pen }], [1.95, null]] },
+        cues: [[0, face({ lid: 0.05, brow: [0.25, -0.45] })], [0.4, face({ lid: 0.35, look: [-0.3, -0.3] })], [0.7, snd('scribble', 0.7)], [1.15, snd('scribble', 0.6)]],
       };
     },
-    /** Puts the clipboard away and pulls the toy blunderbuss. */
+  },
+  // ---------- 12. Judge: its head is a gavel ----------
+  judge: {
+    /** Drums its fingers on the bench; then taps its own head to check it's still there. */
+    idle: (k) => {
+      const drums = [0.25, 0.37, 0.49, 0.61, 1.05, 1.17, 1.29, 1.41];
+      const tapAt = { r: [k.head[0] - 0.3, k.head[1] - 0.02, k.head[2] + 0.08] as V3 };
+      return {
+        dur: 3.0, beat: 2.15,
+        tracks: { 'handL.r': bumps(drums, [-22, 0, 0], 0.04, 0.07), 'handR.r': bumps(drums.map((t) => t + 0.06), [-18, 0, 0], 0.04, 0.07), 'neck.r': [[1.9, z], [2.15, [0, 0, 6]], [2.5, z]] },
+        ik: { R: [[1.7, null], [2.05, tapAt], [2.15, { r: add(tapAt.r, [0.04, 0, 0]) }, 'in'], [2.27, tapAt, 'out'], [2.37, { r: add(tapAt.r, [0.04, 0, 0]) }, 'in'], [2.5, tapAt, 'out'], [2.95, null]] },
+        cues: [[0.2, hand('L', 'palm')], [0.2, hand('R', 'palm')], [1.6, hand('L', 'mitten')], [1.6, hand('R', 'mitten')], ...at(drums, () => snd('tick', 0.4)), [2.15, snd('tok', 0.35)], [2.37, snd('tok', 0.35)], [2.0, face({ look: [-0.35, 0.25] })], [2.6, face({ look: [0, 0] })]],
+      };
+    },
+    /** "Order": rears back, slams its head on the bench, a 400 ms frozen beat, dizzy stars, recovers straight-faced. */
+    order: (k) => orderClip(k, [0.42]),
+    /** Three bangs in a row (the verdict at feral and nuclear): each crack bigger, each tok deeper. */
+    order3: (k) => orderClip(k, [0.42, 1.12, 1.82]),
+    /** One satisfied hammer nod. */
+    happy: () => ({ dur: 1.2, beat: 0.4, tracks: { 'neck.r': [[0, z], [0.25, [-10, 0, 0]], [0.4, [26, 0, 0], 'in'], [0.6, [-4, 0, 0], 'out'], [0.9, z]] }, cues: [[0.4, snd('tok', 0.4)], [0.1, expr('smug')]] }),
+    /** Perfectly stiff and upright, robe hanging straight: a chess piece being moved. */
+    floats: () => ({ dur: 1, loop: true, tracks: {} }),
+    /** Floats over and strikes with the end of its head, like a gavel. */
+    bonks: () => ({
+      dur: 1.3, beat: 0.45,
+      tracks: { 'torso.r': [[0, z], [0.3, [-8, 0, 6]], [0.45, [14, 0, -8], 'in'], [0.8, [14, 0, -8]], [1.2, z]], 'neck.r': [[0, z], [0.3, [6, 0, 24]], [0.45, [-10, 0, -70], 'in'], [0.8, [-10, 0, -70]], [1.2, z]] },
+      cues: [[0.45, emit('hit')], [0.45, snd('tok')], [0.3, face({ lid: 0.35 })]],
+    }),
+    /** Reaches under the robe for a chunky toy gun. */
     drawGun: () => ({
-      dur: 0.9, beat: 0.6,
-      ik: { R: [[0, null], [0.35, [-0.1, 0.1, 0.6]], [0.6, [0.05, 0.12, 0.98], 'back'], [0.9, [0.05, 0.12, 0.98]]] },
-      cues: [[0.3, call((a) => (a.stashFor('complaints', 14), a.showFor('blunderbuss', 14)))], [0.32, snd('whoosh')], [0.35, snd('click', 0.6)]],
+      dur: 0.95, beat: 0.6,
+      ik: { R: [[0, null], [0.3, { r: [-0.06, 0.74, 0.27] }], [0.42, { r: [-0.06, 0.72, 0.26] }], [0.75, [0.05, 0.12, 0.98], 'back'], [0.95, [0.05, 0.12, 0.98]]] },
+      cues: [[0.38, call((a) => a.showFor('toyGun', 16))], [0.4, snd('whoosh', 0.6)], [0.45, snd('click', 0.6)], [0.3, face({ lid: 0.35 })]],
     }),
     /** Unhinged: the BANG flag. */
     fire: () => ({
       dur: 1.0, beat: 0.2,
-      tracks: { 'torso.r': [[0, z], [0.05, [-10, 0, 0], 'out'], [0.4, z]], 'root.p': [[0, z], [0.05, [0, 0, -0.05], 'out'], [0.4, z]], 'bangFlag.s': one([0, [1, 0.05, 1]], [0.12, [1, 1.25, 1], 'out'], [0.3, [1, 1, 1]]) },
-      cues: [[0, snd('bang')], [0, call((a) => a.showFor('bangFlag', 2.5))], [0, emit('fire')], [0.02, fx((s, a) => FX.smoke(s, a.world('blunderbuss', [0, -0.5, 0]), 5, 0.06))]],
+      tracks: { 'torso.r': [[0, z], [0.05, [-8, 0, 0], 'out'], [0.4, z]], 'bangFlag.s': one([0, [1, 0.05, 1]], [0.12, [1, 1.25, 1], 'out'], [0.3, [1, 1, 1]]) },
+      cues: [[0, snd('bang')], [0, call((a) => a.showFor('bangFlag', 2.5))], [0, emit('fire')], [0.02, fx((s, a) => FX.smoke(s, a.world('toyGun', [0, -0.4, 0.06]), 5, 0.05))]],
     }),
     /** Feral: a soot blast (the director sends the cloud to the culprits). */
     fireSoot: () => ({
       dur: 1.0, beat: 0.2,
-      tracks: { 'torso.r': [[0, z], [0.05, [-14, 0, 0], 'out'], [0.45, z]], 'root.p': [[0, z], [0.05, [0, 0, -0.08], 'out'], [0.45, z]] },
-      cues: [[0, snd('bang')], [0.02, snd('whoosh')], [0, emit('fire')], [0.02, fx((s, a) => FX.smoke(s, a.world('blunderbuss', [0, -0.5, 0]), 14, 0.1, ['#5a524a', '#3d3833', '#6e655c']))]],
+      tracks: { 'torso.r': [[0, z], [0.05, [-12, 0, 0], 'out'], [0.45, z]] },
+      cues: [[0, snd('bang')], [0.02, snd('whoosh')], [0, emit('fire')], [0.02, fx((s, a) => FX.smoke(s, a.world('toyGun', [0, -0.4, 0.06]), 14, 0.09, ['#5a524a', '#3d3833', '#6e655c']))]],
     }),
-    /** Nuclear: a cartoon cannon, a lit fuse, BOOM. */
-    cannon: (k) => {
-      const fuse: V3 = add(k.at('cannon'), [-0.26, 0.26, 0]);
-      return {
-        dur: 2.6, beat: 1.5,
-        tracks: { 'cannon.p': [[0.2, [0, -0.3, 0]], [0.45, z, 'back'], [1.5, z], [1.55, [0.15, 0, 0], 'out'], [2.0, z]], 'cannon.r': [[1.5, z], [1.55, [0, 0, -6], 'out'], [2.0, z]] },
-        ik: { L: [[0.5, null], [0.9, { r: fuse }], [1.35, { r: fuse }], [1.7, null]] },
-        cues: [
-          [0.2, call((a) => a.showFor('cannon', 5))], [0.2, snd('pop')], [0.25, fx((s, a) => FX.dust(s, a.world('cannon'), 10))], [0.95, snd('hiss', 0.5)],
-          ...at(range(0.95, 1.45, 0.1), () => fx((s, a) => FX.sparkle(s, a.world('cannon', [-0.26, 0.26, 0])))),
-          [1.5, snd('cannon')], [1.5, emit('fire')], [1.5, call(() => shake(0.1, 0.6))], [1.5, fx((s, a) => FX.smoke(s, a.world('cannon', [0.4, 0.5, 0]), 18, 0.18, ['#5a524a', '#8a8178', '#3d3833']))],
-        ],
-      };
-    },
-    /** Wig off, everything away. */
-    judgeOut: () => ({
-      dur: 1.0, beat: 0.4,
-      tracks: { 'torso.r': hold([5, 0, 0], 0.3, 0.7) },
-      cues: [[0.3, call((a) => { for (const t of ['wig', 'blunderbuss', 'bangFlag', 'cannon']) a.showFor(t, 0); a.stashFor('complaints', 0); })], [0.3, snd('pop', 0.6)], [0.3, fx((s, a) => FX.dust(s, a.world('head', [0, 0.2, 0]), 6))], [0.5, face({ lid: 0.3 })]],
+    /**
+     * Nuclear: the toy grows absurdly; the shot's recoil throws the Judge backwards off its bench (it vanishes
+     * behind it), and it pops back up later with a straight face.
+     */
+    fireBig: () => ({
+      dur: 4.6, beat: 0.75,
+      tracks: {
+        'toyGun.s': one([0.1, [1, 1, 1]], [0.5, [3.4, 3.4, 3.4], 'back'], [3.6, [3.4, 3.4, 3.4]], [3.61, [1, 1, 1], 'snap']),
+        'root.p': [[0, z], [0.85, z], [1.15, [0, 0.45, -1.1], 'out'], [1.5, [0, -0.15, -1.45], 'in'], [3.6, [0, -0.15, -1.45]], [3.61, [0, -1.0, 0], 'snap'], [4.0, [0, 0.12, 0], 'out'], [4.25, z, 'in']],
+        'root.r': [[0, z], [0.85, z], [1.15, [-70, 0, 0], 'out'], [1.5, [-95, 0, 0], 'in'], [3.6, [-95, 0, 0]], [3.61, z, 'snap']],
+      },
+      cues: [
+        [0.15, snd('boing')], [0.55, face({ lid: 0.3, look: [0, 0] })], [0.85, snd('cannon')], [0.85, emit('fire')], [0.85, call(() => shake(0.1, 0.6))],
+        [0.86, fx((s, a) => FX.smoke(s, a.world('toyGun', [0, -0.4, 0.06]), 18, 0.18, ['#5a524a', '#8a8178', '#3d3833']))], [0.9, expr('horrified')], [1.5, snd('thud')],
+        [3.6, call((a) => a.showFor('toyGun', 0))], [3.6, expr('deadpan')], [4.0, snd('pop', 0.6)],
+      ],
+    }),
+    /** Puts the toy away. */
+    holster: () => ({
+      dur: 0.8, beat: 0.4,
+      ik: { R: [[0, [0.05, 0.12, 0.98]], [0.35, { r: [-0.06, 0.74, 0.27] }], [0.75, null]] },
+      cues: [[0.4, call((a) => (a.showFor('toyGun', 0), a.showFor('bangFlag', 0)))], [0.4, snd('click', 0.5)]],
     }),
   },
 };
 
+/** The bench crack, the tok (deeper each bang in a hearing), the gallery's reaction. */
+const benchBang = call((a) => {
+  const m = a.memo;
+  if (clock.now - (m.lastBang ?? -1e9) > 20) m.bangs = 0; // a quiet spell ends the hearing
+  m.bangs = Math.min(6, (m.bangs ?? 0) + 1);
+  m.lastBang = clock.now;
+  for (let i = 1; i <= Math.min(3, m.bangs); i++) a.showFor(`crack${i}`, 600);
+  a.sound('tok', 0, 1, Math.max(0.42, 0.8 ** (m.bangs - 1)));
+  a.fx((s) => {
+    const p = a.world('bench', BENCH.hit);
+    FX.dust(s, p, 6);
+    FX.speed(s, p, 6, 0.2);
+  });
+  if (spice() >= 3) shake(0.03, 0.15);
+  a.emit('bang');
+  benchHooks.forEach((fn) => fn(a));
+});
+/** A new hearing: no cracks, the first tok at full pitch. */
+export function newHearing(a: Actor) {
+  a.memo.bangs = 0;
+  for (const c of ['crack1', 'crack2', 'crack3']) a.showFor(c, 0);
+}
+/**
+ * The head bang: rear back, slam the end of the gavel head on the bench (hands braced on it), hold 400 ms,
+ * lift dazed with stars, recover straight-faced. One slam per time in `hits`.
+ */
+function orderClip(k: Dims, hits: number[]): ClipDef {
+  const up: [V3, V3] = [[-10, 0, 0], [8, 0, 18]], down: [V3, V3] = [[36, 0, 0], [-36, 0, -60]];
+  const torso: Key[] = [[0, z], [hits[0] - 0.12, up[0]]], neck: Key[] = [[0, z], [hits[0] - 0.12, up[1]]];
+  hits.forEach((t, i) => {
+    if (i) {
+      torso.push([t - 0.12, up[0], 'out']);
+      neck.push([t - 0.12, up[1], 'out']);
+    }
+    torso.push([t, down[0], 'in'], [t + 0.4, down[0]]);
+    neck.push([t, down[1], 'in'], [t + 0.4, down[1]]);
+  });
+  const end = hits[hits.length - 1] + 0.4;
+  torso.push([end + 0.35, [-4, 0, 0], 'out'], [end + 0.9, z]);
+  neck.push([end + 0.35, [0, 0, 10], 'out'], [end + 0.6, [0, 0, -6]], [end + 0.85, [0, 0, 3]], [end + 1.05, z]);
+  const brace = (s: 'L' | 'R'): IKKey[] => [[0, null], [hits[0] - 0.12, { r: k.at(`hand${s}`) }], [end + 0.6, { r: k.at(`hand${s}`) }], [end + 0.95, null]];
+  return {
+    dur: end + 1.25, beat: hits[0] + 0.2,
+    tracks: { 'torso.r': torso, 'neck.r': neck, 'wig.r': plus([[0, z]], osc(9, [0, 0, 8], hits[0], end + 0.5, 0.05)) },
+    ik: { L: brace('L'), R: brace('R') },
+    cues: [
+      [0.05, face({ lid: 0.3, brow: [-0.3, 0.35] })], ...hits.map((t): [number, Cue] => [t, benchBang]), ...hits.map((t): [number, Cue] => [t, emit('hit')]),
+      [end, expr('dazed')], [end + 0.02, fx((s, a) => FX.stars(s, a.part('head')!, 1.3, 0.3))], [end + 1.0, expr('deadpan')],
+    ],
+  };
+}
+
 // ---------- pointing ----------
 export type PointHow = {
-  kind: 'arm' | 'neck' | 'spring' | 'spot' | 'bookmark';
+  kind: 'arm' | 'neck' | 'spring' | 'spot' | 'bookmark' | 'gavel';
   side: 'L' | 'R';
   pose?: HandPose;
   /** Lock the elbow (the Bouncer's stiff arm). */
@@ -1085,4 +1167,18 @@ export const POINTER: Record<Archetype, PointHow> = {
     end: (a) => a.fx((s) => FX.sparkle(s, a.world('flyBookmark'))),
   },
   landlord: { kind: 'arm', side: 'L', start: (a) => a.sound('jangle'), frame: (a, rig, tg, w, t) => a.part('keyRing')?.rotateZ(0.3 * Math.sin(t * PI * 2 * 3) * w) },
+  judge: {
+    kind: 'gavel', side: 'R',
+    /** Leans its whole gavel head toward the line (the handle telescopes as far as it must) and taps it once. */
+    frame: (a, rig, tg, w, t) => {
+      rig.torso.rotateX(0.22 * w);
+      const base = a.world('neck'), d = _b.copy(tg).sub(base);
+      const tap = t > 0.55 && t < 0.78 ? Math.sin(((t - 0.55) / 0.23) * PI) : 0;
+      const s = 1 + Math.min(3.5, Math.max(0, d.length() - 0.5 + 0.06 * tap) / 0.33) * w;
+      aimAxis(rig.neck, UPV, d, w);
+      a.part('gavelHandle')?.scale.multiply(_a.set(1, s, 1));
+      rig.head.position.y += (s - 1) * 0.33;
+      once(a, 'tap', t, 0.66, () => a.sound('tok', 0, 0.6, 1.25));
+    },
+  },
 };
