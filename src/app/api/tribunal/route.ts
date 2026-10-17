@@ -1,8 +1,8 @@
 import { rateLimited } from '@/lib/gemini';
-import { llmJSON } from '@/lib/llm';
+import { llmJSON, llmStream, type Timing } from '@/lib/llm';
 import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
-import { IDEMPOTENCY_SUGGESTION, isTimeoutOnlyFix, SYMPTOM_FIX_NOTE } from '@/lib/verdict';
+import { IDEMPOTENCY_SUGGESTION, isTimeoutOnlyFix, SYMPTOM_FIX_NOTE, TurnScanner } from '@/lib/verdict';
 import type { Citation } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -28,16 +28,18 @@ const S = { type: 'string' };
 const CITE = obj({ path: S, startLine: { type: 'integer' }, endLine: { type: 'integer' } });
 
 const SUSPECTS_SCHEMA = obj({ suspects: { type: 'array', items: obj({ moduleId: S, reason: S }) } });
-const TRIAL_SCHEMA = obj({
-  turns: { type: 'array', items: obj({ moduleId: S, text: S, accuses: { type: 'string', description: 'moduleId being accused, or "" if none' } }) },
-  verdict: obj({
+const VERDICT = obj({
     culprits: { type: 'array', items: S },
     rootCause: S,
     evidence: { type: 'array', items: CITE },
     fix: obj({ path: S, diff: { type: 'string', description: 'Small unified diff (---/+++/@@ lines, then -/+ lines).' } }),
     judgeLine: S,
-  }),
+  });
+const TRIAL_SCHEMA = obj({
+  turns: { type: 'array', items: obj({ moduleId: S, text: S, accuses: { type: 'string', description: 'moduleId being accused, or "" if none' } }) },
+  verdict: VERDICT,
 });
+const VERDICT_SCHEMA = obj({ verdict: VERDICT });
 
 
 type InSuspect = { id: string; title: string; personality: string; files: { path: string; content: string; truncated?: boolean }[]; allPaths: string[] };
@@ -64,7 +66,10 @@ export async function POST(req: Request) {
         files: arr<string>(m?.filePaths, 60).map((p) => str(p, 200)),
       }));
       const ids = modules.map((m) => m.moduleId);
+      const t0 = Date.now();
+      const timings: Timing[] = [];
       const out = await llmJSON<{ suspects: { moduleId: string; reason: string }[] }>('tribunal-suspects', {
+        timings,
         system: 'You triage bug reports for a codebase. Pick the 2-4 modules most likely involved, including modules whose interaction could cause the bug (callers, callees, timeouts, retries, shared state). Use only the moduleId values given.',
         prompt: `Bug: ${bug}\n\nModules:\n${JSON.stringify(modules)}`,
         schema: SUSPECTS_SCHEMA,
@@ -73,7 +78,8 @@ export async function POST(req: Request) {
       // Always a trial: pad with the biggest remaining modules (client sends them sorted by size).
       for (const id of ids) if (suspects.length < 2 && !suspects.includes(id)) suspects.push(id);
       suspects = suspects.slice(0, 4);
-      return Response.json({ suspects });
+      console.info('[tribunal] suspects timings', JSON.stringify({ totalMs: Date.now() - t0, calls: timings }));
+      return Response.json({ suspects, timings }); // timings: diagnostics only
     }
 
     // --- trial
@@ -137,50 +143,97 @@ ${levelReminder(b.spice)}`;
 
     type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string } };
     const started = Date.now();
-    let out = await llmJSON<Out>('tribunal-trial', { system, prompt, schema: TRIAL_SCHEMA, timeoutMs: 32_000 });
-    // Fix quality, enforced: a timeout-only fix for a retry/duplicate bug gets one regeneration with a note.
-    const hearing = (o: Out) =>
-      [o?.verdict?.rootCause, ...(o?.turns ?? []).map((t) => t?.text), ...(o?.verdict?.evidence ?? []).map((c) => c?.path)].join(' ');
-    let symptomOnly = isTimeoutOnlyFix(str(out?.verdict?.fix?.diff, 4000), hearing(out));
-    let fixCheck: 'ok' | 'regenerated' | 'kept-timeout-fix' = 'ok';
-    if (symptomOnly) {
-      const left = 56_000 - (Date.now() - started); // stay inside maxDuration
-      console.warn(`[tribunal] timeout-only fix rejected; ${left > 12_000 ? 'regenerating once' : 'no time left to regenerate'}`);
-      if (left > 12_000) {
-        try {
-          const again = await llmJSON<Out>('tribunal-trial-retry', { system, prompt: `${prompt}\n\n${SYMPTOM_FIX_NOTE}`, schema: TRIAL_SCHEMA, timeoutMs: left });
-          if (again?.verdict && Array.isArray(again.turns)) {
-            out = again;
-            fixCheck = 'regenerated';
-            symptomOnly = isTimeoutOnlyFix(str(again.verdict.fix?.diff, 4000), hearing(again));
-          }
-        } catch (err) {
-          console.error('[tribunal] regeneration failed, keeping the first verdict:', err);
-        }
-      }
-    }
-
-    const turns = arr<Out['turns'][number]>(out?.turns, 8)
-      .filter((t) => ids.includes(t?.moduleId) && str(t?.text, 10))
-      .map((t) => ({ moduleId: t.moduleId, text: clean(str(t.text, 600), t.moduleId), accuses: ids.includes(t.accuses) && t.accuses !== t.moduleId ? t.accuses : undefined }));
-    const v = out?.verdict;
-    const verdict = {
-      culprits: [...new Set(arr<string>(v?.culprits, 4).filter((id) => ids.includes(id)))],
-      rootCause: str(v?.rootCause, 600),
-      evidence: [
-        ...arr<Citation>(v?.evidence, 10),
-        ...extractCitations(str(v?.rootCause, 600)), // the model sometimes cites inline instead
-      ].filter((c) => c && ok({ path: str(c.path, 300), startLine: Number(c.startLine), endLine: Number(c.endLine) })),
-      fix: { path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) },
-      judgeLine: str(v?.judgeLine, 300),
+    const timings: Timing[] = [];
+    // Call 2 streams schema-enforced JSON; provider errors throw here (before anything is sent).
+    const llm = await llmStream('tribunal-trial', { system, messages: [{ role: 'user', text: prompt }], schema: TRIAL_SCHEMA, maxTokens: 6000, timeoutMs: 45_000, timings });
+    const cleanTurn = (t: unknown) => {
+      const x = t as Out['turns'][number];
+      if (!x || !ids.includes(x.moduleId) || !str(x.text, 10)) return null;
+      return { moduleId: x.moduleId, text: clean(str(x.text, 600), x.moduleId), accuses: ids.includes(x.accuses) && x.accuses !== x.moduleId ? x.accuses : undefined };
     };
-    // Still a symptom fix after the retry: keep it, but say what the real fix is.
-    if (symptomOnly) {
-      verdict.rootCause += IDEMPOTENCY_SUGGESTION;
-      fixCheck = 'kept-timeout-fix';
-    }
-    if (turns.length < 2 || !verdict.culprits.length) throw new Error('trial output unusable');
-    return Response.json({ suspects: ids, turns, verdict, fixCheck }); // fixCheck: diagnostics only
+
+    // NDJSON to the client: {type:'turn'} per turn the moment it closes, then {type:'verdict'}, then {type:'timings'}.
+    const enc = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (o: object) => controller.enqueue(enc.encode(JSON.stringify(o) + '\n'));
+        const scanner = new TurnScanner();
+        let full = '';
+        let sent = 0;
+        let firstTurnMs: number | undefined;
+        try {
+          const reader = llm.getReader();
+          const dec = new TextDecoder();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = dec.decode(value, { stream: true });
+            full += text;
+            for (const raw of scanner.push(text)) {
+              const turn = cleanTurn(raw);
+              if (!turn || sent >= 8) continue;
+              firstTurnMs ??= Date.now() - started;
+              send({ type: 'turn', turn });
+              sent++;
+            }
+          }
+          const out = JSON.parse(full) as Out;
+          const hearing = [out?.verdict?.rootCause, ...(out?.turns ?? []).map((t) => t?.text), ...(out?.verdict?.evidence ?? []).map((c) => c?.path)].join(' ');
+          let v = out?.verdict;
+          // Fix quality, enforced: a timeout-only fix for a retry/duplicate bug gets one verdict regeneration.
+          let symptomOnly = isTimeoutOnlyFix(str(v?.fix?.diff, 4000), hearing);
+          let fixCheck: 'ok' | 'regenerated' | 'kept-timeout-fix' = 'ok';
+          if (symptomOnly) {
+            const left = 56_000 - (Date.now() - started); // stay inside maxDuration
+            console.warn(`[tribunal] timeout-only fix rejected; ${left > 10_000 ? 'regenerating the verdict once' : 'no time left to regenerate'}`);
+            if (left > 10_000) {
+              try {
+                const turnsText = (out?.turns ?? []).map((t) => `${t?.moduleId}: ${t?.text}`).join('\n');
+                const again = await llmJSON<{ verdict: Out['verdict'] }>('tribunal-verdict-retry', {
+                  system,
+                  prompt: `${prompt}\n\nThe hearing so far:\n${turnsText}\n\n${SYMPTOM_FIX_NOTE} Return only the verdict.`,
+                  schema: VERDICT_SCHEMA,
+                  timeoutMs: left,
+                  timings,
+                });
+                if (again?.verdict) {
+                  v = again.verdict;
+                  fixCheck = 'regenerated';
+                  symptomOnly = isTimeoutOnlyFix(str(v.fix?.diff, 4000), hearing);
+                }
+              } catch (err) {
+                console.error('[tribunal] verdict regeneration failed, keeping the first verdict:', err);
+              }
+            }
+          }
+          const verdict = {
+            culprits: [...new Set(arr<string>(v?.culprits, 4).filter((id) => ids.includes(id)))],
+            rootCause: str(v?.rootCause, 600),
+            evidence: [
+              ...arr<Citation>(v?.evidence, 10),
+              ...extractCitations(str(v?.rootCause, 600)), // the model sometimes cites inline instead
+            ].filter((c) => c && ok({ path: str(c.path, 300), startLine: Number(c.startLine), endLine: Number(c.endLine) })),
+            fix: { path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) },
+            judgeLine: str(v?.judgeLine, 300),
+          };
+          // Still a symptom fix after the retry: keep it, but say what the real fix is.
+          if (symptomOnly) {
+            verdict.rootCause += IDEMPOTENCY_SUGGESTION;
+            fixCheck = 'kept-timeout-fix';
+          }
+          if (sent < 2 || !verdict.culprits.length) throw new Error('trial output unusable');
+          send({ type: 'verdict', verdict, fixCheck }); // fixCheck: diagnostics only
+        } catch (err) {
+          console.error('[tribunal] trial failed mid-stream:', err);
+          send({ type: 'error' });
+        }
+        const summary = { firstTurnMs, totalMs: Date.now() - started, calls: timings };
+        console.info('[tribunal] trial timings', JSON.stringify({ suspects: ids, ...summary }));
+        send({ type: 'timings', ...summary });
+        controller.close();
+      },
+    });
+    return new Response(body, { headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('[tribunal] failed:', err);
     return Response.json({ error: 'tribunal failed' }, { status: 502 });

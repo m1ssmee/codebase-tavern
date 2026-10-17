@@ -8,6 +8,8 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'; // verified liv
 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
 export type Msg = { role: 'user' | 'assistant'; text: string };
+/** One provider attempt: who, how long to the first chunk (streams) and in total. Failed attempts are recorded too. */
+export type Timing = { label: string; provider: string; ok: boolean; ms: number; firstChunkMs?: number; totalMs?: number; error?: string };
 
 function chain(): Provider[] {
   const openai: Provider = { name: `openai:${OPENAI_MODEL}`, kind: 'openai', model: OPENAI_MODEL };
@@ -34,32 +36,55 @@ class Blocked extends Error {
   }
 }
 
-async function run<T>(label: string, fn: (p: Provider) => Promise<T>): Promise<T> {
+async function run<T>(label: string, fn: (p: Provider, t: Timing) => Promise<T>, timings?: Timing[]): Promise<T> {
   let last: unknown;
   for (const p of chain()) {
+    const t0 = Date.now();
+    const t: Timing = { label, provider: p.name, ok: false, ms: 0 };
+    timings?.push(t);
     try {
-      const out = await fn(p);
-      console.info(`[llm] ${label} served by ${p.name}`);
+      const out = await fn(p, t);
+      t.ok = true;
+      t.ms = Date.now() - t0;
+      console.info(`[llm] ${label} served by ${p.name} in ${t.ms}ms`);
       return out;
     } catch (err) {
       last = err;
+      t.ms = Date.now() - t0;
+      t.error = String(err).slice(0, 120);
       if (!fallsThrough(err)) break;
-      console.warn(`[llm] ${label}: ${p.name} unavailable, trying next:`, String(err).slice(0, 140));
+      console.warn(`[llm] ${label}: ${p.name} unavailable after ${t.ms}ms, trying next:`, t.error);
     }
   }
   throw last;
 }
 
-/** Streams plain text. Awaits the first response so provider errors throw here, not mid-stream. */
-export function llmStream(label: string, opts: { system: string; messages: Msg[]; maxTokens?: number }): Promise<ReadableStream<Uint8Array>> {
+/**
+ * Streams text (or, with `schema`, schema-enforced JSON text). Awaits the first chunk so provider errors
+ * throw here, not mid-stream.
+ */
+export function llmStream(
+  label: string,
+  opts: { system: string; messages: Msg[]; maxTokens?: number; schema?: object; timeoutMs?: number; timings?: Timing[] },
+): Promise<ReadableStream<Uint8Array>> {
   const enc = new TextEncoder();
-  return run(label, async (p) => {
+  return run(
+    label,
+    async (p, timing) => {
+    const t0 = Date.now();
     let chunks: AsyncIterable<string>;
     if (p.kind === 'gemini') {
       const res = await gemini().models.generateContentStream({
         model: p.model,
         contents: opts.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })),
-        config: { ...FAST, systemInstruction: opts.system, temperature: 0.8, maxOutputTokens: opts.maxTokens ?? 2048 },
+        config: {
+          ...FAST,
+          systemInstruction: opts.system,
+          temperature: 0.8,
+          maxOutputTokens: opts.maxTokens ?? 2048,
+          ...(opts.schema && { responseMimeType: 'application/json', responseJsonSchema: opts.schema }),
+          ...(opts.timeoutMs && { abortSignal: AbortSignal.timeout(opts.timeoutMs) }),
+        },
       });
       chunks = (async function* () {
         for await (const c of res) {
@@ -69,13 +94,19 @@ export function llmStream(label: string, opts: { system: string; messages: Msg[]
         }
       })();
     } else {
-      const res = await openai().chat.completions.create({
-        model: p.model,
-        reasoning_effort: 'low',
-        stream: true,
-        max_completion_tokens: opts.maxTokens ?? 2048,
-        messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
-      });
+      const res = await openai().chat.completions.create(
+        {
+          model: p.model,
+          reasoning_effort: 'low',
+          stream: true,
+          max_completion_tokens: opts.maxTokens ?? 2048,
+          messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
+          ...(opts.schema && {
+            response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
+          }),
+        },
+        opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined,
+      );
       chunks = (async function* () {
         for await (const c of res) {
           const ch = c.choices[0];
@@ -89,6 +120,7 @@ export function llmStream(label: string, opts: { system: string; messages: Msg[]
     const it = chunks[Symbol.asyncIterator]();
     const first = await it.next();
     if (first.done) throw new Blocked(p.name, 'no text');
+    timing.firstChunkMs = Date.now() - t0;
     return new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
@@ -97,17 +129,21 @@ export function llmStream(label: string, opts: { system: string; messages: Msg[]
         } catch (err) {
           console.error(`[llm] ${label} stream failed:`, err);
         }
+        timing.totalMs = Date.now() - t0;
+        console.info(`[llm] ${label} stream from ${p.name}: first chunk ${timing.firstChunkMs}ms, total ${timing.totalMs}ms`);
         controller.close();
       },
     });
-  });
+    },
+    opts.timings,
+  );
 }
 
 /**
  * Structured JSON. `schema` must be OpenAI-strict compatible: top-level object, every object has
  * additionalProperties:false and lists all properties in required. Gemini accepts the same schema.
  */
-export function llmJSON<T>(label: string, opts: { system: string; prompt: string; schema: object; timeoutMs?: number }): Promise<T> {
+export function llmJSON<T>(label: string, opts: { system: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[] }): Promise<T> {
   const timeout = opts.timeoutMs ?? 40_000;
   return run(label, async (p) => {
     if (p.kind === 'gemini') {
@@ -142,7 +178,7 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
     const ch = res.choices[0];
     if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
     return parseJSON<T>(ch.message.content, p.name);
-  });
+  }, opts.timings);
 }
 
 function parseJSON<T>(text: string, provider: string): T {

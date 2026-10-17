@@ -101,3 +101,21 @@ assert.equal(isTimeoutOnlyFix(idem, 'orders retries the charge'), false);
 assert.equal(isTimeoutOnlyFix(both, 'charged twice'), false); // has a real fix too
 assert.equal(isTimeoutOnlyFix('+// raise the timeout\n+// later', 'retry'), false); // comment-only diff is not a timeout bump
 console.log('verdict checks ok');
+
+// Streaming turn scanner: same turns, in order, however the JSON is chunked
+const { TurnScanner } = await import('../src/lib/verdict.ts');
+const doc = JSON.stringify({
+  turns: [
+    { moduleId: 'orders', text: 'I retry {twice} and say "sorry" \\ never', accuses: 'gateway' },
+    { moduleId: 'gateway', text: 'Braces } and ] in text are fine [gateway/config.ts:16].', accuses: '' },
+    { moduleId: 'payments', text: 'Last one.', accuses: 'orders' },
+  ],
+  verdict: { culprits: ['orders'], rootCause: 'x', evidence: [], fix: { path: 'a', diff: '' }, judgeLine: 'y' },
+});
+for (const size of [1, 3, 7, 50, doc.length]) {
+  const sc = new TurnScanner();
+  const got = [];
+  for (let i = 0; i < doc.length; i += size) got.push(...sc.push(doc.slice(i, i + size)));
+  assert.deepEqual(got, JSON.parse(doc).turns, `chunk size ${size}`);
+}
+console.log('turn scanner checks ok');

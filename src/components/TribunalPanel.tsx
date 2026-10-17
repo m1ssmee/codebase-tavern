@@ -5,7 +5,8 @@ import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation, parseCitations } from '@/lib/citations';
 import { pickContext, CONTEXT_BUDGET } from '@/lib/context';
 import { airhorn, blipText, unlockAudio } from '@/lib/blips';
-import type { Citation } from '@/lib/types';
+import type { Citation, SpiceLevel } from '@/lib/types';
+import { isCode } from '@/lib/analyze';
 import demoTribunal from '@/data/demoTribunal.json';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
@@ -19,11 +20,50 @@ type Phase = 'input' | 'picking' | 'hearing' | 'playing' | 'verdict' | 'error';
 const SUGGESTION = 'Customers are being charged twice';
 const DEMO = demoTribunal as unknown as Result;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const DEMO_FIRST_TURN_LIMIT_MS = 20_000;
+const SLOW_NOTE = 'Replaying a saved hearing (live AI is slow right now).';
+const DOWN_NOTE = 'Replaying a saved hearing (live AI is unavailable right now).';
 
-async function post<T>(body: object): Promise<T> {
-  const res = await fetch('/api/tribunal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+async function post<T>(body: object, signal?: AbortSignal): Promise<T> {
+  const res = await fetch('/api/tribunal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
   if (!res.ok) throw new Error(`tribunal ${res.status}`);
   return res.json();
+}
+
+/** Waiting-room lines while the court reads the code: real file names, tone set by the spice level. */
+function courtLines(suspects: { name: string; files: string[] }[], spice: SpiceLevel): string[] {
+  const T: Record<SpiceLevel, ((m: string, f: string, o: string) => string)[]> = {
+    clean: [
+      (m, f) => `The court is reading ${f}.`,
+      (m, f) => `${m} is pretending ${f} was always like this.`,
+      (m, f) => `The judge is counting the lines in ${f}.`,
+      (m, f, o) => `${m} and ${o} are not making eye contact.`,
+    ],
+    unhinged: [
+      (m, f) => `The court is reading ${f}. Nobody looks happy.`,
+      (m, f) => `${m} is sweating through ${f}.`,
+      (m, f) => `${m} swears ${f} worked fine yesterday. Nobody believes it.`,
+      (m, f) => `The judge just opened ${f} and said "oh, for fuck's sake".`,
+    ],
+    feral: [
+      (m, f) => `${m} is muttering "shit, shit, shit" at ${f}.`,
+      (m, f) => `Something in ${f} stinks and everyone is looking at ${m}.`,
+      (m, f) => `The judge opened ${f} and gagged.`,
+      (m, f, o) => `${m} is leaking excuses all over ${f} and blaming ${o}.`,
+    ],
+    nuclear: [
+      (m, f) => `${m} is threatening to git rm itself over ${f}.`,
+      (m, f, o) => `${m} and ${o} are screaming about ${f}.`,
+      (m, f) => `The judge read ${f} and said "fucking hell".`,
+      (m, f) => `${m} has barricaded itself inside ${f}.`,
+    ],
+  };
+  // Template by template, cycling through suspects, so consecutive lines are about different modules.
+  const out: string[] = [];
+  T[spice].forEach((t, k) =>
+    suspects.forEach((s, i) => out.push(t(s.name, s.files[k % s.files.length], suspects[(i + 1) % suspects.length]?.name ?? 'the gateway'))),
+  );
+  return out;
 }
 
 export default function TribunalPanel() {
@@ -34,6 +74,8 @@ export default function TribunalPanel() {
   const [done, setDone] = useState<Turn[]>([]);
   const [current, setCurrent] = useState<Turn | null>(null);
   const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [lineIdx, setLineIdx] = useState(0);
   const stop = useRef(false);
   const skip = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -41,6 +83,12 @@ export default function TribunalPanel() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [done.length, current?.text.length, verdict]);
+  // Rotate a courtroom line every 3s while waiting for the first turn.
+  useEffect(() => {
+    if (phase !== 'hearing') return;
+    const t = setInterval(() => setLineIdx((i) => i + 1), 3000);
+    return () => clearInterval(t);
+  }, [phase]);
   // Leaving the court: stop playback and calm everyone down.
   useEffect(
     () => () => {
@@ -55,48 +103,68 @@ export default function TribunalPanel() {
   const title = (id: string) => characters[id]?.name ?? repo.modules.find((m) => m.id === id)?.name ?? id;
   const mood = (ids: string[], m: Parameters<ReturnType<typeof useTavern.getState>['setMood']>[1]) => ids.forEach((id) => useTavern.getState().setMood(id, m));
   const isDemoRepo = !!repo.url?.includes('/quickcart');
+  const waiting = courtLines(
+    suspects.map((id) => {
+      const m = repo.modules.find((x) => x.id === id);
+      const code = (m?.filePaths ?? []).filter((p) => isCode(p) && !/[._-](test|spec)\.|__tests__\//.test(p)); // real source files, not tests
+      return { name: m?.name ?? id, files: code.length ? code : (m?.filePaths ?? [id]) };
+    }),
+    spice,
+  );
+  if (!waiting.length) waiting.push('The court is reviewing the evidence.');
 
-  const play = async (r: Result) => {
-    setSuspects(r.suspects);
-    setPhase('playing');
-    for (const turn of r.turns) {
+  /** Types one turn out with blips; speaker talks, accused rolls its eyes, chips highlight as they complete. */
+  const playTurn = async (turn: Turn, ids: string[]) => {
+    mood(ids, 'idle');
+    useTavern.getState().setMood(turn.moduleId, 'talking');
+    if (turn.accuses) useTavern.getState().setMood(turn.accuses, 'accused');
+    const pitch = characters[turn.moduleId]?.voicePitch ?? 1;
+    let seen = 0;
+    for (let c = 1; c <= turn.text.length; c++) {
       if (stop.current) return;
-      mood(r.suspects, 'idle');
-      useTavern.getState().setMood(turn.moduleId, 'talking');
-      if (turn.accuses) useTavern.getState().setMood(turn.accuses, 'accused');
-      const pitch = characters[turn.moduleId]?.voicePitch ?? 1;
-      let seen = 0;
-      for (let c = 1; c <= turn.text.length; c++) {
-        if (stop.current) return;
-        if (skip.current) c = turn.text.length;
-        const typed = turn.text.slice(0, c);
-        setCurrent({ ...turn, text: typed });
-        if (!skip.current) blipText(turn.text[c - 1], pitch, useTavern.getState().muted);
-        // A chip just completed: light up its code.
-        const cites = extractCitations(typed).filter((x) => isValidCitation(x, repo.files));
-        if (cites.length > seen) {
-          seen = cites.length;
-          if (!skip.current) useTavern.getState().highlightCitation(cites[cites.length - 1]);
-        }
-        if (!skip.current) await sleep(25); // ~40 chars/sec
+      if (skip.current) c = turn.text.length;
+      const typed = turn.text.slice(0, c);
+      setCurrent({ ...turn, text: typed });
+      if (!skip.current) blipText(turn.text[c - 1], pitch, useTavern.getState().muted);
+      const cites = extractCitations(typed).filter((x) => isValidCitation(x, repo.files));
+      if (cites.length > seen) {
+        seen = cites.length;
+        if (!skip.current) useTavern.getState().highlightCitation(cites[cites.length - 1]);
       }
-      setDone((d) => [...d, turn]);
-      setCurrent(null);
-      if (!skip.current) await sleep(700);
+      if (!skip.current) await sleep(25); // ~40 chars/sec
     }
-    if (stop.current) return;
+    setDone((d) => [...d, turn]);
+    setCurrent(null);
+    if (!skip.current) await sleep(700);
+  };
+
+  const showVerdict = (v: Verdict, ids: string[]) => {
     airhorn(useTavern.getState().muted);
     // nuclear: the whole screen shakes for the verdict (CSS; disabled for reduced motion).
     if (useTavern.getState().spice === 'nuclear') {
       document.body.classList.add('nuclear-shake');
       setTimeout(() => document.body.classList.remove('nuclear-shake'), 650);
     }
-    mood(r.suspects, 'happy');
-    mood(r.verdict.culprits, 'guilty');
-    setVerdict(r.verdict);
+    mood(ids, 'happy');
+    mood(v.culprits, 'guilty');
+    setVerdict(v);
     setPhase('verdict');
-    const first = r.verdict.evidence.find((c) => isValidCitation(c, repo.files));
+    const first = v.evidence.find((c) => isValidCitation(c, repo.files));
     if (first) useTavern.getState().highlightCitation(first);
+  };
+
+  /** The saved quickcart hearing, played exactly like a live one. */
+  const replay = async (r: Result, why: string | null) => {
+    setNote(why);
+    setDone([]);
+    setCurrent(null);
+    setSuspects(r.suspects);
+    setPhase('playing');
+    for (const turn of r.turns) {
+      if (stop.current) return;
+      await playTurn(turn, r.suspects);
+    }
+    if (!stop.current) showVerdict(r.verdict, r.suspects);
   };
 
   const start = async (text: string) => {
@@ -106,7 +174,10 @@ export default function TribunalPanel() {
     stop.current = false;
     skip.current = false;
     setDone([]);
+    setCurrent(null);
     setVerdict(null);
+    setNote(null);
+    setLineIdx(0);
     setPhase('picking');
     // Demo route: replay the saved hearing with the same pacing, no API calls.
     if (useTavern.getState().demo && DEMO.turns?.length) {
@@ -115,34 +186,96 @@ export default function TribunalPanel() {
       setPhase('hearing');
       mood(DEMO.suspects, 'accused');
       await sleep(1800);
-      return play(DEMO);
+      return replay(DEMO, null);
     }
+
+    // Demo repo only: no first turn within 20s → cancel the live request and replay the saved hearing.
+    const ctrl = new AbortController();
+    let gotTurn = false;
+    const limit = isDemoRepo ? setTimeout(() => !gotTurn && ctrl.abort(), DEMO_FIRST_TURN_LIMIT_MS) : undefined;
+    const queue: Turn[] = [];
+    let live: Verdict | null = null;
+    let ended = false;
+    let wake = () => {};
+    let ids: string[] = [];
     try {
-      const { suspects: ids } = await post<{ suspects: string[] }>({
-        stage: 'suspects',
-        bug: text,
-        modules: repo.modules.map((m) => ({ id: m.id, title: title(m.id), path: m.path, stats: m.stats, filePaths: m.filePaths.slice(0, 60) })),
-      });
+      ({ suspects: ids } = await post<{ suspects: string[] }>(
+        {
+          stage: 'suspects',
+          bug: text,
+          modules: repo.modules.map((m) => ({ id: m.id, title: title(m.id), path: m.path, stats: m.stats, filePaths: m.filePaths.slice(0, 60) })),
+        },
+        ctrl.signal,
+      ));
       setSuspects(ids);
       setPhase('hearing');
       mood(ids, 'accused'); // nervous while the court reads the code
       const budget = Math.floor(CONTEXT_BUDGET / ids.length);
-      const result = await post<Result>({
-        stage: 'trial',
-        bug: text,
-        spice,
-        mode: useTavern.getState().mode,
-        suspects: ids.map((id) => {
-          const m = repo.modules.find((x) => x.id === id)!;
-          const ctx = pickContext(m, repo.files, null, text, budget);
-          return { id, title: title(id), personality: characters[id]?.personality ?? '', files: ctx.files, allPaths: m.filePaths };
+      const res = await fetch('/api/tribunal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        body: JSON.stringify({
+          stage: 'trial',
+          bug: text,
+          spice,
+          mode: useTavern.getState().mode,
+          suspects: ids.map((id) => {
+            const m = repo.modules.find((x) => x.id === id)!;
+            const ctx = pickContext(m, repo.files, null, text, budget);
+            return { id, title: title(id), personality: characters[id]?.personality ?? '', files: ctx.files, allPaths: m.filePaths };
+          }),
         }),
       });
-      await play(result);
+      if (!res.ok || !res.body) throw new Error(`tribunal ${res.status}`);
+      // Read NDJSON in the background: turns go into the queue as they arrive; playback drains it below.
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      void (async () => {
+        let buf = '';
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += value;
+            for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+              const line = buf.slice(0, i);
+              buf = buf.slice(i + 1);
+              if (!line.trim()) continue;
+              const e = JSON.parse(line);
+              if (e.type === 'turn') {
+                gotTurn = true;
+                clearTimeout(limit);
+                queue.push(e.turn);
+              } else if (e.type === 'verdict') live = e.verdict;
+              wake();
+            }
+          }
+        } catch (err) {
+          console.warn('[tribunal] stream', err);
+        } finally {
+          ended = true;
+          wake();
+        }
+      })();
+
+      const nextEvent = () => new Promise<void>((r) => (wake = r));
+      let played = 0;
+      while (!stop.current) {
+        if (played < queue.length) {
+          if (played === 0) setPhase('playing');
+          await playTurn(queue[played++], ids);
+        } else if (ended) break;
+        else await nextEvent();
+      }
+      if (stop.current) return;
+      if (!live || played < 2) throw new Error(ctrl.signal.aborted ? 'slow' : 'no verdict');
+      showVerdict(live, ids);
     } catch (err) {
+      clearTimeout(limit);
+      if (stop.current) return;
       console.warn('[tribunal]', err);
-      // Demo safety: on the demo repo, replay the saved hearing instead of failing on stage.
-      if (isDemoRepo && DEMO.turns?.length) await play(DEMO);
+      // Demo safety: on the demo repo, replay the saved hearing instead of stalling or failing on stage.
+      if (isDemoRepo && DEMO.turns?.length) await replay(DEMO, ctrl.signal.aborted ? SLOW_NOTE : DOWN_NOTE);
       else setPhase('error');
     }
   };
@@ -189,11 +322,14 @@ export default function TribunalPanel() {
           })}
         </div>
       )}
+      {phase === 'hearing' && suspects.length > 0 && (
+        <p className="border-b border-edge px-3 py-2 text-center text-sm text-muted italic">{waiting[lineIdx % waiting.length]}</p>
+      )}
 
       <div className="flex-1 space-y-3 overflow-auto p-3">
         {phase === 'input' && <p className="text-sm text-muted">Describe the bug. The modules will argue about whose fault it is.</p>}
         {phase === 'picking' && <p className="text-center text-muted italic">Calling the suspects.</p>}
-        {phase === 'hearing' && <p className="text-center text-muted italic">The court is reviewing the evidence.</p>}
+        {note && <p className="text-center text-xs text-neutral-400">{note}</p>}
         {phase === 'error' && <p className="text-center text-sm text-tomato">Gemini is rate-limiting us. Try again in a minute.</p>}
         {done.map((t, i) => line(t, i))}
         {current && line(current, 'current')}
