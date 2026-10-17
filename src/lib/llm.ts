@@ -2,7 +2,7 @@ import 'server-only';
 import OpenAI from 'openai';
 import { FALLBACK_MODEL, FAST, gemini, MODEL } from './gemini';
 import { matchesSchema } from './guards';
-import { costOf, openaiSpend } from './spend';
+import { costOf, openaiSpend, reserve, type Reservation } from './spend';
 
 // Provider chain for every route: OpenAI mini → gemini-3.8-flash → gemini-3.5-flash; the routes' templates after that.
 // OpenAI is skipped once this instance has spent OPENAI_DAILY_BUDGET_USD today (spend.ts).
@@ -37,10 +37,10 @@ async function withTemperature<T>(p: Provider, temperature: number | undefined, 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
 
 /** One line per call with its token counts (and, for OpenAI, its cost and today's total on this instance). */
-function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number) {
+function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number, held?: Reservation) {
   if (input === undefined) return;
   const usd = p.kind === 'openai' ? costOf(input, cached ?? 0, output ?? 0) : 0;
-  const today = p.kind === 'openai' ? ` usd=${usd.toFixed(5)} today=${openaiSpend.add(usd).toFixed(4)}` : '';
+  const today = p.kind === 'openai' ? ` usd=${usd.toFixed(5)} today=${(held ? held.settle(usd) : openaiSpend.add(usd)).toFixed(4)}` : '';
   console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${today}`);
 }
 export type Msg = { role: 'user' | 'assistant'; text: string };
@@ -151,6 +151,7 @@ export function llmStream(
         logUsage(label, p, usage?.promptTokenCount, usage?.cachedContentTokenCount, (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0));
       })();
     } else {
+      const held = reserve(opts.system.length + opts.messages.reduce((n, m) => n + m.text.length, 0), opts.maxTokens ?? 2048);
       const res = await withTemperature(p, temp, (temperature) =>
         openai().chat.completions.create(
           {
@@ -167,10 +168,13 @@ export function llmStream(
           },
           opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined,
         ),
-      );
+      ).catch((err) => {
+        held.refund(); // never started: nothing billed
+        throw err;
+      });
       chunks = (async function* () {
         for await (const c of res) {
-          if (c.usage) logUsage(label, p, c.usage.prompt_tokens, c.usage.prompt_tokens_details?.cached_tokens, c.usage.completion_tokens);
+          if (c.usage) logUsage(label, p, c.usage.prompt_tokens, c.usage.prompt_tokens_details?.cached_tokens, c.usage.completion_tokens, held);
           const ch = c.choices[0];
           if (ch?.delta?.content) yield ch.delta.content;
           else if (ch?.delta?.refusal || ch?.finish_reason === 'content_filter') throw new Blocked(p.name, ch.finish_reason ?? 'refusal');
@@ -234,6 +238,7 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
         if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
         return res.text;
       }
+      const held = reserve(opts.system.length + opts.prompt.length, 4000); // no output cap on JSON calls: a generous guess
       const res = await withTemperature(p, temp, (temperature) =>
         openai().chat.completions.create(
           {
@@ -248,8 +253,11 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
           },
           { timeout: Math.max(1000, deadline - Date.now()) },
         ),
-      );
-      logUsage(label, p, res.usage?.prompt_tokens, res.usage?.prompt_tokens_details?.cached_tokens, res.usage?.completion_tokens);
+      ).catch((err) => {
+        held.refund();
+        throw err;
+      });
+      logUsage(label, p, res.usage?.prompt_tokens, res.usage?.prompt_tokens_details?.cached_tokens, res.usage?.completion_tokens, held);
       const ch = res.choices[0];
       if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
       return ch.message.content;

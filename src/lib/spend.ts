@@ -38,3 +38,26 @@ export function makeMeter(budget = DAILY_BUDGET) {
   };
 }
 export const openaiSpend = makeMeter();
+
+/**
+ * Holds an estimate for an OpenAI call while it runs (prompt characters / 4 in, the output cap out), so calls running
+ * at the same time, and streams that end without reporting usage, still count. The usage settles it; a call that
+ * never started is refunded.
+ */
+export function reserve(chars: number, maxOut: number, meter = openaiSpend) {
+  let held = costOf(Math.ceil(chars / 4), 0, maxOut);
+  meter.add(held);
+  return {
+    /** The call's real cost replaces the estimate; returns today's total. */
+    settle(usd: number) {
+      const total = meter.add(usd - held);
+      held = 0;
+      return total;
+    },
+    refund() {
+      meter.add(-held);
+      held = 0;
+    },
+  };
+}
+export type Reservation = ReturnType<typeof reserve>;

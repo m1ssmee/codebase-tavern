@@ -604,3 +604,16 @@ console.log('judge template checks ok');
   assert.equal(m.spent(new Date('2026-10-19T00:00:02Z')), 0);
   console.log('spend guard checks ok');
 }
+{
+  // Reservations: a running call counts at its estimate, settles to its real cost, and a call that never started is refunded.
+  const { costOf, makeMeter, reserve } = await import('../src/lib/spend.ts');
+  const m = makeMeter(1);
+  const a = reserve(40_000, 6000, m), b = reserve(4000, 2048, m);
+  assert.ok(Math.abs(m.spent() - (costOf(10_000, 0, 6000) + costOf(1000, 0, 2048))) < 1e-12); // both in flight count
+  a.settle(costOf(9000, 0, 2500));
+  b.refund();
+  assert.ok(Math.abs(m.spent() - costOf(9000, 0, 2500)) < 1e-12);
+  reserve(4000, 2048, m); // a stream that never reports usage keeps its estimate
+  assert.ok(m.spent() > costOf(9000, 0, 2500));
+  console.log('spend reservation checks ok');
+}
