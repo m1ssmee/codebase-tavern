@@ -15,8 +15,13 @@ import TreePanel from '@/components/TreePanel';
 import CodePanel from '@/components/CodePanel';
 import ChatPanel from '@/components/ChatPanel';
 import TribunalPanel from '@/components/TribunalPanel';
+import WhatIfPanel from '@/components/WhatIfPanel';
 import SummonLoader from '@/components/SummonLoader';
 import CharacterFace from '@/components/CharacterFace';
+import dynamic from 'next/dynamic';
+
+// html-to-image and the QR code only load when someone opens the roast.
+const RoastPanel = dynamic(() => import('@/components/RoastPanel'), { ssr: false });
 
 const handle = 'w-px bg-edge transition-colors hover:bg-amber data-[separator=active]:bg-amber';
 const never = () => () => {};
@@ -27,6 +32,8 @@ export default function TavernPage() {
   const router = useRouter();
   const repo = useTavern((s) => s.repo);
   const tribunal = useTavern((s) => s.tribunal);
+  const whatIf = useTavern((s) => s.whatIf);
+  const roastOpen = useTavern((s) => s.roastOpen);
   const rightPanel = usePanelRef();
   const search = useSyncExternalStore(never, readSearch, () => null);
   const [error, setError] = useState<string | null>(null);
@@ -36,7 +43,7 @@ export default function TavernPage() {
 
   // Pre-warm the chat and Tribunal functions so the first click doesn't pay a cold start. Failures don't matter.
   useEffect(() => {
-    for (const route of ['tribunal', 'chat']) fetch(`/api/${route}?warm=1`, { cache: 'no-store' }).catch(() => {});
+    for (const route of ['tribunal', 'chat', 'whatif', 'roast']) fetch(`/api/${route}?warm=1`, { cache: 'no-store' }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -59,10 +66,11 @@ export default function TavernPage() {
     }
   }, [router]);
 
-  // Tribunal widens the right panel; the code panel stays visible so citations can highlight.
+  // Tribunal and What-if widen the right panel; the middle panel stays visible so citations can highlight.
+  const wide = tribunal || !!whatIf;
   useEffect(() => {
-    rightPanel.current?.resize(tribunal ? '40%' : '30%');
-  }, [tribunal, rightPanel]);
+    rightPanel.current?.resize(wide ? '40%' : '30%');
+  }, [wide, rightPanel]);
 
   if (error) {
     return (
@@ -117,9 +125,10 @@ export default function TavernPage() {
         </Panel>
         <Separator className={handle} />
         <Panel defaultSize="30%" minSize="18%" panelRef={rightPanel}>
-          {tribunal ? <TribunalPanel /> : <ChatPanel />}
+          {tribunal ? <TribunalPanel /> : whatIf ? <WhatIfPanel key={whatIf.id} /> : <ChatPanel />}
         </Panel>
       </Group>
+      {roastOpen && <RoastPanel />}
     </div>
   );
 }

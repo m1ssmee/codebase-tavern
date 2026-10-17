@@ -3,7 +3,7 @@
 import type { Character, Module, ModuleStats } from './types';
 
 /** What /api/characters returns per module (colour is assigned client-side). */
-export type RawCharacter = Pick<Character, 'moduleId' | 'personality' | 'catchphrase' | 'greeting' | 'gossip' | 'voicePitch'> & { title: string };
+export type RawCharacter = Pick<Character, 'moduleId' | 'personality' | 'catchphrase' | 'greeting' | 'gossip' | 'voicePitch' | 'about' | 'landlordLine'> & { title: string };
 
 // 8 colours that read on the dark tavern background.
 export const PALETTE = ['#f5a524', '#ff5a3c', '#3dd6b5', '#c38bff', '#5ab0ff', '#ff7eb6', '#9be15d', '#ffd166'];
@@ -124,6 +124,9 @@ export function toRaw(modules: Module[], items: unknown): RawCharacter[] {
         return lines.length ? lines : fb.gossip;
       })(),
       voicePitch: Number.isFinite(pitch) ? Math.min(1.8, Math.max(0.6, pitch)) : fb.voicePitch,
+      // Tour lines; empty means the client uses its graph-based templates.
+      about: str(c.about, 220) ?? '',
+      landlordLine: str(c.landlordLine, 320) ?? '',
     };
   });
 }

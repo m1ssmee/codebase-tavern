@@ -1,13 +1,27 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
-import { ChevronRight } from 'lucide-react';
-import { useTavern } from '@/lib/store';
+import dynamic from 'next/dynamic';
+import Editor, { DiffEditor, type BeforeMount, type OnMount } from '@monaco-editor/react';
+import { ChevronRight, Sparkles } from 'lucide-react';
+import { useTavern, type WhatIfChange } from '@/lib/store';
+import { declaredIn, deleteDiff, renameDiff, retryOrCheck } from '@/lib/whatif';
+import type { RepoFile } from '@/lib/types';
+import LandlordFace from './LandlordFace';
 import { languageFor } from '@/lib/lang';
 import Gossip from './Gossip';
 import { sendChat } from './ChatPanel';
 
 type Ed = Parameters<OnMount>[0];
+
+// three.js + R3F only download when someone opens the map; Mermaid only with the Diagram tab.
+const MapView = dynamic(() => import('./map/MapView'), {
+  ssr: false,
+  loading: () => <div className="grid h-full place-items-center bg-[#fbfaf8] text-muted">Drawing the map…</div>,
+});
+const DiagramView = dynamic(() => import('./DiagramView'), {
+  ssr: false,
+  loading: () => <div className="grid h-full place-items-center bg-panel text-muted">Drawing the floor plan…</div>,
+});
 
 const defineTheme: BeforeMount = (monaco) =>
   monaco.editor.defineTheme('tavern', {
@@ -24,9 +38,12 @@ const defineTheme: BeforeMount = (monaco) =>
   });
 
 export default function CodePanel() {
-  const { repo, openFilePath, highlight, tribunal } = useTavern();
+  const { repo, openFilePath, highlight, tribunal, whatIf, whatIfDiff, view, setView, landlordSays } = useTavern();
+  const [menu, setMenu] = useState(false); // the "What if I change this?" presets
+  const [diffIdx, setDiffIdx] = useState(0);
+  const shownDiff = whatIfDiff?.[Math.min(diffIdx, whatIfDiff.length - 1)];
   // Floating "Explain this" button for a non-empty selection, positioned at the selection's end.
-  const [sel, setSel] = useState<{ start: number; end: number; top: number; left: number } | null>(null);
+  const [sel, setSel] = useState<{ start: number; end: number; top: number; left: number; height: number } | null>(null);
   const file = repo?.files.find((f) => f.path === openFilePath);
   const editorRef = useRef<Ed | null>(null);
   const [ready, setReady] = useState(false);
@@ -37,12 +54,20 @@ export default function CodePanel() {
     const mono = getComputedStyle(document.documentElement).getPropertyValue('--font-jetbrains');
     if (mono) editor.updateOptions({ fontFamily: mono });
     document.fonts.ready.then(() => monaco.editor.remeasureFonts());
-    editor.onDidChangeCursorSelection(({ selection }) => {
-      if (selection.isEmpty()) return setSel(null);
-      const pos = editor.getScrolledVisiblePosition(selection.getEndPosition());
-      if (pos) setSel({ start: selection.startLineNumber, end: selection.endLineNumber, top: pos.top + pos.height + 4, left: pos.left });
+    // Buttons sit under the selection's end; a scroll (Monaco reveals the cursor a frame later) moves them along,
+    // and they hide only when that end is out of view.
+    const place = () => {
+      const selection = editor.getSelection();
+      const pos = selection && !selection.isEmpty() ? editor.getScrolledVisiblePosition(selection.getEndPosition()) : null;
+      const visible = pos && pos.top >= 0 && pos.top < editor.getLayoutInfo().height - pos.height;
+      const height = editor.getLayoutInfo().height;
+      setSel(visible ? { start: selection!.startLineNumber, end: selection!.endLineNumber, top: pos.top + pos.height + 4, left: pos.left, height } : null);
+    };
+    editor.onDidChangeCursorSelection(() => {
+      setMenu(false);
+      place();
     });
-    editor.onDidScrollChange(() => setSel(null));
+    editor.onDidScrollChange(place);
     setReady(true);
   };
 
@@ -81,6 +106,18 @@ export default function CodePanel() {
         ) : (
           <span>no file open</span>
         )}
+        <div className="ml-auto flex shrink-0 rounded-full border border-edge p-0.5 font-sans">
+          {(whatIfDiff ? (['code', 'map', 'diagram', 'diff'] as const) : (['code', 'map', 'diagram'] as const)).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`rounded-full px-3 py-0.5 text-xs transition-colors ${view === v ? 'bg-amber text-ink' : 'text-muted hover:text-cream'}`}
+            >
+              {{ code: 'Code', map: 'Map', diagram: 'Diagram', diff: 'Diff' }[v]}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="relative flex-1">
         {file ? (
@@ -107,22 +144,141 @@ export default function CodePanel() {
         ) : (
           <div className="grid h-full place-items-center text-muted">Pick a file from the tree.</div>
         )}
-        {sel && file && !tribunal && (
-          <button
-            type="button"
-            style={{ top: sel.top, left: Math.max(8, sel.left - 40) }}
-            onMouseDown={(e) => e.preventDefault()} // keep Monaco's selection while clicking
-            onClick={() => {
-              void sendChat(`Explain these lines [${file.path}:${sel.start}-${sel.end}]`);
-              setSel(null);
-            }}
-            className="bounce-hover absolute z-30 rounded-full border border-edge bg-amber px-3 py-1 text-xs font-bold text-ink shadow-md"
+        {view === 'map' && (
+          <div className="absolute inset-0 z-10">
+            <MapView />
+          </div>
+        )}
+        {view === 'diagram' && (
+          <div className="absolute inset-0 z-10">
+            <DiagramView />
+          </div>
+        )}
+        {view === 'diff' && shownDiff && (
+          <div className="absolute inset-0 z-10 flex flex-col bg-panel">
+            <div className="flex flex-wrap items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+              <span>Preview only. Nothing was changed.</span>
+              {whatIfDiff!.length > 1 &&
+                whatIfDiff!.map((d, i) => (
+                  <button key={d.path} type="button" onClick={() => setDiffIdx(i)} className={`rounded-full px-2 font-mono ${d === shownDiff ? 'bg-amber-200' : ''}`}>
+                    {d.path}
+                  </button>
+                ))}
+              <span className="ml-auto font-mono">{shownDiff.path}: before | after</span>
+            </div>
+            <div className="flex-1">
+              <DiffEditor
+                key={shownDiff.path}
+                original={shownDiff.before}
+                modified={shownDiff.after}
+                language={languageFor(shownDiff.path)}
+                theme="tavern"
+                beforeMount={defineTheme}
+                options={{ readOnly: true, originalEditable: false, renderSideBySide: true, useInlineViewWhenSpaceIsLimited: false, minimap: { enabled: false }, fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true }}
+              />
+            </div>
+          </div>
+        )}
+        {sel && file && !tribunal && view === 'code' && (
+          // Near the bottom the presets open upwards (the button row stays put under the selection).
+          <div
+            className={`absolute z-30 flex items-start gap-1 ${sel.top + 250 > sel.height ? 'flex-col-reverse' : 'flex-col'}`}
+            style={sel.top + 250 > sel.height ? { bottom: sel.height - sel.top - 26, left: Math.max(8, sel.left - 40) } : { top: sel.top, left: Math.max(8, sel.left - 40) }}
           >
-            Explain this
-          </button>
+            <div className="flex gap-1">
+              {!whatIf && (
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()} // keep Monaco's selection while clicking
+                  onClick={() => {
+                    void sendChat(`Explain these lines [${file.path}:${sel.start}-${sel.end}]`);
+                    setSel(null);
+                  }}
+                  className="bounce-hover rounded-full border border-edge bg-amber px-3 py-1 text-xs font-bold text-ink shadow-md"
+                >
+                  Explain this
+                </button>
+              )}
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setMenu((m) => !m)}
+                className="bounce-hover flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs font-bold text-cream shadow-md"
+              >
+                <Sparkles size={12} /> What if I change this?
+              </button>
+            </div>
+            {menu && (
+              <WhatIfMenu
+                file={file}
+                start={sel.start}
+                end={sel.end}
+                onPick={(change) => {
+                  setMenu(false);
+                  setSel(null);
+                  useTavern.getState().openWhatIf(change);
+                }}
+              />
+            )}
+          </div>
         )}
         <Gossip />
+        {landlordSays && view !== 'diff' && (
+          <div className="pointer-events-none absolute bottom-10 left-3 z-30 flex items-end gap-2">
+            <LandlordFace size={72} keys={repo?.modules.length} talking />
+            <div className="mb-8 max-w-xs rounded-2xl rounded-bl-sm border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-cream shadow-md">
+              <div className="text-xs font-medium">The Landlord</div>
+              {landlordSays}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** Presets for a selection. Delete and Rename build their diff here; the rest are described to the model. */
+function WhatIfMenu({ file, start, end, onPick }: { file: RepoFile; start: number; end: number; onPick: (c: WhatIfChange) => void }) {
+  const [text, setText] = useState('');
+  const where = `${file.path}:${start}${end > start ? `-${end}` : ''}`;
+  const code = file.content.split('\n').slice(start - 1, end).join('\n');
+  const decl = declaredIn(file.content, start, end);
+  const kind = retryOrCheck(code);
+  const describe = (description: string, title = description) => onPick({ kind: 'describe', description, title, path: file.path, startLine: start, endLine: end });
+  const presets: [string, () => void][] = [
+    ['Delete this', () => onPick({ kind: 'diff', diff: deleteDiff(file.path, file.content, start, end), title: `Delete ${where}`, path: file.path })],
+    ...(decl
+      ? [['Rename it', () => onPick({ kind: 'diff', diff: renameDiff(file.path, file.content, start, end)!, title: `Rename ${decl.name} to ${decl.name}V2 (callers not updated)`, path: file.path })] as [string, () => void]]
+      : []),
+    ['Make it slower', () => describe(`Make the code at ${where} slower: add a deliberate delay of about 3000ms before it does its work.`, `Make ${where} about 3000ms slower`)],
+    ...(kind
+      ? [[kind === 'retry' ? 'Remove this retry' : 'Remove this check', () => describe(kind === 'retry' ? `Remove the retry at ${where} so it tries only once.` : `Remove the check at ${where}.`)] as [string, () => void]]
+      : []),
+  ];
+  return (
+    <div className="w-64 rounded-xl border border-edge bg-panel p-1.5 text-sm shadow-lg">
+      {presets.map(([label, run]) => (
+        <button key={label} type="button" onMouseDown={(e) => e.preventDefault()} onClick={run} className="block w-full rounded-lg px-2 py-1 text-left text-cream hover:bg-wood">
+          {label}
+        </button>
+      ))}
+      <form
+        className="mt-1 flex gap-1 border-t border-edge pt-1.5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (text.trim()) describe(`${text.trim()} (at ${where})`, text.trim());
+        }}
+      >
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Describe a change"
+          className="min-w-0 flex-1 rounded-full border border-edge bg-ink px-2.5 py-1 text-xs text-cream focus:border-amber focus:outline-none"
+        />
+        <button type="submit" disabled={!text.trim()} className="rounded-full bg-amber px-2.5 text-xs font-medium text-ink disabled:opacity-40">
+          Go
+        </button>
+      </form>
     </div>
   );
 }

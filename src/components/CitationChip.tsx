@@ -10,7 +10,10 @@ export default function CitationChip({ citation }: { citation: Citation }) {
   return (
     <button
       type="button"
-      onClick={() => highlightCitation(citation)}
+      onClick={() => {
+        highlightCitation(citation);
+        useTavern.getState().setView('code'); // a clicked citation always shows the code, even from the map
+      }}
       title={`Show ${path} lines ${startLine}-${endLine}`}
       className="bounce-hover mx-0.5 inline-flex items-center gap-1 rounded-full border border-yellow-400/80 bg-yellow-200/70 px-2 py-0.5 align-baseline font-mono text-[0.8em] text-cream hover:bg-yellow-300/80"
     >

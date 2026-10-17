@@ -20,9 +20,12 @@ export type Character = {
   gossip: string[]; // 4 short lines about other modules or itself
   voicePitch: number;
   color: string;
+  about?: string; // one plain sentence on what the module does (tour, beginner mode)
+  landlordLine?: string; // the Landlord's line about this module on the tour
 };
 
-export type Mood = 'idle' | 'talking' | 'accused' | 'guilty' | 'happy';
+// horrified/fainted/nervous/shrug: what-if reactions (Character3D expressions: horrified, dead, nervous, deadpan).
+export type Mood = 'idle' | 'talking' | 'accused' | 'guilty' | 'happy' | 'horrified' | 'fainted' | 'nervous' | 'shrug';
 
 export type Citation = { path: string; startLine: number; endLine: number };
 

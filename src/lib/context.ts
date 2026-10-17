@@ -5,11 +5,10 @@ import type { Module, RepoFile } from './types';
 export const CONTEXT_BUDGET = 120_000;
 
 export type ContextFile = { path: string; content: string; truncated: boolean };
-export type ChatContext = { files: ContextFile[]; omitted: string[]; allPaths: string[]; dependents: string[] };
+export type ChatContext = { files: ContextFile[]; omitted: string[]; allPaths: string[] };
 
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1).toLowerCase();
 const stem = (p: string) => base(p).replace(/\.[^.]+$/, '');
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Open file → files named in the question → README/index/main → the rest, smallest first. */
 export function pickContext(mod: Module, all: RepoFile[], openFilePath: string | null, question: string, budget = CONTEXT_BUDGET): ChatContext {
@@ -35,22 +34,5 @@ export function pickContext(mod: Module, all: RepoFile[], openFilePath: string |
       omitted.push(f.path);
     }
   }
-  return { files, omitted, allPaths: mod.filePaths, dependents: findDependents(mod, all) };
-}
-
-/** Import/require lines in other modules that mention this module's folder or file names, as "path:line: code". */
-// ponytail: textual match, not a real import graph; good enough for "who depends on you?"
-export function findDependents(mod: Module, all: RepoFile[], max = 30): string[] {
-  const tokens = [...new Set([mod.path, ...mod.filePaths.map(stem)])].filter((t) => t && t.length >= 3 && t !== 'index');
-  if (!tokens.length) return [];
-  const re = new RegExp(`(^|[\\s/'"\`.])(${tokens.map(esc).join('|')})($|[\\s/'"\`.])`);
-  const out: string[] = [];
-  for (const f of all) {
-    if (mod.filePaths.includes(f.path)) continue;
-    const lines = f.content.split('\n');
-    for (let i = 0; i < lines.length && out.length < max; i++) {
-      if (/\b(import|require|from|include|use)\b/.test(lines[i]) && re.test(lines[i])) out.push(`${f.path}:${i + 1}: ${lines[i].trim().slice(0, 160)}`);
-    }
-  }
-  return out;
+  return { files, omitted, allPaths: mod.filePaths };
 }

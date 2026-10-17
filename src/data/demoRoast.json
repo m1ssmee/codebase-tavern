@@ -1,0 +1,29 @@
+{
+  "repo": "m1ssmee/quickcart",
+  "headline": {
+    "spicy": "Six violations, C grade. I’ve seen cleaner rent ledgers in this damn building.",
+    "clean": "Six violations, C grade. I’ve seen cleaner rent ledgers in this building."
+  },
+  "entries": [
+    {
+      "moduleId": "utils",
+      "spicy": "validation.ts is 417 lines with no tests; that’s a landfill wearing a helper badge.",
+      "clean": "validation.ts is 417 lines with no tests; that’s a landfill wearing a helper badge."
+    },
+    {
+      "moduleId": "gateway",
+      "spicy": "No tests, and gateway clings to orders like a damn tenant who won’t leave.",
+      "clean": "No tests, and gateway clings to orders like a tenant who won’t leave."
+    },
+    {
+      "moduleId": "orders",
+      "spicy": "Orders is married to gateway; two modules that depend on each other, rent unpaid as fuck.",
+      "clean": "Orders is married to gateway; two modules that depend on each other, rent unpaid."
+    },
+    {
+      "moduleId": "payments",
+      "spicy": "No tests in payments; the fire exit is there, but nobody has checked it, shit.",
+      "clean": "No tests in payments; the fire exit is there, but nobody has checked it."
+    }
+  ]
+}

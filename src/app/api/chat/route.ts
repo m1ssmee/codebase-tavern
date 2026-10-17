@@ -2,6 +2,7 @@ import { rateLimited } from '@/lib/gemini';
 import { llmStream, type Msg } from '@/lib/llm';
 import { levelBlock, levelReminder, modeBlock, modeReminder, VOICE_GUIDE } from '@/lib/voice';
 import { CONTEXT_BUDGET } from '@/lib/context';
+import { CiteChecker, CiteStream } from '@/lib/citations';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -66,8 +67,11 @@ ${others || '- none'}
 Your files (${allPaths.length}):
 ${allPaths.map((p) => `- ${p}${!shown.has(p) ? ' [left out]' : truncated.has(p) ? ' [truncated]' : ''}`).join('\n')}
 
-Lines elsewhere in the repo that import or mention you:
-${arr<string>(b.dependents, 30).map((d) => '- ' + str(d, 300)).join('\n') || '- none found'}
+Modules that import you, from the repo's import graph (cite these lines when asked who depends on you):
+${arr<string>(b.dependents, 12).map((d) => '- ' + str(d, 1500)).join('\n') || '- none. No module imports you.'}
+
+Modules you import:
+${arr<string>(b.dependencies, 13).map((d) => '- ' + str(d, 1500)).join('\n') || '- none'}
 
 Your code:
 ${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
@@ -90,7 +94,24 @@ ${modeReminder(b.mode)}`;
   try {
     // maxTokens includes thinking tokens, so keep it roomy; the prompt holds answers under 100 words.
     const stream = await llmStream('chat', { system, messages, maxTokens: 2048 });
-    return new Response(stream, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    // Every citation is checked against the code it points at on the way out (re-anchored or dropped if wrong).
+    const checker = new CiteChecker(new Map(files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+    const cites = new CiteStream(checker);
+    const [dec, enc] = [new TextDecoder(), new TextEncoder()];
+    const checked = stream.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, out) {
+          const text = cites.push(dec.decode(chunk, { stream: true }));
+          if (text) out.enqueue(enc.encode(text));
+        },
+        flush(out) {
+          const text = cites.push(dec.decode()) + cites.end();
+          if (text) out.enqueue(enc.encode(text));
+          console.info('[cites] chat', JSON.stringify(checker.counts), checker.changes.join('; '));
+        },
+      }),
+    );
+    return new Response(checked, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('[chat] all providers failed:', err);
     // Missing/invalid key → 503 so the client can say "unavailable" instead of blaming rate limits.

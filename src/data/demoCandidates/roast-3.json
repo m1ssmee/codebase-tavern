@@ -1,0 +1,37 @@
+{
+  "repo": "m1ssmee/quickcart",
+  "headline": {
+    "spicy": "C grade, 6 violations. The landlord keeps the deposit anyway.",
+    "clean": "C grade, 6 violations. The landlord keeps the deposit anyway."
+  },
+  "entries": [
+    {
+      "moduleId": "utils",
+      "spicy": "validation.ts packs 417 lines and no tests. A filing cabinet caught fire.",
+      "clean": "validation.ts packs 417 lines and no tests. A filing cabinet caught fire."
+    },
+    {
+      "moduleId": "gateway",
+      "spicy": "gateway and orders are codependent. Damn, that coupling pays in timeout slips.",
+      "clean": "gateway and orders are codependent. That coupling pays in timeout slips."
+    },
+    {
+      "moduleId": "orders",
+      "spicy": "orders and gateway are codependent; two roommates with one damn lease.",
+      "clean": "orders and gateway are codependent; two roommates with one lease."
+    },
+    {
+      "moduleId": "payments",
+      "spicy": "payments has no tests. The clerk is balancing receipts in the dark.",
+      "clean": "payments has no tests. The clerk is balancing receipts in the dark."
+    }
+  ],
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "roast: openai:gpt-5.4-mini",
+      "editor-roast: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T20:29"
+  }
+}

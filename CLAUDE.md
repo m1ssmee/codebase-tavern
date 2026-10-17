@@ -4,7 +4,7 @@ Users paste a GitHub repo link or upload a file. Every module/folder becomes a c
 
 Layout: left = file tree with a character face per module, middle = Monaco code viewer, right = chat with the selected module's character.
 Controls: spice level (unhinged | feral | nuclear, plus hidden clean via Ctrl+Shift+C) controls language AND animations. Explain mode (beginner | expert).
-Stack: Next.js App Router + TypeScript + Tailwind, Zustand for state, @google/genai (Gemini, server-side only), @monaco-editor/react, react-resizable-panels, framer-motion, jszip. Deployed on Vercel.
+Stack: Next.js App Router + TypeScript + Tailwind, Zustand for state, @google/genai (Gemini, server-side only), @monaco-editor/react, react-resizable-panels, framer-motion, jszip, three with @react-three/fiber and drei (3D cast, map), d3-force (map layout), mermaid (diagrams). Deployed on Vercel.
 Rules: no database; repo data lives in client state and the relevant files are sent with each API request. All API routes use `export const runtime = 'nodejs'` and `export const maxDuration = 60`. GEMINI_API_KEY is never exposed to the client. Keep everything demo-reliable.
 
 Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlights, 5 Tribunal, 6 sound/animation/gossip, 7 demo cache + deploy.
@@ -46,6 +46,24 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - Expert example: "`checkout()` retries `requestCharge()` on `UpstreamTimeoutError` with `MAX_PAYMENT_ATTEMPTS = 2` [orders/checkout.ts:44-52]. The POST body carries `order_id` and `amount` but no idempotency key [orders/checkout.ts:20-31]. Gateway aborts at 2000ms [gateway/config.ts:16]; payments p50 is ~2400ms [payments/processor.ts:26]. Net effect: timeout-then-retry on a non-idempotent charge, so a slow success becomes a duplicate capture. Fix: send `idempotency_key: order.id` and dedupe on it in payments, or stop retrying on timeout."
 - The runtime copy of this guide lives in src/lib/voice.ts; keep them in sync.
 - Animations and sound by level: unhinged = cloud puff + green wobble on code smells; feral adds a red tint, steam puffs and sawtooth blips on talking faces; nuclear adds a screen shake on the verdict and culprits burst into smoke instead of falling over.
+
+## AI temperature and safety
+- Provider chain for every route: gemini-3.8-flash, then gemini-3.5-flash, then OpenAI gpt-5.4-mini (only when OPENAI_API_KEY is set). Keep that order. LLM_PROVIDER=openai forces OpenAI for testing, so tests don't burn the Gemini free quota.
+- One temperature for every call, set in src/lib/llm.ts (provisional 1.4 for Gemini; LLM_TEMPERATURE 0-2 overrides it). A model that rejects a temperature gets its default, logged once; gpt-5.4-mini only takes its default. The comedy editor passes its own, lower temperature: it judges, it doesn't invent.
+- High temperature is only allowed behind the safeguards. Pure-joke lines (roast lines, gossip, the Landlord, What-if reactions, the judge's closing remark) get 3 candidates, the deterministic filter in src/lib/guards.ts (blocklist of slurs, hate, sexual content and self-harm; swearing only at swearing levels; the voice guide's banned words; lines aimed at people; non-English text; invented numbers, names and files) and a comedy-editor call, with templates behind them.
+- Facts: citations in chat, Tribunal and What-if are checked against the lines they cite, then re-anchored or dropped; the checker's work on client-sent code is bounded. Structured output is retried once on a parse or schema failure; fix diffs must apply to the real file or are regenerated once.
+- Tribunal root causes and What-if reasons and summaries stay free of swearing at every level.
+- Every LLM call logs its token counts.
+- Roast cards are signed only when the server inspected the repo itself (a GitHub link); uploaded zips are never signed.
+- src/data/demoCandidates/ holds alternative saved roasts and hearings; it is not wired in.
+
+## 3D cast
+- Every module gets one of ten archetypes (src/lib/cast.ts, assignCast): a module that is 60% or more docs and config is the Librarian; otherwise its folder name, then its main files' names, are matched against keywords (head noun first); a repeat takes its next-best match before the alternate variant; with no match, the largest unmatched module is the Hoarder, one with 5 or more TODOs and no tests the Junk Drawer, anything else the Clerk.
+- The Landlord (the narrator, one key per module) and the Judge (Tribunal only, behind its bench) are never assigned to a module; scripts/check.mjs enforces it.
+- Everything is procedural (no downloaded models), on one shared rig. Full detail for single big views (the chat header, /lab); lite for small or crowded ones (map, Tribunal, tour). Lite stays under 15k triangles including outlines and 25 draw calls per character.
+- 3D only ever renders inside CastCanvas with CastLights; the 2D face is always the fallback. The "3D characters" setting and the automatic switch to 2D (fps under 30 for 5 seconds) apply everywhere 3D appears.
+- Gags follow the comedy rules in src/components/cast/anim: deadpan faces, cartoon only (no realistic weapons, blood or injury), crude but never sexual, one crude gag on screen at a time, a 30-second cooldown per character per gag, spice-gated with a clean fallback; prefers-reduced-motion gets still poses and no screen shake.
+- /lab and /lab?board=1 are review pages, not linked from the app.
 
 ## Commits
 - No Co-Authored-By or any other trailer lines in commit messages in this repo.

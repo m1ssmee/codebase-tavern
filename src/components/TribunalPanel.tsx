@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Gavel } from 'lucide-react';
+import { ArrowLeft, Gavel, Sparkles } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation, parseCitations } from '@/lib/citations';
 import { pickContext, CONTEXT_BUDGET } from '@/lib/context';
@@ -10,10 +10,11 @@ import { isCode } from '@/lib/analyze';
 import demoTribunal from '@/data/demoTribunal.json';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
+import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 
 type Turn = { moduleId: string; text: string; accuses?: string };
-type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string };
+type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string };
 type Result = { suspects: string[]; turns: Turn[]; verdict: Verdict };
 type Phase = 'input' | 'picking' | 'hearing' | 'playing' | 'verdict' | 'error';
 
@@ -347,9 +348,19 @@ export default function TribunalPanel() {
                   ))}
               </div>
             )}
+            {verdict.diagram && <VerdictDiagram diagram={verdict.diagram} culprits={verdict.culprits} />}
             {verdict.fix.diff && (
               <div>
-                <div className="mb-1 font-mono text-xs text-muted">Fix: {verdict.fix.path}</div>
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="font-mono text-xs text-muted">Fix: {verdict.fix.path}</span>
+                  <button
+                    type="button"
+                    onClick={() => useTavern.getState().openWhatIf({ kind: 'diff', diff: verdict.fix.diff, title: `Apply the Tribunal fix to ${verdict.fix.path}`, path: verdict.fix.path })}
+                    className="bounce-hover ml-auto flex items-center gap-1 rounded-full bg-amber px-3 py-1 text-xs font-medium text-ink"
+                  >
+                    <Sparkles size={12} /> Apply this fix
+                  </button>
+                </div>
                 <pre className="overflow-x-auto rounded-lg bg-wood p-2 font-mono text-xs leading-relaxed">
                   {verdict.fix.diff.split('\n').map((l, i) => (
                     <div

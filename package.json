@@ -13,12 +13,16 @@
     "@google/genai": "^2.30.0",
     "@monaco-editor/react": "^4.7.0",
     "@react-three/drei": "^10.7.9",
-    "@react-three/fiber": "^9.8.1",
+    "@react-three/fiber": "^9.8.2",
+    "d3-force": "^3.0.0",
     "framer-motion": "^14.3.0",
+    "html-to-image": "^1.11.13",
     "jszip": "^3.10.2",
     "lucide-react": "^1.59.0",
+    "mermaid": "^12.2.0",
     "next": "16.4.2",
     "openai": "^7.36.0",
+    "qrcode-generator": "^2.0.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-resizable-panels": "^4.14.5",
@@ -27,6 +31,7 @@
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
@@ -35,5 +40,10 @@
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "stats-gl": {
+      "three": "$three"
+    }
   }
 }

@@ -61,3 +61,37 @@ export function airhorn(muted: boolean) {
     osc.stop(now + 0.62);
   }
 }
+
+/** Sad trombone for the fatal step: four falling notes, the last one wobbling, ~1.9s. */
+export function sadTrombone(muted: boolean) {
+  unlockAudio();
+  if (!ctx || muted) return;
+  let t = ctx.currentTime + 0.05;
+  for (const [f, d] of [[392, 0.32], [370, 0.32], [349, 0.32], [330, 0.95]]) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const lp = ctx.createBiquadFilter();
+    osc.type = 'sawtooth';
+    lp.type = 'lowpass';
+    lp.frequency.value = 1100;
+    osc.frequency.setValueAtTime(f, t);
+    if (d > 0.5) {
+      const lfo = ctx.createOscillator();
+      const depth = ctx.createGain();
+      lfo.frequency.value = 6;
+      depth.gain.value = 9;
+      lfo.connect(depth).connect(osc.frequency);
+      lfo.start(t);
+      lfo.stop(t + d);
+      osc.frequency.linearRampToValueAtTime(f * 0.93, t + d);
+    }
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.13, t + 0.04);
+    gain.gain.setValueAtTime(0.13, t + d - 0.08);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    osc.connect(lp).connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + d + 0.02);
+    t += d + 0.05;
+  }
+}
