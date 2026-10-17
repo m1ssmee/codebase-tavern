@@ -12,7 +12,7 @@ export default function CitationChip({ citation }: { citation: Citation }) {
       type="button"
       onClick={() => highlightCitation(citation)}
       title={`Show ${path} lines ${startLine}-${endLine}`}
-      className="bounce-hover mx-0.5 inline-flex items-center gap-1 rounded-full border border-amber/60 bg-amber/15 px-2 py-0.5 align-baseline font-mono text-[0.8em] text-amber hover:bg-amber/25"
+      className="bounce-hover mx-0.5 inline-flex items-center gap-1 rounded-full border border-yellow-400/80 bg-yellow-200/70 px-2 py-0.5 align-baseline font-mono text-[0.8em] text-cream hover:bg-yellow-300/80"
     >
       <FileCode size={12} />
       {label}

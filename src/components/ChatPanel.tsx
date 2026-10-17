@@ -36,7 +36,7 @@ export default function ChatPanel() {
               <CharacterFace key={m} name={['orders', 'payments', 'utils'][i]} color={PALETTE[i * 2]} mood={m} size={44} />
             ))}
           </div>
-          <p className="font-display text-2xl tracking-wide text-amber">Pick a module.</p>
+          <p className="font-display text-xl italic">Pick a module.</p>
         </div>
       </div>
     );
@@ -112,10 +112,10 @@ export default function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="flex items-center gap-3 border-b-2 border-edge bg-wood/60 p-3">
+      <div className="flex items-center gap-3 border-b border-edge p-4">
         <CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
         <div className="min-w-0">
-          <div className="font-display text-xl leading-tight tracking-wide" style={{ color: char?.color }}>
+          <div className="font-display text-xl leading-tight">
             {name}
           </div>
           {char && <div className="mt-0.5 text-sm text-cream/80 italic">&ldquo;{char.catchphrase}&rdquo;</div>}
@@ -158,7 +158,7 @@ export default function ChatPanel() {
         <div ref={endRef} />
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-t-2 border-edge px-3 pt-2">
+      <div className="flex flex-wrap gap-1.5 border-t border-edge px-3 pt-2">
         {QUICK.map((q) => (
           <button
             key={q.label}
@@ -166,7 +166,7 @@ export default function ChatPanel() {
             disabled={isLoading || q.disabled}
             title={q.title}
             onClick={() => send(q.text)}
-            className="bounce-hover rounded-full border border-edge bg-wood px-2.5 py-1 text-xs font-bold text-cream/90 hover:border-amber disabled:opacity-40"
+            className="rounded-full border border-edge px-2.5 py-1 text-xs text-cream/80 transition-colors hover:border-amber hover:text-cream disabled:opacity-40"
           >
             {q.label}
           </button>
@@ -183,13 +183,13 @@ export default function ChatPanel() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={`Ask ${name}…`}
-          className="min-w-0 flex-1 rounded-full border-2 border-edge bg-ink px-4 py-2 text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
+          className="min-w-0 flex-1 rounded-full border border-edge bg-ink px-4 py-2 text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
         />
         <button
           type="submit"
           disabled={!input.trim() || isLoading}
           aria-label="Send"
-          className="bounce-hover rounded-full bg-amber p-3 text-ink shadow-[0_3px_0_#8a5a06] disabled:opacity-50"
+          className="bounce-hover rounded-full bg-amber p-3 text-ink disabled:opacity-50"
         >
           <SendHorizontal size={18} />
         </button>

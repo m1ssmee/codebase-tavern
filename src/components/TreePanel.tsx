@@ -85,7 +85,7 @@ export default function TreePanel() {
             }}
             style={pad}
             className={`${ROW} flex w-full items-center gap-2 py-1 pr-2 text-left font-mono text-sm ${
-              openFilePath === n.path ? 'bg-amber/20 text-amber' : 'text-cream/80 hover:bg-wood'
+              openFilePath === n.path ? 'bg-wood font-medium text-cream' : 'text-cream/70 hover:bg-wood hover:text-cream'
             }`}
           >
             <FileText size={14} className="shrink-0 opacity-60" />
@@ -106,7 +106,7 @@ export default function TreePanel() {
             onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.click()}
             style={pad}
             className={`${ROW} flex cursor-pointer items-center gap-2 py-1 pr-2 ${
-              mod && selectedModuleId === mod.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
+              mod && selectedModuleId === mod.id ? 'bg-wood ring-1 ring-edge' : 'hover:bg-wood'
             }`}
           >
             <Chevron
@@ -119,7 +119,7 @@ export default function TreePanel() {
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
-            <span className={`truncate ${mod ? 'font-bold text-cream' : 'text-cream/80'}`}>{n.name}</span>
+            <span className={`truncate ${mod ? 'font-medium text-cream' : 'text-cream/80'}`}>{n.name}</span>
             {char && <span className="ml-auto truncate text-xs text-muted">{descriptor(char.name)}</span>}
           </div>
           {open && (
@@ -135,7 +135,7 @@ export default function TreePanel() {
 
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="border-b-2 border-edge px-3 py-2 font-display tracking-wide text-amber">The Regulars</div>
+      <div className="border-b border-edge px-3 py-2 font-display text-lg italic">The Regulars</div>
       <nav className="flex-1 overflow-auto p-2">
         {loose.map((m) => (
           <button
@@ -143,11 +143,11 @@ export default function TreePanel() {
             type="button"
             onClick={() => selectModule(m.id)}
             className={`${ROW} flex w-full items-center gap-2 px-2 py-1 text-left ${
-              selectedModuleId === m.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
+              selectedModuleId === m.id ? 'bg-wood ring-1 ring-edge' : 'hover:bg-wood'
             }`}
           >
             {smelly(m.id, <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />)}
-            <span className="truncate font-bold text-cream">{m.name}</span>
+            <span className="truncate font-medium text-cream">{m.name}</span>
             <span className="ml-auto truncate text-xs text-muted">
               {characters[m.id] ? descriptor(characters[m.id].name) : `${m.stats.fileCount} files`}
             </span>

@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import { JetBrains_Mono, Luckiest_Guy, Nunito } from 'next/font/google';
+import { Inter_Tight, JetBrains_Mono, Newsreader } from 'next/font/google';
 import './globals.css';
 
-const display = Luckiest_Guy({ variable: '--font-luckiest', subsets: ['latin'], weight: '400' });
-const sans = Nunito({ variable: '--font-nunito', subsets: ['latin'] });
+const display = Newsreader({ variable: '--font-newsreader', subsets: ['latin'], style: ['normal', 'italic'] });
+const sans = Inter_Tight({ variable: '--font-inter-tight', subsets: ['latin'] });
 const mono = JetBrains_Mono({ variable: '--font-jetbrains', subsets: ['latin'] });
 
 export const metadata: Metadata = {

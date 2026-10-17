@@ -1,17 +1,14 @@
 'use client';
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Inter_Tight, Newsreader } from 'next/font/google';
 import { motion, useReducedMotion } from 'framer-motion';
 import CharacterFace from '@/components/CharacterFace';
 import SummonLoader from '@/components/SummonLoader';
+import Stickman from '@/components/Stickman';
 import { loadWithCharacters, summonRepo } from '@/lib/store';
 import { buildRepo, filterFiles, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
 import type { ModuleStats } from '@/lib/types';
 import { assignColors } from '@/lib/characters';
-
-const sans = Inter_Tight({ subsets: ['latin'] });
-const serif = Newsreader({ subsets: ['latin'] });
 
 const stats = (totalLines: number, todoCount: number, biggest: number, maxNesting: number, hasTests: boolean): ModuleStats => ({
   fileCount: 1, totalLines, biggestFile: { path: '', lines: biggest }, todoCount, maxNesting, hasTests,
@@ -28,8 +25,8 @@ const HERO = [
   { name: 'tests', stats: stats(1100, 5, 280, 3, true) },
 ];
 const HERO_COLORS = assignColors(HERO.map((f) => ({ id: f.name, name: f.name })));
-// Uneven tiles, like prints pinned to a wall: [width, height, face size].
-const TILES = [[60, 76, 44], [68, 86, 52], [56, 70, 42]];
+// Uneven sizes so the ring looks hand-placed, not gridded.
+const SIZES = [52, 64, 48];
 const ORBIT_SECONDS = 60;
 
 const DEMO_REPO_URL = 'https://github.com/m1ssmee/quickcart';
@@ -78,28 +75,27 @@ export default function Landing() {
 
   return (
     <main
-      className={`${sans.className} relative grid min-h-dvh flex-1 place-items-center overflow-hidden bg-white px-4 text-neutral-900 [--r:min(30vh,38vw)]`}
+      className="relative grid min-h-dvh flex-1 place-items-center overflow-hidden bg-white px-4 text-neutral-900 [--r:min(30vh,38vw)]"
     >
       {loading && <SummonLoader what={loading} />}
 
       <p className="absolute left-[8%] top-1/2 hidden -translate-y-1/2 text-[15px] tracking-tight xl:block">Every module gets a voice.</p>
-      <p className={`${serif.className} absolute right-[8%] top-1/2 hidden -translate-y-1/2 text-[17px] xl:block`}>
+      <p className="absolute right-[8%] top-1/2 hidden -translate-y-1/2 font-display text-[17px] xl:block">
         Most of them have complaints.
       </p>
 
-      {/* The regulars orbit the title; each tile counter-rotates so faces stay upright. */}
+      {/* The regulars orbit the title; each face counter-rotates so it stays upright. */}
       <motion.div aria-hidden className="absolute left-1/2 top-1/2" {...spin(360)}>
         {HERO.map((f, i) => {
           const a = (i / HERO.length) * 360;
-          const [w, h, face] = TILES[i % TILES.length];
           return (
             <div
               key={f.name}
               className="absolute -translate-x-1/2 -translate-y-1/2"
               style={{ transform: `rotate(${a}deg) translateY(calc(-1 * var(--r))) rotate(${-a}deg)` }}
             >
-              <motion.div className="grid place-items-center bg-neutral-100" style={{ width: w, height: h }} {...spin(-360)}>
-                <CharacterFace name={f.name} stats={f.stats} color={HERO_COLORS[f.name]} mood={f.mood} size={face} />
+              <motion.div className="flex" {...spin(-360)}>
+                <CharacterFace name={f.name} stats={f.stats} color={HERO_COLORS[f.name]} mood={f.mood} size={SIZES[i % SIZES.length]} />
               </motion.div>
             </div>
           );
@@ -168,33 +164,5 @@ export default function Landing() {
 
       <Stickman />
     </main>
-  );
-}
-
-/** Backflips along the bottom edge, left to right, forever. Hidden for reduced motion. */
-function Stickman() {
-  return (
-    <motion.div
-      aria-hidden
-      className="pointer-events-none absolute bottom-6 left-0 motion-reduce:hidden"
-      animate={{ x: ['-10vw', '105vw'] }}
-      transition={{ duration: 14, repeat: Infinity, ease: 'linear' }}
-    >
-      <motion.svg
-        width={30}
-        height={45}
-        viewBox="0 0 40 60"
-        fill="none"
-        stroke="#171717"
-        strokeWidth={3}
-        strokeLinecap="round"
-        // crouch, jump, rotate backwards (counter-clockwise when facing right), land, absorb
-        animate={{ y: [0, 0, -56, 0, 0], rotate: [0, 0, -180, -360, -360], scaleY: [1, 0.8, 1, 0.85, 1] }}
-        transition={{ duration: 1.6, repeat: Infinity, times: [0, 0.15, 0.5, 0.85, 1] }}
-      >
-        <circle cx={20} cy={8} r={6} />
-        <path d="M20 14v22 M20 20l-11-9 M20 20l11-9 M20 36l-8 18 M20 36l8 18" />
-      </motion.svg>
-    </motion.div>
   );
 }

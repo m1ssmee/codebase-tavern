@@ -16,7 +16,7 @@ import TribunalPanel from '@/components/TribunalPanel';
 import SummonLoader from '@/components/SummonLoader';
 import CharacterFace from '@/components/CharacterFace';
 
-const handle = 'w-1.5 bg-edge transition-colors hover:bg-amber data-[separator=active]:bg-amber';
+const handle = 'w-px bg-edge transition-colors hover:bg-amber data-[separator=active]:bg-amber';
 const never = () => () => {};
 // Read the URL directly instead of useSearchParams (no Suspense needed). Server snapshot = null → render nothing.
 const readSearch = () => window.location.search;
@@ -60,8 +60,8 @@ export default function TavernPage() {
             <div className="mb-4 flex justify-center">
               <CharacterFace size={80} name="payments" mood="guilty" />
             </div>
-            <p className="font-display text-3xl tracking-wide text-tomato">{error}</p>
-            <Link href="/" className="mt-4 inline-block text-amber underline hover:text-cream">
+            <p className="font-display text-2xl text-tomato italic">{error}</p>
+            <Link href="/" className="mt-4 inline-block text-sm text-muted underline underline-offset-4 hover:text-cream">
               Back to the entrance
             </Link>
           </div>
@@ -77,7 +77,7 @@ export default function TavernPage() {
     <div className="flex h-screen flex-col overflow-hidden">
       <TopBar />
       {sk && !bannerHidden && (
-        <div className="flex items-center gap-3 border-b-2 border-edge bg-amber/15 px-4 py-2 text-cream">
+        <div className="flex items-center gap-3 border-b border-edge bg-wood px-4 py-1.5 text-sm text-cream">
           <span>
             Loaded <b>{repo.files.length}</b> {repo.files.length === 1 ? 'file' : 'files'} across <b>{repo.modules.length}</b>{' '}
             {repo.modules.length === 1 ? 'module' : 'modules'}.{' '}

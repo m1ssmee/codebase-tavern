@@ -51,8 +51,8 @@ export default function Gossip() {
             className="flex items-end gap-2"
           >
             <CharacterFace size={48} name={mod.name} stats={mod.stats} color={characters[mod.id]?.color} mood="talking" />
-            <div className="mb-6 max-w-xs rounded-2xl rounded-bl-sm border border-edge bg-wood/95 px-3 py-2 text-sm text-cream shadow-lg">
-              <div className="text-xs font-bold" style={{ color: characters[mod.id]?.color }}>
+            <div className="mb-6 max-w-xs rounded-2xl rounded-bl-sm border border-edge bg-panel px-3 py-2 text-sm text-cream shadow-md">
+              <div className="text-xs font-medium">
                 {characters[mod.id]?.name ?? mod.name}
               </div>
               {shown.line}

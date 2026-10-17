@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Volume2, VolumeX } from 'lucide-react';
+import { Gavel, Volume2, VolumeX } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
@@ -15,14 +15,14 @@ const MODES: ExplainMode[] = ['beginner', 'expert'];
 
 function Segmented<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void }) {
   return (
-    <div className="flex rounded-full border-2 border-edge bg-panel p-1">
+    <div className="flex rounded-full border border-edge bg-panel p-0.5">
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
-          className={`bounce-hover rounded-full px-3 py-1 text-sm font-bold ${
-            value === o.value ? 'bg-amber text-ink shadow-[0_2px_0_#000]' : 'text-muted hover:text-cream'
+          className={`rounded-full px-3 py-1 text-sm transition-colors ${
+            value === o.value ? 'bg-amber text-ink' : 'text-muted hover:text-cream'
           }`}
         >
           {o.label}
@@ -52,16 +52,16 @@ export default function TopBar() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b-2 border-edge bg-wood/80 px-4 py-2">
-      <Link href="/" className="font-display text-2xl tracking-wide text-amber drop-shadow-[0_3px_0_#000]">
-        🍺 Codebase Tavern
+    <header className="flex flex-wrap items-center gap-3 border-b border-edge bg-panel px-4 py-2">
+      <Link href="/" className="text-[15px] font-medium tracking-tight">
+        Codebase Tavern
       </Link>
       {repo && (
-        <span className="truncate rounded-full bg-panel px-3 py-1 font-mono text-sm text-muted">{repo.name}</span>
+        <span className="truncate rounded-full bg-wood px-2.5 py-0.5 font-mono text-xs text-muted">{repo.name}</span>
       )}
       <div className="ml-auto flex flex-wrap items-center gap-3">
         {spice === 'clean' && (
-          <span title="Hidden clean mode (Ctrl+Shift+C)" className="rounded-full border border-[#9be15d]/60 bg-[#9be15d]/15 px-2 py-0.5 text-xs font-bold text-[#9be15d]">
+          <span title="Hidden clean mode (Ctrl+Shift+C)" className="rounded-full border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs font-medium text-green-700">
             clean
           </span>
         )}
@@ -71,7 +71,7 @@ export default function TopBar() {
           type="button"
           onClick={toggleMute}
           aria-label={muted ? 'Unmute' : 'Mute'}
-          className="bounce-hover rounded-full border-2 border-edge bg-panel p-2 text-cream"
+          className="rounded-full border border-edge bg-panel p-2 text-cream transition-colors hover:bg-wood"
         >
           {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
         </button>
@@ -79,9 +79,9 @@ export default function TopBar() {
           type="button"
           disabled={!repo || tribunal}
           onClick={() => setTribunal(true)}
-          className="bounce-hover rounded-full bg-tomato px-4 py-2 font-display text-lg tracking-wide text-cream shadow-[0_4px_0_#7a2414] disabled:cursor-not-allowed disabled:opacity-60"
+          className="bounce-hover flex items-center gap-1.5 rounded-full bg-tomato px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
         >
-          ⚖️ Summon the Tribunal
+          <Gavel size={15} /> Summon the Tribunal
         </button>
       </div>
     </header>

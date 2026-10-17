@@ -140,7 +140,7 @@ export default function TribunalPanel() {
     <div key={key} className="flex gap-2">
       <CharacterFace size={28} name={repo.modules.find((m) => m.id === turn.moduleId)?.name ?? turn.moduleId} color={characters[turn.moduleId]?.color} still />
       <div className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-edge bg-wood px-3 py-2 text-cream">
-        <div className="mb-0.5 text-xs font-bold" style={{ color: characters[turn.moduleId]?.color }}>
+        <div className="mb-0.5 text-xs font-medium">
           {title(turn.moduleId)}
           {turn.accuses && <span className="font-normal text-tomato"> accuses {title(turn.accuses)}</span>}
         </div>
@@ -155,20 +155,20 @@ export default function TribunalPanel() {
 
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="flex items-center gap-2 border-b-2 border-edge bg-wood/60 p-3">
+      <div className="flex items-center gap-2 border-b border-edge p-3">
         <Gavel className="text-amber" size={22} />
-        <span className="font-display text-xl tracking-wide text-amber">Incident Tribunal</span>
+        <span className="font-display text-xl italic">Incident Tribunal</span>
         <button
           type="button"
           onClick={() => setTribunal(false)}
-          className="bounce-hover ml-auto flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-sm font-bold text-cream"
+          className="bounce-hover ml-auto flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-sm font-medium text-cream"
         >
           <ArrowLeft size={14} /> Back
         </button>
       </div>
 
       {suspects.length > 0 && (
-        <div className="flex justify-center gap-4 border-b-2 border-edge bg-ink/40 px-3 py-3">
+        <div className="flex justify-center gap-4 border-b border-edge bg-ink/40 px-3 py-3">
           {suspects.map((id) => {
             const m = repo.modules.find((x) => x.id === id);
             return (
@@ -189,8 +189,8 @@ export default function TribunalPanel() {
         {done.map((t, i) => line(t, i))}
         {current && line(current, 'current')}
         {verdict && (
-          <div className="space-y-2 rounded-2xl border-2 border-amber bg-ink/60 p-3 text-cream">
-            <div className="font-display text-xl tracking-wide text-amber">Verdict: guilty</div>
+          <div className="space-y-2 rounded-2xl border border-amber bg-ink/60 p-3 text-cream">
+            <div className="font-display text-xl text-amber">Verdict: guilty</div>
             <div className="text-sm text-tomato">{verdict.culprits.map(title).join(' and ')}</div>
             <p className="leading-relaxed">{parseCitations(verdict.rootCause).filter((s) => typeof s === 'string').join('')}</p>
             {verdict.evidence.length > 0 && (
@@ -205,17 +205,17 @@ export default function TribunalPanel() {
             {verdict.fix.diff && (
               <div>
                 <div className="mb-1 font-mono text-xs text-muted">Fix: {verdict.fix.path}</div>
-                <pre className="overflow-x-auto rounded-lg bg-[#1b130f] p-2 font-mono text-xs leading-relaxed">
+                <pre className="overflow-x-auto rounded-lg bg-wood p-2 font-mono text-xs leading-relaxed">
                   {verdict.fix.diff.split('\n').map((l, i) => (
                     <div
                       key={i}
                       className={
                         l.startsWith('+') && !l.startsWith('+++')
-                          ? 'bg-[#9be15d]/15 text-[#9be15d]'
+                          ? 'bg-green-600/10 text-green-700'
                           : l.startsWith('-') && !l.startsWith('---')
                             ? 'bg-tomato/15 text-tomato'
                             : l.startsWith('@@')
-                              ? 'text-[#5ab0ff]'
+                              ? 'text-sky-700'
                               : 'text-cream/70'
                       }
                     >
@@ -225,15 +225,15 @@ export default function TribunalPanel() {
                 </pre>
               </div>
             )}
-            <p className="text-amber italic">&ldquo;{verdict.judgeLine}&rdquo;</p>
+            <p className="font-display text-lg italic">&ldquo;{verdict.judgeLine}&rdquo;</p>
           </div>
         )}
         <div ref={endRef} />
       </div>
 
-      <div className="border-t-2 border-edge p-3">
+      <div className="border-t border-edge p-3">
         {phase === 'playing' ? (
-          <button type="button" onClick={() => (skip.current = true)} className="w-full rounded-full border border-edge bg-wood py-2 text-sm font-bold text-cream">
+          <button type="button" onClick={() => (skip.current = true)} className="w-full rounded-full border border-edge bg-wood py-2 text-sm font-medium text-cream">
             Skip to the verdict
           </button>
         ) : (
@@ -242,7 +242,7 @@ export default function TribunalPanel() {
               type="button"
               onClick={() => setBug(SUGGESTION)}
               disabled={phase === 'picking' || phase === 'hearing'}
-              className="bounce-hover mb-2 rounded-full border border-edge bg-wood px-2.5 py-1 text-xs font-bold text-cream/90 hover:border-amber disabled:opacity-40"
+              className="mb-2 rounded-full border border-edge px-2.5 py-1 text-xs text-cream/80 transition-colors hover:border-amber hover:text-cream disabled:opacity-40"
             >
               {SUGGESTION}
             </button>
@@ -257,12 +257,12 @@ export default function TribunalPanel() {
                 value={bug}
                 onChange={(e) => setBug(e.target.value)}
                 placeholder="Describe the bug"
-                className="min-w-0 flex-1 rounded-full border-2 border-edge bg-ink px-4 py-2 text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
+                className="min-w-0 flex-1 rounded-full border border-edge bg-ink px-4 py-2 text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
               />
               <button
                 type="submit"
                 disabled={!bug.trim() || phase === 'picking' || phase === 'hearing'}
-                className="bounce-hover rounded-full bg-tomato px-4 font-display tracking-wide text-cream shadow-[0_3px_0_#7a2414] disabled:opacity-50"
+                className="bounce-hover rounded-full bg-tomato px-4 text-sm font-medium text-white disabled:opacity-50"
               >
                 Begin
               </button>

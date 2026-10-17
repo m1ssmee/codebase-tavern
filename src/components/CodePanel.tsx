@@ -10,15 +10,15 @@ type Ed = Parameters<OnMount>[0];
 
 const defineTheme: BeforeMount = (monaco) =>
   monaco.editor.defineTheme('tavern', {
-    base: 'vs-dark',
+    base: 'vs',
     inherit: true,
-    rules: [{ token: 'comment', foreground: '8f7a66', fontStyle: 'italic' }],
+    rules: [{ token: 'comment', foreground: '8a8a8a', fontStyle: 'italic' }],
     colors: {
-      'editor.background': '#1b130f',
-      'editorLineNumber.foreground': '#6b5443',
-      'editorLineNumber.activeForeground': '#f5a524',
-      'editor.lineHighlightBackground': '#2a1e1700',
-      'editor.selectionBackground': '#f5a52440',
+      'editor.background': '#ffffff',
+      'editorLineNumber.foreground': '#b8b8b8',
+      'editorLineNumber.activeForeground': '#171717',
+      'editor.lineHighlightBackground': '#00000000',
+      'editor.selectionBackground': '#ffd60a55',
     },
   });
 
@@ -60,8 +60,8 @@ export default function CodePanel() {
   }, [highlight, file?.path, ready]);
 
   return (
-    <div className="flex h-full flex-col bg-[#1b130f]">
-      <div className="flex items-center gap-1 overflow-x-auto border-b-2 border-edge px-3 py-2 font-mono text-sm whitespace-nowrap text-muted">
+    <div className="flex h-full flex-col bg-panel">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-edge px-3 py-2 font-mono text-sm whitespace-nowrap text-muted">
         {file ? (
           file.path.split('/').map((part, i, all) => (
             <span key={i} className="flex items-center gap-1">

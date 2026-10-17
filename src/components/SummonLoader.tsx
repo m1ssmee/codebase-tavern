@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import CharacterFace from './CharacterFace';
+import Stickman from './Stickman';
 import { PALETTE } from '@/lib/characters';
 
 const LINES = [
@@ -20,29 +21,30 @@ export default function SummonLoader({ what }: { what?: string }) {
     return () => clearInterval(t);
   }, []);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/95 px-6 text-center backdrop-blur">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-hidden bg-ink px-6 text-center">
       <div>
-        <div className="mb-8 flex justify-center gap-4">
+        <div className="mb-8 flex justify-center gap-5">
           {['orders', 'payments', 'utils'].map((n, k) => (
-            <CharacterFace key={n} name={n} color={PALETTE[k * 2]} size={72} mood={k === 1 ? 'talking' : 'happy'} />
+            <CharacterFace key={n} name={n} color={PALETTE[k * 2]} size={56} mood={k === 1 ? 'talking' : 'happy'} />
           ))}
         </div>
-        <p className="font-display text-4xl tracking-wide text-amber drop-shadow-[0_4px_0_#000]">Summoning the codebase…</p>
-        {what && <p className="mt-2 font-mono text-muted">{what}</p>}
-        <div className="mt-6 h-8">
+        <p className="text-[15px] font-medium tracking-tight">Summoning the codebase…</p>
+        {what && <p className="mt-1 font-mono text-xs text-muted">{what}</p>}
+        <div className="mt-6 h-7">
           <AnimatePresence mode="wait">
             <motion.p
               key={i}
-              initial={{ opacity: 0, y: 10 }}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="text-xl text-cream"
+              exit={{ opacity: 0, y: -6 }}
+              className="font-display text-lg text-cream/70 italic"
             >
               {LINES[i]}
             </motion.p>
           </AnimatePresence>
         </div>
       </div>
+      <Stickman />
     </div>
   );
 }
