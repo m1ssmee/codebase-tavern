@@ -34,6 +34,10 @@ export function makeMeter(budget = DAILY_BUDGET) {
       roll(now);
       return usd >= budget;
     },
+    day(now = new Date()) {
+      roll(now);
+      return day;
+    },
     budget,
   };
 }
@@ -44,18 +48,21 @@ export const openaiSpend = makeMeter();
  * at the same time, and streams that end without reporting usage, still count. The usage settles it; a call that
  * never started is refunded.
  */
-export function reserve(chars: number, maxOut: number, meter = openaiSpend) {
+export function reserve(chars: number, maxOut: number, meter = openaiSpend, now = new Date()) {
   let held = costOf(Math.ceil(chars / 4), 0, maxOut);
-  meter.add(held);
+  meter.add(held, now);
+  const day = meter.day(now);
+  // Past 00:00 UTC the estimate went with yesterday: the new day only gets the real cost, never a refund.
+  const mine = (at: Date) => (meter.day(at) === day ? held : 0);
   return {
     /** The call's real cost replaces the estimate; returns today's total. */
-    settle(usd: number) {
-      const total = meter.add(usd - held);
+    settle(usd: number, at = new Date()) {
+      const total = meter.add(usd - mine(at), at);
       held = 0;
       return total;
     },
-    refund() {
-      meter.add(-held);
+    refund(at = new Date()) {
+      meter.add(-mine(at), at);
       held = 0;
     },
   };

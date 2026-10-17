@@ -615,5 +615,11 @@ console.log('judge template checks ok');
   assert.ok(Math.abs(m.spent() - costOf(9000, 0, 2500)) < 1e-12);
   reserve(4000, 2048, m); // a stream that never reports usage keeps its estimate
   assert.ok(m.spent() > costOf(9000, 0, 2500));
+  // Across midnight UTC: the new day gets the real cost only, never yesterday's estimate back.
+  const n = makeMeter(1), eve = new Date('2026-10-18T23:59:59Z'), morn = new Date('2026-10-19T00:00:05Z');
+  const late = reserve(40_000, 6000, n, eve), gone = reserve(40_000, 6000, n, eve);
+  late.settle(0.002, morn);
+  gone.refund(morn);
+  assert.ok(Math.abs(n.spent(morn) - 0.002) < 1e-12);
   console.log('spend reservation checks ok');
 }
