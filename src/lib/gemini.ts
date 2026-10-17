@@ -57,11 +57,13 @@ export async function streamText(opts: { contents: ContentListUnion; system?: st
 const hits = new Map<string, number[]>();
 /** 20 requests/minute per IP, shared by every route that calls it. */
 export function rateLimited(req: Request, limit = 20, windowMs = 60_000): boolean {
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || req.headers.get('x-real-ip') || 'local';
+  // Vercel sets (and overwrites) x-real-ip, so clients can't spoof it there.
+  const ip = req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'local';
   const now = Date.now();
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < windowMs);
   recent.push(now);
   hits.set(ip, recent);
-  if (hits.size > 5000) hits.clear(); // crude memory cap
+  // Memory cap: drop only idle IPs, so flooding with new IPs can't reset everyone's counters.
+  if (hits.size > 5000) for (const [k, ts] of hits) if (now - ts[ts.length - 1] >= windowMs) hits.delete(k);
   return recent.length > limit;
 }
