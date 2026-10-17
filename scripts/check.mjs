@@ -55,3 +55,30 @@ assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js', 'm/sub/README.md'],
 assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js'], stats: st }), 'm/index.js');
 
 console.log('checks ok');
+
+// characters
+const { assignColors, faceTraits, fallbackCharacter, toRaw, toCharacters, statsLine, PALETTE } = await import('../src/lib/characters.ts');
+const mods = Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, name: `mod${i}` }));
+assert.equal(new Set(Object.values(assignColors(mods))).size, 8); // 8 modules → 8 distinct colours
+assert.ok(Object.values(assignColors(mods)).every((c) => PALETTE.includes(c)));
+const S = (o) => ({ fileCount: 3, totalLines: 412, biggestFile: { path: 'a/big.ts', lines: 120 }, todoCount: 7, maxNesting: 3, hasTests: false, ...o });
+assert.deepEqual(
+  Object.entries(faceTraits(S({ biggestFile: { path: 'x', lines: 301 }, maxNesting: 6 }))).filter(([, v]) => v === true).map(([k]) => k),
+  ['shifty', 'sweaty', 'dizzy', 'shivers'],
+);
+assert.ok(faceTraits(S({ totalLines: 200, todoCount: 0, hasTests: true })).smug);
+assert.ok(!faceTraits(S({ totalLines: 300, todoCount: 0, hasTests: true })).smug);
+assert.equal(statsLine(S()), '412 lines · 3 files · 7 TODOs · no tests');
+const mod = { id: 'pay', name: 'payments', path: 'payments', filePaths: [], stats: S() };
+const fb = fallbackCharacter(mod);
+assert.equal(fb.title, 'payments, the procrastinator');
+assert.ok(fb.catchphrase.split(' ').length <= 12 && fb.catchphrase.includes('7'));
+assert.ok(fb.voicePitch >= 0.6 && fb.voicePitch <= 1.8);
+// junk model output → per-module fallback; good output is kept but clamped
+const good = { moduleId: 'pay', title: 'payments, the accountant', personality: 'p', catchphrase: 'one two three four five six seven eight nine ten eleven twelve thirteen', greeting: 'g', voicePitch: 9 };
+assert.deepEqual(toRaw([mod], 'nonsense'), [fb]);
+const kept = toRaw([mod], [good])[0];
+assert.deepEqual([kept.title, kept.catchphrase.split(' ').length, kept.voicePitch], ['payments, the accountant', 12, 1.8]);
+assert.equal(toCharacters([mod], [kept])[0].name, 'payments, the accountant');
+
+console.log('character checks ok');

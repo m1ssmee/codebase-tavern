@@ -49,7 +49,7 @@ export default function TavernPage() {
         <div className="grid flex-1 place-items-center px-6 text-center">
           <div>
             <div className="mb-4 flex justify-center">
-              <CharacterFace size={80} color="#ff5a3c" mood="guilty" />
+              <CharacterFace size={80} name="payments" mood="guilty" />
             </div>
             <p className="font-display text-3xl tracking-wide text-tomato">{error}</p>
             <Link href="/" className="mt-4 inline-block text-amber underline hover:text-cream">

@@ -1,5 +1,6 @@
 import type { Character, Repo, RepoFile } from './types';
 import { buildRepo } from './analyze';
+import { toCharacters } from './characters';
 
 const file = (path: string, content: string): RepoFile => ({ path, content, lineCount: content.split('\n').length });
 
@@ -157,32 +158,29 @@ export function log(level: Level, message: string, extra?: unknown) {
 export const mockRepo: Repo = buildRepo('shopfront', files, 'https://github.com/example/shopfront');
 
 // Catchphrases cite real lines: orderRoutes.ts:14, paymentGateway.ts:4/12, money.ts:4.
-export const mockCharacters: Character[] = [
+export const mockCharacters: Character[] = toCharacters(mockRepo.modules, [
   {
     moduleId: 'orders',
-    name: 'orders, the front desk',
+    title: 'orders, the front desk',
     personality: 'Takes every order at face value, including the price the client made up.',
     catchphrase: 'I accept price: 0. There is a FIXME about it.',
-    speechStyle: 'Procedural, tired, recites line numbers',
+    greeting: "I'm orders: 58 lines across 2 files, 2 TODOs, no tests. orderRoutes.ts:14 admits I never check the price.",
     voicePitch: 1.1,
-    color: '#f5a524',
   },
   {
     moduleId: 'payments',
-    name: 'payments, the accountant',
+    title: 'payments, the accountant',
     personality: 'Handles all the money. Retries on failure without checking whether the first attempt went through.',
     catchphrase: 'I retry every charge 3 times. I do not keep receipts.',
-    speechStyle: 'Precise about amounts, vague about consequences',
+    greeting: "I'm payments: 42 lines in 2 files, no tests. I retry charges up to 3 times without an idempotency key.",
     voicePitch: 0.8,
-    color: '#ff5a3c',
   },
   {
     moduleId: 'utils',
-    name: 'utils, the handyman',
+    title: 'utils, the handyman',
     personality: 'Imported by everyone, thanked by no one. The maths is slightly wrong.',
     catchphrase: '19.99 rupees is 1998.9999999999998 paise. Nobody has complained yet.',
-    speechStyle: 'Flat, matter-of-fact, mildly resentful',
+    greeting: "I'm utils: 30 lines, 2 files, 2 TODOs. Everyone imports me and nobody has tested my rounding.",
     voicePitch: 1.3,
-    color: '#3dd6b5',
   },
-];
+]);

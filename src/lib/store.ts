@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
 import { buildRepo, entryFile } from './analyze';
+import { toCharacters, toRaw, type RawCharacter } from './characters';
 
 type TavernState = {
   repo: Repo | null;
@@ -29,50 +30,68 @@ type TavernState = {
   setLoading: (isLoading: boolean) => void;
 };
 
-export const useTavern = create<TavernState>()((set) => ({
-  repo: null,
-  characters: {},
-  moods: {},
-  selectedModuleId: null,
-  openFilePath: null,
-  highlight: null,
-  chats: {},
-  spice: 'spicy',
-  mode: 'beginner',
-  muted: false,
-  isLoading: false,
+export const useTavern = create<TavernState>()((set, get) => {
+  // First visit to a module: its greeting becomes the first message, face talks for ~2s. No API call.
+  const greet = (id: string | null) => {
+    const s = get();
+    const c = id ? s.characters[id] : undefined;
+    if (!id || !c || s.chats[id]?.length) return;
+    s.addMessage(id, { id: crypto.randomUUID(), role: 'character', characterId: id, text: c.greeting, citations: [] });
+    s.setMood(id, 'talking');
+    setTimeout(() => get().moods[id] === 'talking' && get().setMood(id, 'idle'), 2000);
+  };
 
-  // Modules come sorted by size, so [0] is the largest; open its most important file.
-  loadRepo: (repo) =>
-    set({
-      repo,
-      characters: {},
-      moods: {},
-      chats: {},
-      selectedModuleId: repo.modules[0]?.id ?? null,
-      highlight: null,
-      openFilePath: (repo.modules[0] && entryFile(repo.modules[0])) ?? repo.files[0]?.path ?? null,
-    }),
-  setCharacters: (list) => set({ characters: Object.fromEntries(list.map((c) => [c.moduleId, c])) }),
-  selectModule: (selectedModuleId) => set({ selectedModuleId }),
-  openFile: (openFilePath) => set({ openFilePath }),
-  // New object every call, so clicking the same chip twice re-triggers the glow.
-  highlightCitation: (c) => set({ openFilePath: c.path, highlight: { ...c } }),
-  addMessage: (moduleId, msg) =>
-    set((s) => ({ chats: { ...s.chats, [moduleId]: [...(s.chats[moduleId] ?? []), msg] } })),
-  appendToMessage: (moduleId, messageId, chunk) =>
-    set((s) => ({
-      chats: {
-        ...s.chats,
-        [moduleId]: (s.chats[moduleId] ?? []).map((m) => (m.id === messageId ? { ...m, text: m.text + chunk } : m)),
-      },
-    })),
-  setMood: (moduleId, mood) => set((s) => ({ moods: { ...s.moods, [moduleId]: mood } })),
-  setSpice: (spice) => set({ spice }),
-  setMode: (mode) => set({ mode }),
-  toggleMute: () => set((s) => ({ muted: !s.muted })),
-  setLoading: (isLoading) => set({ isLoading }),
-}));
+  return {
+    repo: null,
+    characters: {},
+    moods: {},
+    selectedModuleId: null,
+    openFilePath: null,
+    highlight: null,
+    chats: {},
+    spice: 'spicy',
+    mode: 'beginner',
+    muted: false,
+    isLoading: false,
+
+    // Modules come sorted by size, so [0] is the largest; open its most important file.
+    loadRepo: (repo) =>
+      set({
+        repo,
+        characters: {},
+        moods: {},
+        chats: {},
+        selectedModuleId: repo.modules[0]?.id ?? null,
+        highlight: null,
+        openFilePath: (repo.modules[0] && entryFile(repo.modules[0])) ?? repo.files[0]?.path ?? null,
+      }),
+    setCharacters: (list) => {
+      set({ characters: Object.fromEntries(list.map((c) => [c.moduleId, c])) });
+      greet(get().selectedModuleId);
+    },
+    selectModule: (selectedModuleId) => {
+      set({ selectedModuleId });
+      greet(selectedModuleId);
+    },
+    openFile: (openFilePath) => set({ openFilePath }),
+    // New object every call, so clicking the same chip twice re-triggers the glow.
+    highlightCitation: (c) => set({ openFilePath: c.path, highlight: { ...c } }),
+    addMessage: (moduleId, msg) =>
+      set((s) => ({ chats: { ...s.chats, [moduleId]: [...(s.chats[moduleId] ?? []), msg] } })),
+    appendToMessage: (moduleId, messageId, chunk) =>
+      set((s) => ({
+        chats: {
+          ...s.chats,
+          [moduleId]: (s.chats[moduleId] ?? []).map((m) => (m.id === messageId ? { ...m, text: m.text + chunk } : m)),
+        },
+      })),
+    setMood: (moduleId, mood) => set((s) => ({ moods: { ...s.moods, [moduleId]: mood } })),
+    setSpice: (spice) => set({ spice }),
+    setMode: (mode) => set({ mode }),
+    toggleMute: () => set((s) => ({ muted: !s.muted })),
+    setLoading: (isLoading) => set({ isLoading }),
+  };
+});
 
 type IngestResponse = { name: string; url: string; branch: string; files: RepoFile[]; skipped: Repo['skipped']; error?: string };
 
@@ -92,10 +111,43 @@ export function summonRepo(input: string): Promise<Repo> {
       const data: IngestResponse | null = await res?.json().catch(() => null);
       if (!res?.ok || !data?.files) throw new Error(data?.error ?? "Couldn't reach the server. Check your connection and try again.");
       const repo = { ...buildRepo(data.name, data.files, data.url), branch: data.branch, skipped: data.skipped };
-      useTavern.getState().loadRepo(repo);
+      await loadWithCharacters(repo);
       return repo;
     })().finally(() => inflight.delete(input));
     inflight.set(input, p);
   }
   return p;
+}
+
+/** Characters for every module in one /api/characters call; any failure falls back to stat templates. Never throws. */
+export async function generateCharacters(repo: Repo): Promise<Character[]> {
+  const byPath = new Map(repo.files.map((f) => [f.path, f.content]));
+  const modules = repo.modules.map((m) => ({
+    ...m,
+    filePaths: m.filePaths.slice(0, 40),
+    keyFiles: [...new Set([entryFile(m), m.stats.biggestFile.path])]
+      .filter((p): p is string => !!p && byPath.has(p))
+      .slice(0, 2)
+      .map((p) => ({ path: p, head: byPath.get(p)!.split('\n', 40).join('\n') })),
+  }));
+  let raw: RawCharacter[] = [];
+  try {
+    const res = await fetch('/api/characters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoName: repo.name, modules }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    raw = (await res.json()).characters ?? [];
+  } catch {
+    // network/timeout: toRaw below fills every module from templates
+  }
+  return toCharacters(repo.modules, toRaw(repo.modules, raw));
+}
+
+/** Runs while the loading screen is up: characters first, then load, so the tavern opens fully populated. */
+export async function loadWithCharacters(repo: Repo) {
+  const characters = await generateCharacters(repo);
+  useTavern.getState().loadRepo(repo);
+  useTavern.getState().setCharacters(characters);
 }

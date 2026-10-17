@@ -5,8 +5,22 @@ import { motion } from 'framer-motion';
 import { Upload } from 'lucide-react';
 import CharacterFace from '@/components/CharacterFace';
 import SummonLoader from '@/components/SummonLoader';
-import { summonRepo, useTavern } from '@/lib/store';
+import { loadWithCharacters, summonRepo } from '@/lib/store';
 import { buildRepo, filterFiles, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
+import type { ModuleStats } from '@/lib/types';
+import { assignColors } from '@/lib/characters';
+
+const stats = (totalLines: number, todoCount: number, biggest: number, maxNesting: number, hasTests: boolean): ModuleStats => ({
+  fileCount: 1, totalLines, biggestFile: { path: '', lines: biggest }, todoCount, maxNesting, hasTests,
+});
+// Sample stats so the hero shows off the traits: smug, shifty + sweaty, dizzy + chubby, talking.
+const HERO = [
+  { name: 'utils', stats: stats(180, 0, 90, 2, true) },
+  { name: 'payments', stats: stats(2400, 7, 450, 4, false) },
+  { name: 'legacy', stats: stats(9000, 2, 1200, 9, false) },
+  { name: 'orders', stats: stats(800, 1, 200, 3, true), mood: 'talking' as const },
+];
+const HERO_COLORS = assignColors(HERO.map((f) => ({ id: f.name, name: f.name })));
 
 // TODO: swap for the real demo repo
 const DEMO_REPO_URL = 'https://github.com/expressjs/express';
@@ -44,22 +58,17 @@ export default function Landing() {
     const { files, skipped } = filterFiles(entries, pre);
     if (!files.length) return setError('None of those files are source code.');
     const name = files.length === 1 ? files[0].path : 'uploaded-files';
-    useTavern.getState().loadRepo({ ...buildRepo(name, files), skipped });
+    setLoading(name);
+    await loadWithCharacters({ ...buildRepo(name, files), skipped });
     router.push('/tavern?upload=1');
   };
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-10 px-6 py-16 text-center">
       {loading && <SummonLoader what={loading} />}
-      <div className="flex gap-3">
-        {(['#f5a524', '#ff5a3c', '#3dd6b5', '#c38bff'] as const).map((c, i) => (
-          <motion.div
-            key={c}
-            animate={{ y: [0, -14, 0], rotate: [0, i % 2 ? 6 : -6, 0] }}
-            transition={{ duration: 1.6, repeat: Infinity, delay: i * 0.2, ease: 'easeInOut' }}
-          >
-            <CharacterFace size={64} color={c} mood={(['happy', 'talking', 'accused', 'guilty'] as const)[i]} />
-          </motion.div>
+      <div className="flex items-end gap-4">
+        {HERO.map((f) => (
+          <CharacterFace key={f.name} name={f.name} stats={f.stats} color={HERO_COLORS[f.name]} mood={f.mood} size={72} />
         ))}
       </div>
 
@@ -100,7 +109,7 @@ export default function Landing() {
             animate={{ opacity: 1, x: [0, -6, 6, -3, 0] }}
             className="mt-4 flex items-center justify-center gap-2 text-lg font-bold text-tomato"
           >
-            <CharacterFace size={28} color="#ff5a3c" mood="guilty" /> {error}
+            <CharacterFace size={28} name="payments" mood="accused" still /> {error}
           </motion.p>
         )}
       </div>

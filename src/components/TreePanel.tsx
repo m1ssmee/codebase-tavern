@@ -7,6 +7,9 @@ import CharacterFace from './CharacterFace';
 
 type Node = { name: string; path: string; children?: Node[] };
 
+// "payments, the accountant" → "the accountant" (the module name is already on the row)
+const descriptor = (title: string) => title.replace(/^[^,]*,\s*/, '');
+
 function buildTree(files: RepoFile[]): Node[] {
   const root: Node = { name: '', path: '', children: [] };
   for (const f of files) {
@@ -81,12 +84,12 @@ export default function TreePanel() {
               onClick={(e) => (e.stopPropagation(), toggle(n.path, !open))}
             />
             {mod ? (
-              <CharacterFace size={24} color={char?.color} mood={moods[mod.id]} />
+              <CharacterFace size={24} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
             <span className={`truncate ${mod ? 'font-bold text-cream' : 'text-cream/80'}`}>{n.name}</span>
-            {char && <span className="ml-auto truncate text-xs text-muted">{char.name}</span>}
+            {char && <span className="ml-auto truncate text-xs text-muted">{descriptor(char.name)}</span>}
           </div>
           {open && render(n.children, depth + 1)}
         </div>
@@ -106,9 +109,11 @@ export default function TreePanel() {
               selectedModuleId === m.id ? 'bg-tomato/20 ring-1 ring-tomato/60' : 'hover:bg-wood'
             }`}
           >
-            <CharacterFace size={24} color={characters[m.id]?.color} mood={moods[m.id]} />
+            <CharacterFace size={24} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
             <span className="truncate font-bold text-cream">{m.name}</span>
-            <span className="ml-auto truncate text-xs text-muted">{characters[m.id]?.name ?? `${m.stats.fileCount} files`}</span>
+            <span className="ml-auto truncate text-xs text-muted">
+              {characters[m.id] ? descriptor(characters[m.id].name) : `${m.stats.fileCount} files`}
+            </span>
           </button>
         ))}
         {render(tree, 0)}

@@ -13,10 +13,10 @@ export type Module = { id: string; name: string; path: string; filePaths: string
 
 export type Character = {
   moduleId: string;
-  name: string;
+  name: string; // the title, e.g. "payments, the accountant"
   personality: string;
   catchphrase: string;
-  speechStyle: string;
+  greeting: string;
   voicePitch: number;
   color: string;
 };

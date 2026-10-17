@@ -7,6 +7,7 @@ import { extractCitations, parseCitations } from '@/lib/citations';
 import type { Module, RepoFile } from '@/lib/types';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
+import { PALETTE, statsLine } from '@/lib/characters';
 
 // ponytail: Phase 4 replaces this with a streamed Gemini reply.
 function mockReply(mod: Module, files: RepoFile[], turn: number): string {
@@ -38,8 +39,8 @@ export default function ChatPanel() {
       <div className="grid h-full place-items-center bg-panel p-6 text-center">
         <div>
           <div className="mb-4 flex justify-center gap-2">
-            {(['happy', 'accused', 'guilty'] as const).map((m, i) => (
-              <CharacterFace key={m} mood={m} size={44} color={['#f5a524', '#ff5a3c', '#3dd6b5'][i]} />
+            {(['happy', 'accused', 'idle'] as const).map((m, i) => (
+              <CharacterFace key={m} name={['orders', 'payments', 'utils'][i]} color={PALETTE[i * 2]} mood={m} size={44} />
             ))}
           </div>
           <p className="font-display text-2xl tracking-wide text-amber">Pick a module.</p>
@@ -67,13 +68,13 @@ export default function ChatPanel() {
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="flex items-center gap-3 border-b-2 border-edge bg-wood/60 p-3">
-        <CharacterFace size={64} color={char?.color} mood={moods[mod.id]} />
+        <CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
         <div className="min-w-0">
-          <div className="truncate font-display text-xl tracking-wide" style={{ color: char?.color }}>
+          <div className="font-display text-xl leading-tight tracking-wide" style={{ color: char?.color }}>
             {name}
           </div>
-          {char && <div className="text-sm text-muted italic">&ldquo;{char.catchphrase}&rdquo;</div>}
-          <div className="font-mono text-xs text-muted/70">{mod.path}/</div>
+          {char && <div className="mt-0.5 text-sm text-cream/80 italic">&ldquo;{char.catchphrase}&rdquo;</div>}
+          <div className="mt-1 font-mono text-xs text-muted">{statsLine(mod.stats)}</div>
         </div>
       </div>
 
@@ -88,7 +89,7 @@ export default function ChatPanel() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : ''}`}
           >
-            {m.role === 'character' && <CharacterFace size={28} color={char?.color} />}
+            {m.role === 'character' && <CharacterFace size={28} name={mod.name} stats={mod.stats} color={char?.color} still />}
             <div
               className={`max-w-[85%] rounded-2xl px-3 py-2 leading-relaxed whitespace-pre-wrap ${
                 m.role === 'user' ? 'rounded-br-sm bg-amber text-ink' : 'rounded-bl-sm border border-edge bg-wood text-cream'

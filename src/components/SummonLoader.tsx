@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import CharacterFace from './CharacterFace';
+import { PALETTE } from '@/lib/characters';
 
 const LINES = [
   'Skipping node_modules',
@@ -9,6 +10,7 @@ const LINES = [
   'Reading files nobody documented',
   'Measuring nesting depth',
   'Finding the biggest file',
+  'Assigning personalities',
 ];
 
 export default function SummonLoader({ what }: { what?: string }) {
@@ -21,10 +23,8 @@ export default function SummonLoader({ what }: { what?: string }) {
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/95 px-6 text-center backdrop-blur">
       <div>
         <div className="mb-8 flex justify-center gap-4">
-          {['#f5a524', '#ff5a3c', '#3dd6b5'].map((c, k) => (
-            <motion.div key={c} animate={{ y: [0, -24, 0] }} transition={{ duration: 0.6, repeat: Infinity, delay: k * 0.15 }}>
-              <CharacterFace size={72} color={c} mood={k === 1 ? 'talking' : 'happy'} />
-            </motion.div>
+          {['orders', 'payments', 'utils'].map((n, k) => (
+            <CharacterFace key={n} name={n} color={PALETTE[k * 2]} size={72} mood={k === 1 ? 'talking' : 'happy'} />
           ))}
         </div>
         <p className="font-display text-4xl tracking-wide text-amber drop-shadow-[0_4px_0_#000]">Summoning the codebase…</p>
