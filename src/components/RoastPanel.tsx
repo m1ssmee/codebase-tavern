@@ -66,13 +66,18 @@ export default function RoastPanel() {
     const t = setTimeout(async () => {
       const s = useTavern.getState();
       if (!s.repo || !s.graph) return;
-      const name = (id: string) => s.characters[id]?.name ?? s.repo!.modules.find((m) => m.id === id)?.name ?? id;
-      const found = inspect(s.repo.files, s.repo.modules, s.graph, name, (id) => s.characters[id]?.color ?? '#f5a524');
-      const res = await fetch('/api/roast', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: s.repo.name, entries: found.entries, violations: found.violations, modules: found.modules, keys: s.repo.modules.length, spice: s.spice, mode: s.mode, noAI: s.demo, date: new Date().toLocaleDateString('en-CA') }),
-      }).catch(() => null);
+      const common = { spice: s.spice, mode: s.mode, noAI: s.demo, date: new Date().toLocaleDateString('en-CA') };
+      let body: object;
+      if (s.repo.url) {
+        // A GitHub repo: the server reads it and inspects it itself, so the share link can be signed.
+        body = { url: s.repo.url, ...common };
+      } else {
+        // An upload: only this browser has the files, so the card uses our numbers and gets no share link.
+        const name = (id: string) => s.characters[id]?.name ?? s.repo!.modules.find((m) => m.id === id)?.name ?? id;
+        const found = inspect(s.repo.files, s.repo.modules, s.graph, name, (id) => s.characters[id]?.color ?? '#f5a524');
+        body = { upload: true, repo: s.repo.name, entries: found.entries, violations: found.violations, modules: found.modules, keys: s.repo.modules.length, ...common };
+      }
+      const res = await fetch('/api/roast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
       const data = await res?.json().catch(() => null);
       if (data?.cards) s.setRoast(key, data);
       else setFailed(true);
@@ -137,7 +142,7 @@ export default function RoastPanel() {
             Clean for sharing
           </label>
           <div className="ml-auto flex gap-2">
-            <button type="button" className={btn} disabled={!share} onClick={copy} title={share ? share : 'Share links need the signing secret on the server'}>
+            <button type="button" className={btn} disabled={!share} onClick={copy} title={share ? share : 'Share links are only for GitHub repos the server can read and check'}>
               {copied ? <Check size={14} /> : <Link2 size={14} />} {copied ? 'Copied' : 'Copy share link'}
             </button>
             <button type="button" className={btn} disabled={!card || busy} onClick={download}>
@@ -171,7 +176,9 @@ export default function RoastPanel() {
         {result && (
           <div className="border-t border-edge px-4 py-2 text-xs text-muted">
             {result.source === 'saved' ? 'Saved roast (the demo route makes no AI calls). ' : result.source === 'templates' ? 'Template lines (the AI was unavailable). ' : ''}
-            Grade, violations and stats come from the code and the import graph; the lines are the roast.
+            {result.links
+              ? 'Grade, violations and stats were worked out by the server from the repo itself; the lines are the roast.'
+              : "This repo was uploaded, so the server can't check it: no share link, but Download PNG works."}
           </div>
         )}
       </div>

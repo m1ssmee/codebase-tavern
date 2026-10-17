@@ -11,7 +11,7 @@ import demoCharacters from '@/data/demoCharacters.json';
 export type RippleStep = { id: string; hops: number; via: string; dir: 'up' | 'down' };
 export type Landlord = { intro: string; outro: string };
 /** A generated roast: the card at the active spice level and clean, and their signed share payloads. */
-export type RoastResult = { cards: { spicy: RoastCard; clean: RoastCard }; links: { spicy: string; clean: string } | null; source: string };
+export type RoastResult = { cards: { spicy: RoastCard; clean: RoastCard }; links: { spicy: string; clean: string } | null; source: string; verified?: boolean };
 export type WhatIfChange =
   | { kind: 'diff'; diff: string; title: string; path?: string }
   | { kind: 'describe'; description: string; title: string; path: string; startLine: number; endLine: number };
