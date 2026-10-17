@@ -11,6 +11,7 @@ export async function GET() {
     });
     return Response.json({ ok: true, model: MODEL, reply: res.text });
   } catch (err) {
-    return Response.json({ ok: false, model: MODEL, error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+    console.error('[health] Gemini call failed:', err); // details stay in server logs
+    return Response.json({ ok: false, model: MODEL, error: 'Gemini call failed, check server logs' }, { status: 500 });
   }
 }
