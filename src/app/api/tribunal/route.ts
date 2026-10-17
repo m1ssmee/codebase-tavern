@@ -5,7 +5,7 @@ import { CiteChecker, extractCitations, parseCitations } from '@/lib/citations';
 import { fixProblem, judgeFallback, realFixNeeded, rejectNote, TurnScanner } from '@/lib/verdict';
 import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
 import { editLines } from '@/lib/editor';
-import { codeFacts, knownNumbers, numbersIn } from '@/lib/guards';
+import { codeFacts, knownNumbers, numbersIn, unswear } from '@/lib/guards';
 import { participantId, parseSequence, sanitizeDiagram } from '@/lib/diagram';
 import type { Citation } from '@/lib/types';
 
@@ -300,7 +300,7 @@ ${levelReminder(b.spice)}`;
               }
             }
           }
-          const rootCause = clean(str(v?.rootCause, 600));
+          const rootCause = unswear(clean(str(v?.rootCause, 600))); // the verdict's explanation stays plain at every level
           const culprits = [...new Set(arr<string>(v?.culprits, 4).filter((id) => ids.includes(id)))];
           const verdict = {
             culprits,

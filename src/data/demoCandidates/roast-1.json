@@ -1,0 +1,37 @@
+{
+  "repo": "m1ssmee/quickcart",
+  "headline": {
+    "spicy": "Six violations, six modules. I own the building; this rent is overdue.",
+    "clean": "Six violations, six modules. I own the building; this rent is overdue."
+  },
+  "entries": [
+    {
+      "moduleId": "utils",
+      "spicy": "validation.ts runs 417 lines; this filing cabinet burst open long ago.",
+      "clean": "validation.ts runs 417 lines; this filing cabinet burst open long ago."
+    },
+    {
+      "moduleId": "gateway",
+      "spicy": "gateway and orders are codependent; this is a lease nobody can break.",
+      "clean": "gateway and orders are codependent; this is a lease nobody can break."
+    },
+    {
+      "moduleId": "orders",
+      "spicy": "orders is codependent with gateway, like two tenants sharing one broken key.",
+      "clean": "orders is codependent with gateway, like two tenants sharing one broken key."
+    },
+    {
+      "moduleId": "payments",
+      "spicy": "payments has no tests; this clerk is counting cash with a blindfold, damn.",
+      "clean": "payments has no tests; this clerk is counting cash with a blindfold."
+    }
+  ],
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "roast: openai:gpt-5.4-mini",
+      "editor-roast: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T20:28"
+  }
+}

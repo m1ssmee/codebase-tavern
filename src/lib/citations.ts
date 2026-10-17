@@ -149,7 +149,9 @@ export class CiteChecker {
     if (!lines) return c; // not a file we were shown: the caller's own checks decide
     if (++this.checked > 80) return this.counts.unchecked++, c;
     const paths = [...this.files.keys()];
-    const fact = (t: string) => this.has(c.path, t) || (paths.some((p) => this.has(p, t)) && !earlier.some((p) => p !== c.path && this.has(p, t)));
+    const folders = new Set(paths.flatMap((p) => p.split('/').slice(0, -1)));
+    // A folder name in backticks (`orders`) names a module, not code on a line.
+    const fact = (t: string) => !folders.has(t) && (this.has(c.path, t) || (paths.some((p) => this.has(p, t)) && !earlier.some((p) => p !== c.path && this.has(p, t))));
     const raw = claimTerms(segment);
     const terms = raw.flatMap((t) => [t, ...this.aliases(t)]).filter(fact);
     const n = lines.length;
@@ -170,10 +172,12 @@ export class CiteChecker {
     const movers = terms.filter((t) => !/^\d+$/.test(t) || Number(t) >= 1000);
     lines.forEach((l, i) => {
       const hits = movers.filter((t) => hasTerm(l, t)).length;
-      const s = hits && IMPORT.test(l) ? hits - 0.5 : hits; // an import line only if nothing else matches
+      const s = hits && IMPORT.test(l) ? hits - 0.5 : hits; // prefer any other line; an import alone isn't a new anchor
       if (s > score || (s === score && s > 0 && dist(i) < dist(best))) [best, score] = [i, s];
     });
-    if (best >= 0) {
+    // Only a narrow citation (8 lines or fewer) is moved: a wider one covers a block (a retry loop) and a name in the
+    // same sentence (`order_id`) is more likely about another part of it than proof the block is wrong.
+    if (best >= 0 && c.endLine - c.startLine < 8 && !IMPORT.test(lines[best])) {
       this.counts.repaired++;
       const len = Math.max(0, Math.min(c.endLine, n) - c.startLine);
       const at = best + 1;
@@ -183,6 +187,7 @@ export class CiteChecker {
     }
     // Dropped only if the clause right before it names real code from elsewhere and the sentence never mentions this
     // file or its folder ("when the gateway aborts and `checkout()` retries [gateway/proxy.ts:31]" keeps its citation).
+    if (best >= 0) return this.counts.unchecked++, c;
     const named = claimTerms(lastClause(segment)).filter((t) => !/^\d/.test(t) && fact(t));
     const own = c.path.replace(/\.[^./]+$/, '').split('/').filter((x) => x.length > 2);
     if (!named.length || own.some((x) => new RegExp(`\\b${esc(x)}\\b`, 'i').test(segment))) return this.counts.unchecked++, c;

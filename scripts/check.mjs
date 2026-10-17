@@ -514,3 +514,40 @@ console.log('judge template checks ok');
   assert.equal(cc.counts.verified + cc.counts.repaired + cc.counts.dropped + cc.counts.unchecked, 100);
   console.log('citation cost checks ok');
 }
+{
+  const { CiteChecker } = await import('../src/lib/citations.ts');
+  const cc = new CiteChecker(new Map(qr.files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+  // a wide citation of the retry loop stays put even though `order_id` lives in requestCharge()
+  assert.equal(cc.text('I retry the same charge with the same `order_id` [orders/checkout.ts:44-57].'), 'I retry the same charge with the same `order_id` [orders/checkout.ts:44-57].');
+  assert.equal(lineProblem('gateway set 2000ms against a 2400ms path, then acted surprised when it failed.', {}), null); // then/when
+  console.log('wide-citation and common-word checks ok');
+}
+{
+  const { CiteChecker } = await import('../src/lib/citations.ts');
+  const cc = new CiteChecker(new Map(qr.files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
+  assert.equal(cc.text('The first charge is still running while `orders` fires a second one [gateway/config.ts:15-17].'), 'The first charge is still running while `orders` fires a second one [gateway/config.ts:15-17].'); // a module name, not code
+  const src = 'files: orders/checkout.ts, gateway/config.ts';
+  assert.equal(lineProblem('orders/checkout.ts tried once and gateway.config.ts answered with 2000ms.', { source: src }), 'invented file name gateway.config.ts');
+  assert.equal(lineProblem('orders/checkout.ts tried once and config.ts answered with 2000ms.', { source: src }), null);
+  console.log('module-name and file-name checks ok');
+}
+{
+  const { CiteChecker } = await import('../src/lib/citations.ts');
+  const cc = new CiteChecker(new Map([['t.js', ["var request = require('supertest');", '', "describe('app', () => {", "  it('works', () => request(app).get('/'));", '});']]]));
+  assert.equal(cc.text('Each test drives the app through `supertest` [t.js:3-4].'), 'Each test drives the app through `supertest` [t.js:3-4].'); // not moved onto the require line
+  console.log('import-anchor checks ok');
+}
+{
+  const { unswear, SWEARING } = await import('../src/lib/guards.ts');
+  const cases = [
+    ['That shit turns one slow charge into a duplicate.', 'That mess turns one slow charge into a duplicate.'],
+    ['The gateway stays the same damn mess [gateway/config.ts:16].', 'The gateway stays the same mess [gateway/config.ts:16].'],
+    ['Encode the URL before it is written to `Location`, not after the fact, damn it.', 'Encode the URL before it is written to `Location`, not after the fact.'],
+    ['A MIME lookup is the library’s opinion, and this damn opinion changes underfoot.', 'A MIME lookup is the library’s opinion, and this opinion changes underfoot.'],
+    ['The retry is shit for customers and fucks up the totals.', 'The retry is bad for customers and messes up the totals.'],
+  ];
+  for (const [a, b] of cases) assert.equal(unswear(a), b);
+  for (const [, b] of cases) assert.ok(!SWEARING.test(b), b);
+  assert.equal(unswear('`checkout()` retries once [orders/checkout.ts:44-52].'), '`checkout()` retries once [orders/checkout.ts:44-52].');
+  console.log('plain-sentence checks ok');
+}

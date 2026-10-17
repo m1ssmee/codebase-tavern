@@ -3,7 +3,7 @@ import { llmJSON, llmStream, parseJSON, type Timing } from '@/lib/llm';
 import { levelBlock, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { CiteChecker, parseCitations } from '@/lib/citations';
 import { editLines } from '@/lib/editor';
-import { codeFacts, knownNumbers, numbersIn } from '@/lib/guards';
+import { codeFacts, knownNumbers, numbersIn, unswear } from '@/lib/guards';
 import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
 import { TurnScanner } from '@/lib/verdict';
 
@@ -213,7 +213,7 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
           const verdict = (VERDICTS as readonly string[]).includes(x.verdict ?? '') ? x.verdict! : 'at risk';
           reactions.set(id, { variants: x.reaction, verdict });
           // The reaction follows once the comedy editor has picked it (type 'reactions', below).
-          send({ type: 'item', item: { moduleId: id, verdict, reason: clean(str(x.reason, 600)), reaction: '' } });
+          send({ type: 'item', item: { moduleId: id, verdict, reason: unswear(clean(str(x.reason, 600))), reaction: '' } }); // reasons stay plain
         };
         try {
           const reader = llm.getReader();
@@ -259,7 +259,7 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
           const followUps = arr<{ moduleId?: string; path?: string; description?: string }>(out?.summary?.followUps, 4)
             .map((f) => ({ moduleId: alias.get(str(f?.moduleId, 200).trim().toLowerCase()) ?? '', path: str(f?.path, 300), description: clean(str(f?.description, 240), false) }))
             .filter((f, i, all) => ids.includes(f.moduleId) && lineCount.has(f.path) && f.description && all.findIndex((x) => x.moduleId === f.moduleId) === i);
-          send({ type: 'summary', summary: { update: clean(str(out?.summary?.update, 800)), check: clean(str(out?.summary?.check, 800)), followUps } });
+          send({ type: 'summary', summary: { update: unswear(clean(str(out?.summary?.update, 800))), check: unswear(clean(str(out?.summary?.check, 800))), followUps } });
           // Reactions: 3 variants each → the filter → the comedy editor; no survivor → a template on the module's own line.
           const known = knownNumbers(prompt);
           const facts = codeFacts(prompt);

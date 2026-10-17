@@ -1,0 +1,89 @@
+{
+  "suspects": [
+    "orders",
+    "payments",
+    "gateway"
+  ],
+  "turns": [
+    {
+      "moduleId": "orders",
+      "text": "I retry the payment after a timeout, and that is where the shit starts. I reserve stock, call the payment service, and on `UpstreamTimeoutError` I run the same charge again with no idempotency key, which is a lovely way to double-bill people [orders/checkout.ts:38-57].",
+      "accuses": "gateway"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I record every successful charge, but I never check whether `order_id` was already charged before calling the card network, so the same order can slide through twice. The ledger is kept in memory and `recordCharge` just pushes a new entry, damn near begging for duplicates when the caller retries [payments/processor.ts:29-49; payments/ledger.ts:11-19].",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "gateway",
+      "text": "I cut upstream calls off at `2000ms`, and the payment path usually takes about `2400ms`, so I hand orders a timeout and let them panic-retry. That is a clean little timeout gamble, and it lands like shit when the caller has no safe repeat token [gateway/config.ts:15-16; gateway/proxy.ts:25-49; payments/processor.ts:23-28].",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "orders",
+      "text": "I do stop on `paid`, but only after the charge comes back, so that does not save this mess. The retry loop still fires on a timeout, and the code even says it was added to fix flaky checkouts, which is the kind of damn sentence that ages badly [orders/checkout.ts:43-57; orders/checkout.ts:67-69].",
+      "accuses": "gateway"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I can prove the duplicate pattern: `sample-charges.log` shows the same `orderId=ord_8f3k2b61` charged twice with two different `chargeId`s. My processor waits for the card network, then writes a fresh ledger entry every time, so a repeated request is not safe to repeat [payments/logs/sample-charges.log:6-7; payments/processor.ts:33-49].",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "gateway",
+      "text": "I am not innocent, but I am not the one minting duplicate charges. I timeout first, then `orders` retries, and `payments` has no dedupe check before `recordCharge`, so this damn chain only needs one timeout to turn into two charges [gateway/proxy.ts:29-53; orders/checkout.ts:44-57; payments/processor.ts:33-49].",
+      "accuses": "payments"
+    }
+  ],
+  "verdict": {
+    "culprits": [
+      "gateway",
+      "orders",
+      "payments"
+    ],
+    "rootCause": "The gateway times out the payment call at 2000ms, but the payment path usually takes about 2400ms. `orders` retries after that timeout, and `payments` does not check whether the same `order_id` was already charged, so the repeated request creates a second charge instead of reusing the first one.",
+    "evidence": [
+      {
+        "path": "gateway/config.ts",
+        "startLine": 15,
+        "endLine": 16
+      },
+      {
+        "path": "gateway/proxy.ts",
+        "startLine": 25,
+        "endLine": 49
+      },
+      {
+        "path": "orders/checkout.ts",
+        "startLine": 44,
+        "endLine": 57
+      },
+      {
+        "path": "payments/processor.ts",
+        "startLine": 29,
+        "endLine": 49
+      },
+      {
+        "path": "payments/logs/sample-charges.log",
+        "startLine": 6,
+        "endLine": 7
+      }
+    ],
+    "fix": {
+      "path": "payments/processor.ts",
+      "diff": "--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -1,5 +1,5 @@\n import { randomUUID } from 'node:crypto';\n-import { recordCharge } from './ledger';\n+import { chargesForOrder, recordCharge } from './ledger';\n import { log } from '../utils/logger';\n \n export interface ChargeRequest {\n@@ -29,6 +29,11 @@\n export async function processCharge(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   if (!Number.isInteger(req.amount) || req.amount <= 0) throw new Error('amount must be a positive integer in minor units');\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n+\n+  const existing = chargesForOrder(req.order_id).find((entry) => entry.status === 'succeeded' && entry.amount === req.amount && entry.currency === req.currency);\n+  if (existing) {\n+    return { chargeId: existing.chargeId, status: 'succeeded' };\n+  }\n \n   const started = Date.now();\n   const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);"
+    },
+    "judgeLine": "gateway set the trap at 2000ms, and `orders` walked straight into it.",
+    "diagram": "sequenceDiagram\nparticipant orders as orders, the checkout bouncer\nparticipant payments as payments, the ledger clerk\nparticipant gateway as gateway, the timeout gambler\norders->>gateway: forward POST /payments/charges with order_id, amount, currency, payment_method_id\n%% cite orders/checkout.ts:20-30\ngateway->>payments: fetch(service.baseUrl + req.path) with AbortController at 2000ms\n%% cite gateway/proxy.ts:29-39\nNote over gateway,payments: 2000ms is shorter than the typical payment time.\n%% cite gateway/config.ts:15-16\npayments->>payments: authorizeAndCapture(...) then recordCharge(...)\n%% cite payments/processor.ts:33-49\nNote over payments: No check for an existing succeeded charge by order_id.\n%% cite payments/processor.ts:29-49\ngateway-->>orders: throw UpstreamTimeoutError after AbortError\n%% cite gateway/proxy.ts:45-49\norders->>gateway: retry requestCharge(order, paymentMethodId)\n%% cite orders/checkout.ts:44-53\nrect rgb(255, 228, 222)\nNote over orders,payments: Where it all went wrong\norders->>gateway: second POST /payments/charges for the same order_id\n%% cite orders/checkout.ts:44-53\ngateway->>payments: second fetch to /payments/charges\n%% cite gateway/proxy.ts:29-39\npayments->>payments: recordCharge creates a second ledger entry\n%% cite payments/processor.ts:38-49\nend"
+  },
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "tribunal-suspects: openai:gpt-5.4-mini",
+      "tribunal-trial: openai:gpt-5.4-mini",
+      "editor-judge: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T20:32"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "repo": "m1ssmee/quickcart",
+  "headline": {
+    "spicy": "C grade again. Six violations. This building leaks code, not character.",
+    "clean": "C grade again. Six violations. This building leaks code, not character."
+  },
+  "entries": [
+    {
+      "moduleId": "utils",
+      "spicy": "validation.ts is 417 lines; that’s a fucking landfill with imports.",
+      "clean": "validation.ts is 417 lines; that’s a landfill with imports."
+    },
+    {
+      "moduleId": "gateway",
+      "spicy": "No tests for gateway; it and orders are a damn codependent mess.",
+      "clean": "No tests for gateway; it and orders are a codependent mess."
+    },
+    {
+      "moduleId": "orders",
+      "spicy": "Orders leans on gateway; two modules in a shitty hallway fight.",
+      "clean": "Orders leans on gateway; two modules in a hallway fight."
+    },
+    {
+      "moduleId": "payments",
+      "spicy": "No tests in payments; the ledger clerk is flying fucking blind.",
+      "clean": "No tests in payments; the ledger clerk is flying blind."
+    }
+  ],
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "roast: openai:gpt-5.4-mini",
+      "editor-roast: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T20:28"
+  }
+}

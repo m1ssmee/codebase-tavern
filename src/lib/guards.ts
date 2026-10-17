@@ -18,6 +18,7 @@ const BANNED =
 const NOT_ENGLISH = /[^\t\n\r\x20-\x7E -ɏ‐-‧‰-⁞←-⇿−]/u;
 // A sentence doesn't end on these.
 const DANGLING = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'of', 'to', 'with', 'for', 'in', 'on', 'at', 'by', 'from', 'is', 'are', 'that', 'which', 'my', 'your', 'its', 'their', 'than', 'as']);
+const COMMON = new Set(['then', 'when', 'than', 'that', 'this', 'thus', 'them', 'they', 'there', 'their', 'these', 'where', 'were', 'here', 'have', 'from', 'form', 'with', 'what', 'will', 'well', 'wall', 'more', 'most', 'must', 'just', 'your', 'very', 'into', 'onto', 'over', 'ever', 'even', 'also', 'only', 'once', 'some', 'same', 'came', 'come', 'like', 'line', 'lines', 'live', 'love', 'lose', 'lost', 'last', 'list', 'make', 'made', 'take', 'time', 'tile', 'file', 'fine', 'five', 'fire', 'hire', 'here', 'hard', 'card', 'cart', 'part', 'past', 'pass', 'mass', 'less', 'loss']);
 const NUM_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
 
 export type LineRules = {
@@ -75,9 +76,10 @@ export function lineProblem(text: string, r: LineRules = {}): string | null {
   const words = t.toLowerCase().match(/[a-z0-9_'’-]+/g) ?? [];
   for (let i = 0; i < words.length; i++) {
     if (words[i] === words[i + 1] && !/^\d+$/.test(words[i])) return 'garbled: repeated word';
-    for (let j = i + 1; j <= i + 3 && j < words.length; j++) {
+    // "shit and shirt": the same word twice with a slip, at most one word apart. Common words (then/when) don't count.
+    for (let j = i + 1; j <= i + 2 && j < words.length; j++) {
       const [a, b] = [words[i], words[j]];
-      if (a.length >= 4 && b.length >= 4 && !/\d/.test(a + b) && !a.startsWith(b) && !b.startsWith(a) && oneEdit(a, b)) return 'garbled: near-duplicate words';
+      if (a.length >= 4 && b.length >= 4 && !/\d/.test(a + b) && !COMMON.has(a) && !COMMON.has(b) && !a.startsWith(b) && !b.startsWith(a) && oneEdit(a, b)) return 'garbled: near-duplicate words';
     }
   }
   const tri = words.slice(2).map((_, i) => words.slice(i, i + 3).join(' '));
@@ -87,12 +89,32 @@ export function lineProblem(text: string, r: LineRules = {}): string | null {
   const ticked = [...t.matchAll(/`([^`]+)`/g)].map((m) => m[1].replace(/\(.*\)$/, '').trim()).filter((w) => w.length > 2);
   if ((r.needs?.length || r.facts) && !r.needs?.some((n) => mentions(t, n)) && ![...codeFacts(t)].some((f) => r.facts?.has(f)) && !ticked.some((w) => r.source?.includes(w)))
     return 'no real stat or name';
+  // A file name must be real: "gateway.config.ts" is not gateway/config.ts.
+  const fake = r.source && t.match(/[\w/-]+(?:\.[\w-]+)*\.(?:tsx?|jsx?|mjs|cjs|py|rb|go|rs|java|json|md|log|ya?ml|css|html)\b/g)?.find((f) => !r.source!.includes(f));
+  if (fake) return `invented file name ${fake}`;
   if (r.known) {
     const made = numbersIn(t).find((n) => Number(n) > 10 && !r.known!.has(n));
     if (made) return `invented number ${made}`;
   }
   if ((t.match(/\b[A-Z]{2,}(?:[\s,]+[A-Z]{2,}){2,}\b/g)?.length ?? 0) > 1) return 'more than one outburst';
   return null;
+}
+
+/**
+ * Swearing out of a plain sentence (a Tribunal root cause, a What-if reason or summary): explanations stay clear at
+ * every level, the attitude lives in the turns and reactions. Models don't always comply, so this removes it.
+ */
+export function unswear(t: string): string {
+  const UP: Record<string, string> = { fuck: 'mess', fucks: 'messes', fucked: 'messed', fucking: 'messing' };
+  return t
+    .replace(/,?\s*\b(?:god ?damn it|damn it|for fuck'?s sake)\b/gi, '')
+    .replace(/\b(fuck|fucks|fucked|fucking) up\b/gi, (_, w: string) => `${UP[w.toLowerCase()]} up`)
+    .replace(/\b(?:fucking|damn|damned|goddamn|bloody|shitty|crappy)\s+(?=[\w`])/gi, '')
+    .replace(/\b(is|was|are|were) (?:shit|crap|bullshit)\b/gi, '$1 bad')
+    .replace(/\b(?:shit|crap|bullshit)\b/gi, 'mess')
+    .replace(/\bthe hell\s+/gi, '')
+    .replace(/ {2,}/g, ' ')
+    .replace(/ +([.,;:])/g, '$1');
 }
 
 /** The variants that pass, deduplicated, and why the rest didn't. */

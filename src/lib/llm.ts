@@ -9,8 +9,10 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'; // verified liv
 
 // One creativity setting for every call (chat, characters, gossip, Tribunal, What-if, roast, the Landlord). The
 // pure-joke lines get 3 candidates, a filter and an editor; facts get citation checks (see guards.ts, editor.ts).
+// Provisional 1.4 for Gemini: one sample at 1.6 (gemini-3.5-flash, quickcart cast) stayed coherent; the 1.2/1.4/1.6
+// tuning on gemini-3.8-flash is still to do. gpt-5.4-mini (reasoning low) only accepts its default of 1.
 // LLM_TEMPERATURE (0-2) overrides it.
-const DEFAULT_TEMPERATURE = 1.5;
+const DEFAULT_TEMPERATURE = 1.4;
 const envTemp = Number(process.env.LLM_TEMPERATURE);
 export const TEMPERATURE = process.env.LLM_TEMPERATURE && envTemp >= 0 && envTemp <= 2 ? envTemp : DEFAULT_TEMPERATURE;
 
@@ -31,6 +33,11 @@ async function withTemperature<T>(p: Provider, temperature: number | undefined, 
 }
 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
+
+/** One line per call with its token counts, so spend can be read off the server log. */
+function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number) {
+  if (input !== undefined) console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}`);
+}
 export type Msg = { role: 'user' | 'assistant'; text: string };
 /** One provider attempt: who, how long to the first chunk (streams) and in total. Failed attempts are recorded too. */
 export type Timing = { label: string; provider: string; ok: boolean; ms: number; firstChunkMs?: number; totalMs?: number; error?: string };
@@ -114,11 +121,14 @@ export function llmStream(
         }),
       );
       chunks = (async function* () {
+        let usage: (typeof res extends AsyncIterable<infer C> ? C : never)['usageMetadata'];
         for await (const c of res) {
+          usage = c.usageMetadata ?? usage;
           const why = c.promptFeedback?.blockReason ?? c.candidates?.[0]?.finishReason;
           if (c.text) yield c.text;
           else if (why && BLOCKED.test(String(why))) throw new Blocked(p.name, String(why));
         }
+        logUsage(label, p, usage?.promptTokenCount, usage?.cachedContentTokenCount, (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0));
       })();
     } else {
       const res = await withTemperature(p, temp, (temperature) =>
@@ -127,6 +137,7 @@ export function llmStream(
             model: p.model,
             reasoning_effort: 'low',
             stream: true,
+            stream_options: { include_usage: true },
             max_completion_tokens: opts.maxTokens ?? 2048,
             ...(temperature !== undefined && { temperature }),
             messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
@@ -139,6 +150,7 @@ export function llmStream(
       );
       chunks = (async function* () {
         for await (const c of res) {
+          if (c.usage) logUsage(label, p, c.usage.prompt_tokens, c.usage.prompt_tokens_details?.cached_tokens, c.usage.completion_tokens);
           const ch = c.choices[0];
           if (ch?.delta?.content) yield ch.delta.content;
           else if (ch?.delta?.refusal || ch?.finish_reason === 'content_filter') throw new Blocked(p.name, ch.finish_reason ?? 'refusal');
@@ -196,6 +208,8 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
             },
           }),
         );
+        const u = res.usageMetadata;
+        logUsage(label, p, u?.promptTokenCount, u?.cachedContentTokenCount, (u?.candidatesTokenCount ?? 0) + (u?.thoughtsTokenCount ?? 0));
         const why = res.promptFeedback?.blockReason ?? res.candidates?.[0]?.finishReason;
         if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
         return res.text;
@@ -215,6 +229,7 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
           { timeout: Math.max(1000, deadline - Date.now()) },
         ),
       );
+      logUsage(label, p, res.usage?.prompt_tokens, res.usage?.prompt_tokens_details?.cached_tokens, res.usage?.completion_tokens);
       const ch = res.choices[0];
       if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
       return ch.message.content;

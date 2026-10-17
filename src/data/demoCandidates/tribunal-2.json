@@ -1,0 +1,92 @@
+{
+  "suspects": [
+    "payments",
+    "orders",
+    "gateway"
+  ],
+  "turns": [
+    {
+      "moduleId": "gateway",
+      "text": "I cut off payments after 2000ms, and that timeout is the damn spark in this mess. The proxy aborts the call, logs `upstream timeout`, and hands orders a 504, so the checkout code thinks the charge vanished and retries. [gateway/config.ts:15-16] [gateway/proxy.ts:25-49]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "orders",
+      "text": "I retry on `UpstreamTimeoutError` with `MAX_PAYMENT_ATTEMPTS = 2`, because somebody bolted on a flaky-checkout fix without a safety key. That means one payment request can be sent twice when the first one actually succeeded but took longer than 2000ms to answer, which is shit for customers and worse for accounting. [orders/checkout.ts:18] [orders/checkout.ts:43-58]",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I happily run `authorizeAndCapture` and then `recordCharge`, with no check for an existing `orderId`. The ledger just `push`es every entry, so a repeated request becomes a second damn charge instead of a repeat-safe call. [payments/processor.ts:29-49] [payments/ledger.ts:11-18]"
+    },
+    {
+      "moduleId": "gateway",
+      "text": "I am not inventing the second charge; I only abort the wait and throw `UpstreamTimeoutError` after `UPSTREAM_TIMEOUT_MS`. The ugly part is that I never attach any request identity, so the next hop cannot tell a retry from a fresh order and the whole thing goes sideways like a busted damn conveyor belt. [gateway/proxy.ts:29-53]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "orders",
+      "text": "I am the one that retries the exact same `order.id` and `paymentMethodId` after a timeout, and I do not send any idempotency key (a unique ID that makes a request safe to repeat). That means the service I call can be hit twice for the same order, and the log already shows one order with two successful charges, which is a rotten little duplication loop. [orders/checkout.ts:20-30] [orders/checkout.ts:44-57]",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I should have rejected the repeat on the same `orderId`, but I never check the ledger before creating a new `chargeId`. The sample log shows `ord_8f3k2b61` charged twice with two different IDs, which is exactly the kind of dumb duplicate this code invites. [payments/processor.ts:34-49] [payments/logs/sample-charges.log:6-7]"
+    }
+  ],
+  "verdict": {
+    "culprits": [
+      "gateway",
+      "orders",
+      "payments"
+    ],
+    "rootCause": "The gateway cuts off payment calls after 2000ms, so orders retries the same charge when the first call may still complete. Payments has no idempotency key (a unique ID that makes a request safe to repeat) and no check for an existing orderId, so the repeated request creates a second charge instead of reusing the first one. The result is two successful charges for one order.",
+    "evidence": [
+      {
+        "path": "gateway/config.ts",
+        "startLine": 15,
+        "endLine": 16
+      },
+      {
+        "path": "gateway/proxy.ts",
+        "startLine": 25,
+        "endLine": 49
+      },
+      {
+        "path": "orders/checkout.ts",
+        "startLine": 43,
+        "endLine": 58
+      },
+      {
+        "path": "payments/processor.ts",
+        "startLine": 29,
+        "endLine": 49
+      },
+      {
+        "path": "payments/ledger.ts",
+        "startLine": 11,
+        "endLine": 18
+      },
+      {
+        "path": "payments/logs/sample-charges.log",
+        "startLine": 6,
+        "endLine": 7
+      }
+    ],
+    "fix": {
+      "path": "payments/processor.ts",
+      "diff": "--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -1,5 +1,5 @@\n import { randomUUID } from 'node:crypto';\n-import { recordCharge } from './ledger';\n+import { chargesForOrder, recordCharge } from './ledger';\n import { log } from '../utils/logger';\n \n export interface ChargeRequest {\n@@ -31,6 +31,16 @@\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n \n   const started = Date.now();\n+  const existing = chargesForOrder(req.order_id)[0];\n+  if (existing) {\n+    log('info', 'charge replayed from ledger', {\n+      chargeId: existing.chargeId,\n+      orderId: req.order_id,\n+      status: existing.status,\n+      ms: Date.now() - started,\n+    });\n+    return { chargeId: existing.chargeId, status: existing.status };\n+  }\n   const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);\n   const chargeId = `ch_${randomUUID().slice(0, 10)}`;\n   const status = result.approved ? 'succeeded' : 'declined';"
+    },
+    "judgeLine": "Gateway timed out at 2000ms, orders panicked, and payments happily minted a second chargeId anyway.",
+    "diagram": "sequenceDiagram\nparticipant gateway as gateway, the timeout gambler\nparticipant orders as orders, the checkout bouncer\nparticipant payments as payments, the ledger clerk\norders->>gateway: forward POST /payments/charges with order_id, amount, currency, payment_method_id\n%% cite orders/checkout.ts:20-30\ngateway->>payments: POST /payments/charges\n%% cite gateway/routes.ts:37-43\n%% cite gateway/proxy.ts:29-40\nrect rgb(255, 228, 222)\nNote over gateway,orders: Where it all went wrong\ngateway-->>orders: Abort after UPSTREAM_TIMEOUT_MS = 2000 and throw UpstreamTimeoutError\n%% cite gateway/config.ts:15-16\n%% cite gateway/proxy.ts:45-49\norders->>gateway: retry the same charge, attempt 2\n%% cite orders/checkout.ts:44-53\ngateway->>payments: POST /payments/charges again\n%% cite orders/checkout.ts:44-53\npayments-->>gateway: recordCharge pushes a second entry for the same orderId\n%% cite payments/ledger.ts:11-15\nend\nNote over orders,payments: No idempotency key means the retry is not safe to repeat.\nNote over gateway: 2000ms is shorter than the 2212ms and 2391ms charge times in the log.\nNote over payments: The ledger keeps both entries, because `entries.push(entry)` never asks questions."
+  },
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "tribunal-suspects: openai:gpt-5.4-mini",
+      "tribunal-trial: openai:gpt-5.4-mini",
+      "editor-judge: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T20:31"
+  }
+}
