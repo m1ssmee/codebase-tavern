@@ -24,7 +24,7 @@ New developers usually meet a codebase as a wall of files with no one to ask. Th
 ## Tech stack
 
 - Next.js (App Router) and TypeScript, Tailwind CSS, Zustand
-- Gemini (`gemini-3.8-flash`, falling back to `gemini-3.5-flash`), with OpenAI as the final fallback
+- OpenAI (`gpt-5.4-mini`, capped by a daily budget, `OPENAI_DAILY_BUDGET_USD`, default $2.50), then Gemini (`gemini-3.8-flash`, then `gemini-3.5-flash`), then templates
 - Monaco editor for the code viewer and line highlights
 - Web Audio for the character voices and the verdict airhorn; Framer Motion for the faces
 - Deployed on Vercel. No database: the repo lives in the browser and only the relevant files are sent with each request.

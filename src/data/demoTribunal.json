@@ -1,68 +1,60 @@
 {
   "suspects": [
-    "payments",
+    "utils",
     "orders",
-    "gateway"
+    "payments"
   ],
   "turns": [
     {
-      "moduleId": "payments",
-      "text": "I record every successful charge, but I never check whether the same order was already charged, so a repeated request becomes a fresh entry in the list of charges. That is a nasty little pileup: `processCharge` calls `authorizeAndCapture` and then `recordCharge` with a brand-new `chargeId` every time, with no idempotency key (a unique ID that makes a repeated request safe to repeat). [payments/processor.ts:29-49] [payments/ledger.ts:11-19]",
-      "accuses": "orders"
-    },
-    {
       "moduleId": "orders",
-      "text": "I am the one retrying the payment on timeout, and that is the damn second punch. `checkout` retries `requestCharge` when `UpstreamTimeoutError` hits, but it sends only `order_id`, amount, currency, and `payment_method_id`; there is no idempotency key, so a timed-out first charge can still succeed and the retry charges again. [orders/checkout.ts:20-30] [orders/checkout.ts:43-58]",
-      "accuses": "gateway"
-    },
-    {
-      "moduleId": "gateway",
-      "text": "I cut the request off after `UPSTREAM_TIMEOUT_MS = 2000`, while payments says its typical processing time is about 2400ms and p99 is 4s. That means I can throw a timeout while the card network is still finishing, which is a lovely shitshow when the caller retries the same charge. [gateway/config.ts:15-16] [gateway/proxy.ts:25-53]",
-      "accuses": "orders"
-    },
-    {
-      "moduleId": "payments",
-      "text": "I’m not the first domino, but I am the place where the duplicate money lands. The log shows the same order charged twice with two different `chargeId` values, `ord_8f3k2b61` at 14:02:11 and again at 14:02:13, so the downstream retry path is real, not imaginary bullshit. [payments/logs/sample-charges.log:6-7]",
-      "accuses": "orders"
-    },
-    {
-      "moduleId": "orders",
-      "text": "I did exactly what my code says: on timeout I try again once, because someone bolted on a retry to fix flaky checkouts. With a 2000ms gateway cutoff and payments taking ~2400ms on average, that retry is a damn duplicate generator unless the charge request is made safe to repeat. [orders/checkout.ts:44-57]  ",
-      "accuses": "gateway"
-    },
-    {
-      "moduleId": "gateway",
-      "text": "I am not inventing extra charges; I am exposing a timing bug by failing faster than the payment service usually finishes. The real fix is to make the charge request safe to repeat, because a longer timeout alone just hides the shit under the rug. [gateway/proxy.ts:25-29] ",
+      "text": "I retry a payment once after `UpstreamTimeoutError` because the checkout path is trying to paper over a timeout with a second charge request. That is damn reckless when I already marked the order `pending` and forwarded `order_id`, `amount`, and `currency` with no idempotency key. [orders/checkout.ts:20-30] [orders/checkout.ts:44-57]",
       "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I accept every `order_id` as a fresh charge, call `authorizeAndCapture`, then `recordCharge` a new `chargeId` with no duplicate check. The sample log shows the same order charged twice, 4650 EUR twice, which is the sort of shit a retry loop summons when the clerk has no memory. [payments/processor.ts:29-49] [payments/logs/sample-charges.log:6-7]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "utils",
+      "text": "I am not in the payment path, and my money helpers only round cents and format amounts. The 417-line validation landfill is ugly as hell, but it is not the reason the checkout fires two charge requests. [utils/money.ts:1-5] [utils/money.ts:11-17]"
+    },
+    {
+      "moduleId": "orders",
+      "text": "I only start the second attempt because the first one timed out, and I bail out cleanly on the final failure. The bug lives in the payment flow: a retry without a unique key means the same checkout can become two captures, which is damn bad engineering. [orders/checkout.ts:44-57]",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I never collapse concurrent requests for the same order, so two calls can both reach `authorizeAndCapture` before anything is recorded. My ledger only appends entries after the network round trip, which is too late to stop a duplicated charge. [payments/processor.ts:33-49] [payments/ledger.ts:11-19]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "utils",
+      "text": "My validators already reject bad amounts and currencies, so this is not a bad input problem. The checkout is charging twice because the retry policy and the charge processor never agree on a single request identity, and that is the real shit. [utils/validation.ts:181-195] [utils/validation.ts:357-372]"
     }
   ],
   "verdict": {
     "culprits": [
       "orders",
-      "gateway",
       "payments"
     ],
-    "rootCause": "The gateway times out after 2000ms, but the payment call usually takes about 2400ms, so the first charge can still finish after the gateway has already given up. Orders then retries that same charge without an idempotency key (a unique ID that makes a repeated request safe to repeat), so the payment service creates a second successful charge. Payments also lacks duplicate detection, so it accepts both requests and records both charges.",
+    "rootCause": "The checkout retries a timed-out charge request once, but it does not send an idempotency key (a unique ID that makes a repeated request safe to repeat). The payment processor treats each call as new and records a fresh charge after the card network call, so two overlapping requests can charge the same order twice. ",
     "evidence": [
       {
-        "path": "gateway/config.ts",
-        "startLine": 15,
-        "endLine": 16
-      },
-      {
-        "path": "gateway/proxy.ts",
-        "startLine": 25,
-        "endLine": 53
-      },
-      {
-        "path": "payments/processor.ts",
-        "startLine": 26,
-        "endLine": 49
+        "path": "orders/checkout.ts",
+        "startLine": 20,
+        "endLine": 30
       },
       {
         "path": "orders/checkout.ts",
-        "startLine": 43,
+        "startLine": 44,
         "endLine": 57
+      },
+      {
+        "path": "payments/processor.ts",
+        "startLine": 29,
+        "endLine": 49
       },
       {
         "path": "payments/logs/sample-charges.log",
@@ -71,10 +63,10 @@
       }
     ],
     "fix": {
-      "path": "orders/checkout.ts",
-      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@\n import { SERVICES } from '../gateway/config';\n import { forward, UpstreamTimeoutError } from '../gateway/proxy';\n import { reserveStock, releaseReservation } from '../inventory/reservations';\n import { getOrder, orderTotal, updateStatus, type Order } from './orders';\n import { log } from '../utils/logger';\n@@\n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n       payment_method_id: paymentMethodId,\n     },\n   });\n }\n"
+      "path": "payments/processor.ts",
+      "diff": "--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -19,6 +19,7 @@\n }\n \n const SUPPORTED_CURRENCIES = new Set(['EUR', 'USD', 'GBP']);\n+const inFlightCharges = new Map<string, Promise<ChargeResult>>();\n \n /**\n  * Charges a payment method for an order.\n@@ -30,23 +31,35 @@\n   if (!Number.isInteger(req.amount) || req.amount <= 0) throw new Error('amount must be a positive integer in minor units');\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n \n-  const started = Date.now();\n-  const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);\n-  const chargeId = `ch_${randomUUID().slice(0, 10)}`;\n-  const status = result.approved ? 'succeeded' : 'declined';\n+  const existing = inFlightCharges.get(req.order_id);\n+  if (existing) return existing;\n \n-  await recordCharge({\n-    chargeId,\n-    orderId: req.order_id,\n-    amount: req.amount,\n-    currency: req.currency,\n-    status,\n-    networkReference: result.reference,\n-    createdAt: new Date(),\n-  });\n+  const chargePromise = (async () => {\n+    const started = Date.now();\n+    const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);\n+    const chargeId = `ch_${randomUUID().slice(0, 10)}`;\n+    const status = result.approved ? 'succeeded' : 'declined';\n \n-  log('info', 'charge processed', { chargeId, orderId: req.order_id, status, ms: Date.now() - started });\n-  return { chargeId, status };\n+    await recordCharge({\n+      chargeId,\n+      orderId: req.order_id,\n+      amount: req.amount,\n+      currency: req.currency,\n+      status,\n+      networkReference: result.reference,\n+      createdAt: new Date(),\n+    });\n+\n+    log('info', 'charge processed', { chargeId, orderId: req.order_id, status, ms: Date.now() - started });\n+    return { chargeId, status };\n+  })();\n+\n+  inFlightCharges.set(req.order_id, chargePromise);\n+  try {\n+    return await chargePromise;\n+  } finally {\n+    inFlightCharges.delete(req.order_id);\n+  }\n }\n \n export async function handleChargeRequest(body: unknown, network: CardNetworkClient): Promise<{ status: number; body: unknown }> {"
     },
-    "judgeLine": "The code timed out first and retried second, which is a classic little fuck-up in payment systems.",
-    "diagram": "sequenceDiagram\n  participant orders as orders, the checkout bouncer\n  participant gateway as gateway, the timeout gambler\n  participant payments as payments, the ledger clerk\n  orders->>gateway: requestCharge() forwards POST /payments/charges with order_id and amount\n  %% cite orders/checkout.ts:20-31\n  gateway->>payments: fetch() with an abort timer of UPSTREAM_TIMEOUT_MS = 2000\n  %% cite gateway/proxy.ts:29-40\n  Note over payments: 2400ms on a good day. Gateway gives me 2000. Do the damn math.\n  rect rgb(255, 228, 222)\n  Note over gateway,payments: Where it all went wrong\n  gateway-->>orders: AbortError at 2000ms becomes UpstreamTimeoutError\n  %% cite gateway/proxy.ts:45-49\n  payments->>payments: processCharge() still finishes and records charge 1\n  %% cite payments/processor.ts:33-49\n  orders->>gateway: attempt 2 of MAX_PAYMENT_ATTEMPTS = 2, same charge, no idempotency key\n  %% cite orders/checkout.ts:44-53\n  gateway->>payments: POST /payments/charges again\n  %% cite gateway/proxy.ts:35-40\n  payments->>payments: recordCharge() writes charge 2 for the same order_id\n  %% cite payments/processor.ts:38-46\n  end\n  Note over orders: Timed out, so I fired it again. One basket, two charges. Fucking textbook.\n  Note over payments: Same order_id, new chargeId. I never check. Never have."
+    "judgeLine": "orders and payments made the same order twice because retry met no idempotency key, and the ledger clerk kept both receipts.",
+    "diagram": "sequenceDiagram\nparticipant orders as orders, the checkout bouncer\nparticipant payments as payments, the ledger clerk\nparticipant utils as utils, the 417-line validation landfill\norders->>payments: POST /payments/charges with order_id, amount, currency, payment_method_id\n%% cite orders/checkout.ts:20-30\npayments->>payments: processCharge(req, network)\n%% cite payments/processor.ts:29-34\nNote over payments: authorizeAndCapture runs after amount and currency checks.\n%% cite payments/processor.ts:29-34\npayments-->>orders: timeout on the first attempt\n%% cite orders/checkout.ts:44-53\nrect rgb(255, 228, 222)\nNote over orders,payments: Where it all went wrong\norders->>payments: retry the same order_id with the same body\n%% cite orders/checkout.ts:44-53\npayments->>payments: authorizeAndCapture again, then recordCharge a second time\n%% cite payments/processor.ts:34-49\nend\nNote over orders: The order stays `pending` until the second call finishes or fails.\nNote over payments,utils: utils only validates amounts and currencies; it does not stop the duplicate charge.\n%% cite payments/processor.ts:32-34"
   }
 }

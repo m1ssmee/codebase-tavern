@@ -244,4 +244,6 @@ export const aboutFallback = (m: Module) =>
     : `${m.name} keeps ${m.stats.fileCount} files.`;
 
 /** The What-if closing beat, once a stack of changes leaves every module fine or relieved. */
-export const closingLine = (spice: SpiceLevel, steps: number, n: number, seed: string) => pick(CLOSING, spice, seed, { steps, n });
+// One change: only the lines that don't count changes ("1 changes").
+const CLOSING_ONE = Object.fromEntries(Object.entries(CLOSING).map(([k, v]) => [k, v.filter((l) => !l.includes('{steps}'))])) as Lines;
+export const closingLine = (spice: SpiceLevel, steps: number, n: number, seed: string) => pick(steps === 1 ? CLOSING_ONE : CLOSING, spice, seed, { steps, n });

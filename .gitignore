@@ -47,3 +47,4 @@ next-env.d.ts
 
 # third-party agent skills (installed locally, not published)
 .claude/skills/
+skills-lock.json

@@ -116,6 +116,7 @@ export class Actor {
   private yaw = 0;
   private yawV = 0;
   private turn: Target | null = null;
+  private turnAmount = 0.8;
   private look: { target: Target; until: number } | null = null;
   pointer: Pointer | null = null;
   /** What a bonk is aimed at (set by the director): thrown ducks, keys and books fly there. */
@@ -389,8 +390,10 @@ export class Actor {
   lookAt(target: Target | null, secs = 3) {
     this.look = target ? { target, until: clock.now + secs } : null;
   }
-  turnTo(target: Target | null) {
+  /** Turn toward a target; `amount` is the share of the full angle (less keeps a gesture facing the camera). */
+  turnTo(target: Target | null, amount = 0.8) {
     this.turn = target;
+    this.turnAmount = amount;
   }
 
   /** Float to a point (world, an object, or a screen point), in this character's float style. */
@@ -620,7 +623,7 @@ export class Actor {
       want = Math.atan2(dir.x, dir.z);
     } else if (this.turn) {
       const dir = rig.root.parent!.worldToLocal(this.resolve(this.turn, _w)).sub(this.pos);
-      want = Math.atan2(dir.x, dir.z) * 0.8;
+      want = Math.atan2(dir.x, dir.z) * this.turnAmount;
     } else if (fl && !chess && Math.hypot(dx, dz) > 0.1) want = Math.atan2(dx, Math.max(Math.abs(dz), 0.5)) * 0.45;
     // The Star snaps: an underdamped spring; everyone else turns smoothly.
     const [k, c] = this.archetype === 'star' ? [160, 9] : [40, 12];

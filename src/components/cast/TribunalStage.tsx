@@ -10,7 +10,7 @@ import { getActor } from './anim/actor';
 import { judgeVerdict } from './anim/director';
 
 // Suspect spots either side of the bench, inner pair first (2-4 suspects).
-const SLOTS = [-1.85, 1.85, -3.4, 3.4];
+const SLOTS = [-2, 2, -3.85, 3.85];
 const JUDGE = 'trib:judge';
 const id = (m: string) => `trib:${m}`;
 
@@ -27,8 +27,8 @@ export type TribunalStageProps = {
 
 export default function TribunalStage({ suspects, modules, moods, colors, title, verdict, fallback }: TribunalStageProps) {
   const xs = useMemo(() => SLOTS.slice(0, suspects.length).sort((a, b) => a - b), [suspects.length]);
-  const landlordX = Math.max(...xs, 0) + 1.9;
-  const left = Math.min(...xs, 0) - 0.9;
+  const landlordX = Math.max(...xs, 0) + 2.2;
+  const left = Math.min(...xs, 0) - 1.3; // the widest suspects (the Junk Drawer ducking) need the room
   const labels = useRef<(HTMLDivElement | null)[]>([]);
   // The verdict being performed: everyone's store mood is held back until the Judge is done.
   const [performed, setPerformed] = useState<object | null>(null);
@@ -61,13 +61,13 @@ export default function TribunalStage({ suspects, modules, moods, colors, title,
             cast={modules}
             color={colors[s]}
             detail="lite"
-            position={[xs[i], 0, Math.abs(xs[i]) > 2 ? 0.55 : 0.7]}
+            position={[xs[i], 0, Math.abs(xs[i]) > 3 ? 0.55 : 0.7]}
             mood={performing ? 'idle' : (moods[s] ?? 'idle')}
             ambient={false}
             clicks={false}
           />
         ))}
-        <Labels at={suspects.map((_, i) => [xs[i], 0, Math.abs(xs[i]) > 2 ? 0.55 : 0.7])} els={labels} />
+        <Labels at={suspects.map((_, i) => [xs[i], 0, Math.abs(xs[i]) > 3 ? 0.55 : 0.7])} els={labels} />
       </CastCanvas>
       {suspects.map((s, i) => (
         <div
@@ -75,7 +75,7 @@ export default function TribunalStage({ suspects, modules, moods, colors, title,
           ref={(el) => {
             labels.current[i] = el;
           }}
-          className="pointer-events-none invisible absolute top-0 left-0 w-24 text-center text-xs leading-tight text-cream/80"
+          className="pointer-events-none invisible absolute top-0 left-0 w-[5.5rem] text-center text-[11px] leading-tight text-cream/80"
         >
           {title(s)}
         </div>

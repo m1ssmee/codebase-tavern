@@ -112,7 +112,7 @@ export async function judgeVerdict(judgeId: Id, culpritIds: Id[], innocentIds: I
     await wait(0.5);
     if (level >= 2 && culprits[0]) {
       for (const x of innocents.slice(0, 2)) {
-        x.turnTo(head(culprits[0]));
+        x.turnTo(head(culprits[0]), 0.4); // a three-quarter turn: the gesture stays on the camera's side
         await x.play('middle', { priority: 2 });
         x.turnTo(null);
       }

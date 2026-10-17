@@ -48,14 +48,15 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - Animations and sound by level: unhinged = cloud puff + green wobble on code smells; feral adds a red tint, steam puffs and sawtooth blips on talking faces; nuclear adds a screen shake on the verdict and culprits burst into smoke instead of falling over.
 
 ## AI temperature and safety
-- Provider chain for every route: gemini-3.8-flash, then gemini-3.5-flash, then OpenAI gpt-5.4-mini (only when OPENAI_API_KEY is set). Keep that order. LLM_PROVIDER=openai forces OpenAI for testing, so tests don't burn the Gemini free quota.
+- Provider chain for every route: OpenAI gpt-5.4-mini (when OPENAI_API_KEY is set), then gemini-3.8-flash, then gemini-3.5-flash, then the routes' templates. Keep that order. LLM_PROVIDER=openai forces OpenAI and LLM_PROVIDER=gemini forces Gemini, for testing.
+- Spend guard: OPENAI_DAILY_BUDGET_USD (default 2.50) per server instance, metered from each call's token usage at gpt-5.4-mini's prices (src/lib/spend.ts); once reached, OpenAI is skipped until 00:00 UTC and it is logged. It is approximate (every instance counts on its own); the account balance is the hard stop.
 - One temperature for every call, set in src/lib/llm.ts (provisional 1.4 for Gemini; LLM_TEMPERATURE 0-2 overrides it). A model that rejects a temperature gets its default, logged once; gpt-5.4-mini only takes its default. The comedy editor passes its own, lower temperature: it judges, it doesn't invent.
 - High temperature is only allowed behind the safeguards. Pure-joke lines (roast lines, gossip, the Landlord, What-if reactions, the judge's closing remark) get 3 candidates, the deterministic filter in src/lib/guards.ts (blocklist of slurs, hate, sexual content and self-harm; swearing only at swearing levels; the voice guide's banned words; lines aimed at people; non-English text; invented numbers, names and files) and a comedy-editor call, with templates behind them.
 - Facts: citations in chat, Tribunal and What-if are checked against the lines they cite, then re-anchored or dropped; the checker's work on client-sent code is bounded. Structured output is retried once on a parse or schema failure; fix diffs must apply to the real file or are regenerated once.
 - Tribunal root causes and What-if reasons and summaries stay free of swearing at every level.
 - Every LLM call logs its token counts.
 - Roast cards are signed only when the server inspected the repo itself (a GitHub link); uploaded zips are never signed.
-- src/data/demoCandidates/ holds alternative saved roasts and hearings; it is not wired in.
+- src/data/demoCandidates/ holds alternative saved roasts and hearings. The saved roast is roast-3 and the saved hearing is tribunal-4 (one innocent, so the verdict shows the innocent ducking); the rest are not wired in.
 
 ## 3D cast
 - Every module gets one of ten archetypes (src/lib/cast.ts, assignCast): a module that is 60% or more docs and config is the Librarian; otherwise its folder name, then its main files' names, are matched against keywords (head noun first); a repeat takes its next-best match before the alternate variant; with no match, the largest unmatched module is the Hoarder, one with 5 or more TODOs and no tests the Junk Drawer, anything else the Clerk.

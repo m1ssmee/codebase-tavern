@@ -116,10 +116,11 @@ export default function WhatIfPanel() {
   };
 
   /** A step's results are all in: after stacked changes, if nobody is worse off, the Landlord shows up. */
-  const finish = (imp: Impact, depth: number) => {
+  /** The Landlord closes a complete fix: everyone fine or relieved, and nothing left to follow up (or a stack that finished one). */
+  const finish = (imp: Impact, depth: number, sum: Summary | null) => {
     setPhase('done');
     const ok = imp.items.every((i) => ['fine', 'relieved'].includes(landed.current.get(i.moduleId)?.verdict ?? ''));
-    if (depth < 2 || !ok) return;
+    if (!ok || (depth < 2 && (!sum || sum.followUps?.length))) return;
     const s = useTavern.getState();
     const line = closingLine(s.spice, depth, imp.items.length, imp.files.map((f) => f.path).join());
     s.setLandlordSays(line);
@@ -170,7 +171,7 @@ export default function WhatIfPanel() {
       land(r);
     }
     setSummary(run.summary);
-    finish(imp, depth);
+    finish(imp, depth, run.summary);
   };
   const savedFor = (imp: Impact) =>
     SAVED.find((r) => {
@@ -346,6 +347,7 @@ export default function WhatIfPanel() {
       const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
       let buf = '';
       let failed = false;
+      let sum: Summary | null = null;
       for (;;) {
         const { done, value } = await reader.read();
         if (done || dead()) break;
@@ -359,13 +361,13 @@ export default function WhatIfPanel() {
             gotItem = true;
             clearTimeout(limit);
             land(e.item);
-          } else if (e.type === 'summary') setSummary(e.summary);
+          } else if (e.type === 'summary') setSummary((sum = e.summary));
           else if (e.type === 'reactions') voice(e.reactions);
           else if (e.type === 'error') failed = true;
         }
       }
       if (failed && !gotItem) throw new Error('assess failed');
-      if (!dead()) finish(imp, depth);
+      if (!dead()) finish(imp, depth, sum);
     } catch (err) {
       clearTimeout(limit);
       if (dead()) return;

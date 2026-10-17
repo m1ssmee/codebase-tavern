@@ -1,0 +1,75 @@
+{
+  "suspects": [
+    "orders",
+    "payments",
+    "utils"
+  ],
+  "turns": [
+    {
+      "moduleId": "orders",
+      "text": "I retry the charge when the upstream call times out, and that is the damn trap. `checkout()` loops twice, logs a retry on `UpstreamTimeoutError`, and sends the same `order_id` again with no idempotency key or duplicate check. [orders/checkout.ts:18-30] [orders/checkout.ts:44-57]",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I happily charge whatever shows up and write a fresh ledger entry every time, which is a shiny little fuckup. `processCharge()` calls `authorizeAndCapture()` before `recordCharge()`, then stamps a new `ch_*` charge ID with no lookup for an existing `order_id`. [payments/processor.ts:29-49] [payments/ledger.ts:11-18]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "utils",
+      "text": "I am not the culprit, damn it. I only validate money and order lines; `orderLines()` rejects empty or duplicate SKUs, and `money.ts` only converts units. None of that creates a second charge. [utils/validation.ts:363-373] [utils/money.ts:1-5]"
+    },
+    {
+      "moduleId": "orders",
+      "text": "The evidence says the retry is real shit: `payments/processor.ts` shows ~2400ms average processing time, while `checkout()` retries on timeout after reserving stock. The sample log even shows the same `orderId=ord_8f3k2b61` charged twice with two different `chargeId`s, so I keep firing the same request and the clerk keeps taking the money. [orders/checkout.ts:38-57] ",
+      "accuses": "payments"
+    },
+    {
+      "moduleId": "payments",
+      "text": "I do not dedupe by `order_id`, so a repeated request becomes a second charge, period. The ledger is append-only, and my own log stream shows the same order charged twice with different IDs; that is not a mystery, it is a missing idempotency check. [payments/ledger.ts:11-18] [payments/logs/sample-charges.log:6-7]",
+      "accuses": "orders"
+    },
+    {
+      "moduleId": "utils",
+      "text": "I still do not touch the charge flow, and the TODOs in my files are unrelated noise. `validation.ts` can reject bad input all day long, but `checkout()` already passes `order_id`, `amount`, `currency`, and `payment_method_id` through before the duplicate is created. [utils/validation.ts:190-192] [utils/validation.ts:181-194] "
+    }
+  ],
+  "verdict": {
+    "culprits": [
+      "orders",
+      "payments"
+    ],
+    "rootCause": "`checkout()` retries a payment when the card service times out, but it sends the same order again without an idempotency key (a unique ID that makes a request safe to repeat). `processCharge()` then creates a new charge every time because it does not check whether that `order_id` was already charged. The result is two successful charges for one order when the first charge succeeded but the reply was lost.",
+    "evidence": [
+      {
+        "path": "orders/checkout.ts",
+        "startLine": 18,
+        "endLine": 57
+      },
+      {
+        "path": "payments/processor.ts",
+        "startLine": 29,
+        "endLine": 49
+      },
+      {
+        "path": "payments/logs/sample-charges.log",
+        "startLine": 6,
+        "endLine": 7
+      }
+    ],
+    "fix": {
+      "path": "payments/processor.ts",
+      "diff": "--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -1,5 +1,5 @@\n import { randomUUID } from 'node:crypto';\n-import { recordCharge } from './ledger';\n+import { chargesForOrder, recordCharge } from './ledger';\n import { log } from '../utils/logger';\n \n export interface ChargeRequest {\n@@ -29,6 +29,12 @@\n export async function processCharge(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   if (!Number.isInteger(req.amount) || req.amount <= 0) throw new Error('amount must be a positive integer in minor units');\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n+\n+  const existing = chargesForOrder(req.order_id).find((entry) => entry.status === 'succeeded');\n+  if (existing) {\n+    log('info', 'charge processed', { chargeId: existing.chargeId, orderId: req.order_id, status: existing.status, ms: 0 });\n+    return { chargeId: existing.chargeId, status: existing.status };\n+  }\n \n   const started = Date.now();\n   const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);"
+    },
+    "judgeLine": "orders keeps retrying at 2400ms and payments keeps minting new charge IDs, which is a damn expensive handshake.",
+    "diagram": "sequenceDiagram\nparticipant orders as orders, the checkout bouncer\nparticipant payments as payments, the ledger clerk\nparticipant utils as utils, the 417-line validation landfill\norders->>payments: POST /payments/charges with order_id, amount, currency, payment_method_id\n%% cite orders/checkout.ts:20-30\npayments->>payments: authorizeAndCapture(payment_method_id, amount, currency)\n%% cite payments/processor.ts:34-35\nrect rgb(255, 228, 222)\nNote over orders,payments: Where it all went wrong\norders->>orders: catch UpstreamTimeoutError and retry attempt 2\n%% cite orders/checkout.ts:44-53\norders->>payments: POST /payments/charges again with the same order_id\n%% cite orders/checkout.ts:44-57\npayments->>payments: recordCharge a second time with a new chargeId\n%% cite payments/processor.ts:38-46\nend\npayments-->>orders: 200 charge result with chargeId\n%% cite payments/processor.ts:58-59\norders->>orders: updateStatus(order.id, 'paid', charge.chargeId)\n%% cite orders/checkout.ts:67-69\nNote over utils: I only validate inputs; I do not create the duplicate.\n%% cite utils/validation.ts:363-373"
+  },
+  "generated": {
+    "temperature": 1,
+    "calls": [
+      "tribunal-trial: openai:gpt-5.4-mini",
+      "editor-judge: openai:gpt-5.4-mini"
+    ],
+    "at": "2026-10-17T21:40"
+  }
+}

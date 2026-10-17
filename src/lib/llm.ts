@@ -2,9 +2,11 @@ import 'server-only';
 import OpenAI from 'openai';
 import { FALLBACK_MODEL, FAST, gemini, MODEL } from './gemini';
 import { matchesSchema } from './guards';
+import { costOf, openaiSpend } from './spend';
 
-// Provider chain for every route: gemini-3.8-flash → gemini-3.5-flash → OpenAI mini.
-// LLM_PROVIDER=openai forces OpenAI (use it for testing so we don't burn the Gemini free quota).
+// Provider chain for every route: OpenAI mini → gemini-3.8-flash → gemini-3.5-flash; the routes' templates after that.
+// OpenAI is skipped once this instance has spent OPENAI_DAILY_BUDGET_USD today (spend.ts).
+// LLM_PROVIDER=openai forces OpenAI (still within the budget); LLM_PROVIDER=gemini forces Gemini (temperature tuning).
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'; // verified live: reasoning_effort none/low, json_schema, stream
 
 // One creativity setting for every call (chat, characters, gossip, Tribunal, What-if, roast, the Landlord). The
@@ -34,22 +36,40 @@ async function withTemperature<T>(p: Provider, temperature: number | undefined, 
 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
 
-/** One line per call with its token counts, so spend can be read off the server log. */
+/** One line per call with its token counts (and, for OpenAI, its cost and today's total on this instance). */
 function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number) {
-  if (input !== undefined) console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}`);
+  if (input === undefined) return;
+  const usd = p.kind === 'openai' ? costOf(input, cached ?? 0, output ?? 0) : 0;
+  const today = p.kind === 'openai' ? ` usd=${usd.toFixed(5)} today=${openaiSpend.add(usd).toFixed(4)}` : '';
+  console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${today}`);
 }
 export type Msg = { role: 'user' | 'assistant'; text: string };
 /** One provider attempt: who, how long to the first chunk (streams) and in total. Failed attempts are recorded too. */
 export type Timing = { label: string; provider: string; ok: boolean; ms: number; firstChunkMs?: number; totalMs?: number; error?: string };
 
+let budgetLogged = '';
+/** OpenAI unless its key is missing or today's budget is spent (logged once a day per instance). */
+function openaiOk() {
+  if (!process.env.OPENAI_API_KEY) return false;
+  if (!openaiSpend.over()) return true;
+  const day = new Date().toISOString().slice(0, 10);
+  if (budgetLogged !== day) {
+    budgetLogged = day;
+    console.warn(`[llm] OpenAI daily budget reached ($${openaiSpend.spent().toFixed(2)} of $${openaiSpend.budget.toFixed(2)} on this instance); Gemini, then templates, until 00:00 UTC`);
+  }
+  return false;
+}
+
 function chain(): Provider[] {
   const openai: Provider = { name: `openai:${OPENAI_MODEL}`, kind: 'openai', model: OPENAI_MODEL };
-  if (process.env.LLM_PROVIDER === 'openai') return [openai];
-  const list: Provider[] = [
+  const gem: Provider[] = [
     { name: MODEL, kind: 'gemini', model: MODEL },
     { name: FALLBACK_MODEL, kind: 'gemini', model: FALLBACK_MODEL },
   ];
-  return process.env.OPENAI_API_KEY ? [...list, openai] : list;
+  const useOpenAI = openaiOk();
+  if (process.env.LLM_PROVIDER === 'openai' && useOpenAI) return [openai];
+  if (process.env.LLM_PROVIDER === 'gemini') return gem;
+  return useOpenAI ? [openai, ...gem] : gem;
 }
 
 let oai: OpenAI | null = null;

@@ -238,8 +238,10 @@ console.log('graph checks ok');
 // Diffs: bare @@ hunks (the Tribunal's), wrong line numbers, a dropped context space, and makeDiff round trips
 const { parseDiff, applyDiff, makeDiff } = await import('../src/lib/diff.ts');
 const { default: trib } = await import('../src/data/demoTribunal.json', { with: { type: 'json' } });
+// A Tribunal fix in the model's style (bare @@ hunks): the idempotency key, the same edit as the "Add an idempotency key" chip.
+const KEY_FIX = "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@\n import { SERVICES } from '../gateway/config';\n import { forward, UpstreamTimeoutError } from '../gateway/proxy';\n import { reserveStock, releaseReservation } from '../inventory/reservations';\n import { getOrder, orderTotal, updateStatus, type Order } from './orders';\n import { log } from '../utils/logger';\n@@\n async function requestCharge(order: Order, paymentMethodId: string): Promise<ChargeResponse> {\n   return forward<ChargeResponse>(SERVICES.payments, {\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n       payment_method_id: paymentMethodId,\n     },\n   });\n }\n";
 const checkout = qc.files.find((f) => f.path === 'orders/checkout.ts').content;
-const [fd] = parseDiff(trib.verdict.fix.diff);
+const [fd] = parseDiff(KEY_FIX);
 const applied = applyDiff(checkout, fd);
 assert.equal(fd.path, 'orders/checkout.ts');
 assert.deepEqual([applied.changedOld, applied.added, applied.removed], [[24], 1, 0]); // inserted after line 24
@@ -263,7 +265,7 @@ console.log('diff checks ok');
 // What-if impact (deterministic ground truth)
 const { computeImpact, renameDiff, deleteDiff, declaredIn, retryOrCheck, QUICKCART_SUGGESTIONS, suggestionDiff, sameChange } = await import('../src/lib/whatif.ts');
 const short = (imp) => imp.items.map((i) => `${i.moduleId}:${i.role}@${i.hops}${i.via ? '<' + i.via : ''}`);
-const fix = computeImpact(qr.files, qr.modules, qg, trib.verdict.fix.diff);
+const fix = computeImpact(qr.files, qr.modules, qg, KEY_FIX);
 assert.deepEqual(short(fix), ['orders:changed@0', 'gateway:upstream@1<orders', 'payments:downstream@1<orders']);
 assert.deepEqual(fix.items[1].lines.map((c) => `${c.path}:${c.line}`), ['gateway/config.ts:10']); // gateway routes /orders to the orders service
 assert.deepEqual(fix.items[2].lines.map((c) => `${c.path}:${c.line}`), ['orders/checkout.ts:21']); // the SERVICES.payments call now carries a new field
@@ -309,7 +311,9 @@ for (const run of savedWhatIf.runs) {
   assert.ok(run.items.every((i) => ['breaks', 'at risk', 'fine', 'relieved'].includes(i.verdict) && i.reason && i.reaction), run.title);
   assert.ok(run.summary.update && run.summary.check, run.title);
 }
-assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, savedWhatIf.runs[0].diff).files, fix.files)); // replays for "Apply this fix" too
+assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, savedWhatIf.runs.find((r) => r.title === 'Add an idempotency key').diff).files, fix.files)); // the chip replays
+const tribFix = computeImpact(qr.files, qr.modules, qg, trib.verdict.fix.diff, trib.verdict.fix.path);
+assert.ok(savedWhatIf.runs.some((r) => sameChange(computeImpact(qr.files, qr.modules, qg, r.diff).files, tribFix.files))); // so does "Apply this fix"
 console.log('saved what-if checks ok');
 
 // Diagrams: sanitising AI output, cites, sequence messages, deterministic charts
@@ -359,6 +363,7 @@ for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
   assert.deepEqual([...cap.keys()].sort(), ['(misc)', 'gateway', 'orders', 'utils'], spice);
   assert.match(cap.get('utils'), /3 MODULES|3 modules/);
   const caps = [...cap.values(), landlordIntro('m1ssmee/quickcart', qr.files, qr.modules, spice), landlordOutro('q', qg, qr.modules, bf, spice), closingLine(spice, 2, 3, 'x')];
+  for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) assert.doesNotMatch(closingLine(spice, 1, 4, seed), /\b1 changes|\{/); // one change, said right
   for (const l of caps) {
     assert.ok(!/\{\w+\}/.test(l), l); // every placeholder filled
     if (spice === 'clean') assert.ok(!/\b(damn|shit|fuck|hell)/i.test(l), l);
@@ -374,8 +379,9 @@ const exTour = tourOrder(ex, buildRepo('x', [['lib/express.js', 'x\n'.repeat(80)
 assert.equal(exTour.entry, '(root)');
 console.log('landlord checks ok');
 
-// Saved hearing: the verdict diagram cites real lines and the fix diff is still the one every saved What-if run matches.
-assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, trib.verdict.fix.diff).files, fix.files));
+// Saved hearing: one innocent (the verdict shows it ducking), a fix that applies to a culprit's file, real diagram cites.
+assert.equal(trib.suspects.filter((id) => !trib.verdict.culprits.includes(id)).length, 1);
+assert.ok(!('error' in tribFix) && tribFix.items[0].role === 'changed' && trib.verdict.culprits.includes(tribFix.items[0].moduleId));
 const msgs = parseSequence(sanitizeDiagram(trib.verdict.diagram));
 assert.equal(sanitizeDiagram(trib.verdict.diagram), trib.verdict.diagram.trim()); // nothing to strip
 assert.ok(msgs.length >= 4 && msgs.length <= 10 && msgs.some((m) => m.fatal));
@@ -582,4 +588,19 @@ console.log('judge template checks ok');
   for (const [, b] of cases) assert.ok(!SWEARING.test(b), b);
   assert.equal(unswear('`checkout()` retries once [orders/checkout.ts:44-52].'), '`checkout()` retries once [orders/checkout.ts:44-52].');
   console.log('plain-sentence checks ok');
+}
+{
+  // OpenAI spend guard: cost from token usage at gpt-5.4-mini prices, a daily budget, reset at 00:00 UTC.
+  const { costOf, makeMeter } = await import('../src/lib/spend.ts');
+  assert.ok(Math.abs(costOf(1_000_000, 0, 0) - 0.75) < 1e-9);
+  assert.ok(Math.abs(costOf(1_000_000, 1_000_000, 1_000_000) - (0.075 + 4.5)) < 1e-9);
+  const m = makeMeter(0.01);
+  const day1 = new Date('2026-10-18T23:59:00Z');
+  m.add(costOf(6000, 0, 1200), day1); // a chat-sized call: $0.0099
+  assert.equal(m.over(day1), false);
+  m.add(costOf(1000, 0, 100), day1);
+  assert.equal(m.over(day1), true);
+  assert.equal(m.over(new Date('2026-10-19T00:00:01Z')), false); // a new day
+  assert.equal(m.spent(new Date('2026-10-19T00:00:02Z')), 0);
+  console.log('spend guard checks ok');
 }

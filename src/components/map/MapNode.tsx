@@ -36,7 +36,10 @@ export default function MapNode(props: MapNodeProps) {
   return on ? <Node3D {...props} /> : <Node2D {...props} />;
 }
 
-function Node3D({ module, stats, cast, mood = 'idle', talking, position = [0, 0, 0], scale = 1, color, flinch, onClick }: MapNodeProps) {
+// Characters stop growing past this node size: the biggest archetypes (the Hoarder's pack) spill onto neighbours' labels.
+const MAX_CHARACTER = 1.7;
+
+function Node3D({ module, stats, cast, mood = 'idle', talking, position = [0, 0, 0], scale = 1, color, flinch, dimmed, onClick }: MapNodeProps) {
   const id = `map:${module.id}`;
   // The ripple's flinch: the cast's small reaction (a squash and a blink), without its sound.
   useEffect(() => {
@@ -60,10 +63,11 @@ function Node3D({ module, stats, cast, mood = 'idle', talking, position = [0, 0,
           detail="lite"
           mood={talking ? 'talking' : mood}
           moodClips={MAP_CLIPS}
-          scale={scale * 0.7}
+          scale={Math.min(scale, MAX_CHARACTER) * 0.7}
           ambient={false}
           clicks={false}
           hitbox
+          dim={dimmed}
         />
       </group>
     </group>

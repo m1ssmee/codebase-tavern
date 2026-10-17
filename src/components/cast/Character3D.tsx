@@ -54,6 +54,8 @@ export type Character3DProps = {
   clicks?: boolean;
   /** Don't pick its meshes with the pointer: the parent supplies a cheap hit shape (the map). */
   hitbox?: boolean;
+  /** Faded back (the map dims everyone but the hovered module's neighbours). */
+  dim?: boolean;
   /** Called with each new build (triangle and draw-call counts, rig). */
   onBuilt?: (b: Built) => void;
   /** Resolves to the rig, for animation. Same joints at both detail levels. */
@@ -83,7 +85,7 @@ function DetailProbe({ target, level, onChange }: { target: RefObject<THREE.Grou
   return null;
 }
 
-export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, actor, mood, moodClips, ambient = true, clicks = true, hitbox = false, ref }: Character3DProps) {
+export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, actor, mood, moodClips, ambient = true, clicks = true, hitbox = false, dim = false, ref }: Character3DProps) {
   const s = stats ?? module?.stats ?? DEFAULT_STATS;
   const auto = useMemo(() => {
     if (archetype || !module) return null;
@@ -118,6 +120,7 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
     if (!hitbox) return;
     built.root.traverse((o) => (o.raycast = () => {}));
   }, [built, hitbox]);
+  useEffect(() => (dim ? fade(built.root) : undefined), [built, dim]);
   useFrame((_, dt) => {
     if (actor) getActor(actor)?.update(dt);
   });
@@ -137,6 +140,27 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
       {detail === undefined && <DetailProbe target={group} level={autoDetail} onChange={setAutoDetail} />}
     </group>
   );
+}
+
+// Materials are shared by every character, so fading one swaps its meshes to see-through copies (made once per
+// material) and hides its outline hull, which would otherwise stay solid.
+const faded = new WeakMap<THREE.Material, THREE.Material>();
+const fadedOf = (m: THREE.Material) => {
+  let f = faded.get(m);
+  if (!f) faded.set(m, (f = Object.assign(m.clone(), { transparent: true, opacity: 0.25 * m.opacity })));
+  return f;
+};
+/** Fades a character to a quarter; returns the undo. */
+function fade(root: THREE.Object3D) {
+  const undo: (() => void)[] = [];
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return;
+    const { material, visible } = o;
+    if (material instanceof THREE.ShaderMaterial) o.visible = false;
+    else o.material = Array.isArray(material) ? material.map(fadedOf) : fadedOf(material);
+    undo.push(() => ((o.material = material), (o.visible = visible)));
+  });
+  return () => undo.forEach((u) => u());
 }
 
 /** Shared lighting preset for every scene with cast members: soft hemisphere, key, fill and rim. */
