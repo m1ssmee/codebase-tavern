@@ -1,15 +1,11 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmStream, type Msg } from '@/lib/llm';
-import { levelBlock, levelReminder, VOICE_GUIDE } from '@/lib/voice';
+import { levelBlock, levelReminder, modeBlock, modeReminder, VOICE_GUIDE } from '@/lib/voice';
 import { CONTEXT_BUDGET } from '@/lib/context';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
 
-const MODE: Record<string, string> = {
-  beginner: 'Mode: beginner. Plain language, define any technical term you use, at most one analogy.',
-  expert: 'Mode: expert. Terse and technical; name the pattern or risk directly.',
-};
 
 const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
 const arr = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? v.slice(0, n) : []);
@@ -46,16 +42,17 @@ Catchphrase: ${str(b.character?.catchphrase, 150)}
 
 ${levelBlock(b.spice)}
 
+${modeBlock(b.mode, b.spice)}
+
 ${VOICE_GUIDE}
 
 Rules:
-- Speak in first person as this module. Answer first, joke second. Under 100 words.
-- Plain text only: no markdown, no code blocks. Don't repeat your catchphrase.
+- Speak in first person as this module. Answer first, joke second. Follow the MODE structure and word limit above.
+- Simple markdown only: numbered lists, **bold**, \`inline code\`. No headings, no code blocks. Don't repeat your catchphrase.
 - Every factual claim about code cites [path:line] or [path:start-end] in square brackets, using the exact paths and the line numbers shown before "|". Never put citations in backticks. Cite the narrowest range that supports the claim, usually under 15 lines; never a whole file.
 - Never invent code, files or behaviour. Only use the code below.
 - If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below.
 - If the answer is in a file marked [left out] or [truncated], say that file was left out of what you can see.
-- ${MODE[b.mode] ?? MODE.beginner}
 
 Other modules:
 ${others || '- none'}
@@ -69,7 +66,8 @@ ${arr<string>(b.dependents, 30).map((d) => '- ' + str(d, 300)).join('\n') || '- 
 Your code:
 ${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
 
-${levelReminder(b.spice)}`;
+${levelReminder(b.spice)}
+${modeReminder(b.mode)}`;
 
   // Providers want alternating turns starting with the user: map roles, drop leading assistant turns, merge repeats.
   const messages: Msg[] = [];

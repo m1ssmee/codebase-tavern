@@ -9,6 +9,7 @@ import type { Citation } from '@/lib/types';
 import demoTribunal from '@/data/demoTribunal.json';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
+import Rich from './Rich';
 
 type Turn = { moduleId: string; text: string; accuses?: string };
 type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string };
@@ -121,6 +122,7 @@ export default function TribunalPanel() {
         stage: 'trial',
         bug: text,
         spice,
+        mode: useTavern.getState().mode,
         suspects: ids.map((id) => {
           const m = repo.modules.find((x) => x.id === id)!;
           const ctx = pickContext(m, repo.files, null, text, budget);
@@ -144,10 +146,8 @@ export default function TribunalPanel() {
           {title(turn.moduleId)}
           {turn.accuses && <span className="font-normal text-tomato"> accuses {title(turn.accuses)}</span>}
         </div>
-        <div className="leading-relaxed whitespace-pre-wrap">
-          {parseCitations(turn.text).map((seg, i) =>
-            typeof seg === 'string' ? seg : isValidCitation(seg, repo.files) ? <CitationChip key={i} citation={seg} /> : null,
-          )}
+        <div className="leading-relaxed">
+          <Rich text={turn.text} files={repo.files} />
         </div>
       </div>
     </div>

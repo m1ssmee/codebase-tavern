@@ -1,6 +1,6 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmJSON } from '@/lib/llm';
-import { levelBlock, levelReminder, VOICE_GUIDE } from '@/lib/voice';
+import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
 import type { Citation } from '@/lib/types';
 
@@ -113,11 +113,12 @@ ${VOICE_GUIDE}
 
 Rules:
 - Find the real root cause from the code, comments and logs shown. Bugs often come from how modules interact: compare timeouts with processing times, look for retries without idempotency keys, check logs for duplicates.
+- Turns stay short and avoid undefined jargon${b.mode === 'expert' ? '' : ` (plain words, or define the term in parentheses, never square brackets). ${PLAIN_WORDS}`}; swearing adds emphasis, never replaces information.
 - turns: 6-8 items in two rounds. Round 1: every suspect speaks once (defends itself or accuses another). Round 2: rebuttals. Each turn is 2-3 sentences, first person, in that module's voice.
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
-- verdict.rootCause: 2 plain sentences, no jokes. verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes behaviour to remove the root cause (e.g. send and honour an idempotency key, or stop retrying a non-idempotent call); never a diff that only edits comments. Context lines must match the code shown. verdict.judgeLine: one dry closing sentence from the judge.
+- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes behaviour to remove the root cause (e.g. send and honour an idempotency key, or stop retrying a non-idempotent call); never a diff that only edits comments. Context lines must match the code shown. verdict.judgeLine: one dry closing sentence from the judge.
 - Use only these moduleIds: ${ids.join(', ')}.`;
 
     const prompt = `Bug report: ${bug}

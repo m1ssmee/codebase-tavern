@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import { languageFor } from '@/lib/lang';
 import Gossip from './Gossip';
+import { sendChat } from './ChatPanel';
 
 type Ed = Parameters<OnMount>[0];
 
@@ -23,7 +24,9 @@ const defineTheme: BeforeMount = (monaco) =>
   });
 
 export default function CodePanel() {
-  const { repo, openFilePath, highlight } = useTavern();
+  const { repo, openFilePath, highlight, tribunal } = useTavern();
+  // Floating "Explain this" button for a non-empty selection, positioned at the selection's end.
+  const [sel, setSel] = useState<{ start: number; end: number; top: number; left: number } | null>(null);
   const file = repo?.files.find((f) => f.path === openFilePath);
   const editorRef = useRef<Ed | null>(null);
   const [ready, setReady] = useState(false);
@@ -34,6 +37,12 @@ export default function CodePanel() {
     const mono = getComputedStyle(document.documentElement).getPropertyValue('--font-jetbrains');
     if (mono) editor.updateOptions({ fontFamily: mono });
     document.fonts.ready.then(() => monaco.editor.remeasureFonts());
+    editor.onDidChangeCursorSelection(({ selection }) => {
+      if (selection.isEmpty()) return setSel(null);
+      const pos = editor.getScrolledVisiblePosition(selection.getEndPosition());
+      if (pos) setSel({ start: selection.startLineNumber, end: selection.endLineNumber, top: pos.top + pos.height + 4, left: pos.left });
+    });
+    editor.onDidScrollChange(() => setSel(null));
     setReady(true);
   };
 
@@ -97,6 +106,20 @@ export default function CodePanel() {
           />
         ) : (
           <div className="grid h-full place-items-center text-muted">Pick a file from the tree.</div>
+        )}
+        {sel && file && !tribunal && (
+          <button
+            type="button"
+            style={{ top: sel.top, left: Math.max(8, sel.left - 40) }}
+            onMouseDown={(e) => e.preventDefault()} // keep Monaco's selection while clicking
+            onClick={() => {
+              void sendChat(`Explain these lines [${file.path}:${sel.start}-${sel.end}]`);
+              setSel(null);
+            }}
+            className="bounce-hover absolute z-30 rounded-full border border-edge bg-amber px-3 py-1 text-xs font-bold text-ink shadow-md"
+          >
+            Explain this
+          </button>
         )}
         <Gossip />
       </div>
