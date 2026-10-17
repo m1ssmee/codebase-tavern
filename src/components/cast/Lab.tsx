@@ -2,7 +2,7 @@
 // /lab: review page for the 3D cast. Not linked from the app. Zero API calls: quickcart comes from the
 // saved demo data, express from a module snapshot in src/data.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Module, ModuleStats } from '@/lib/types';
@@ -11,20 +11,30 @@ import { assignColors, PALETTE } from '@/lib/characters';
 import { detectModules } from '@/lib/analyze';
 import demoRepo from '@/data/demoRepo.json';
 import expressSnap from '@/data/expressModules.json';
-import { CastLights, Character3D, castCanvasProps } from './Character3D';
+import CharacterFace from '@/components/CharacterFace';
+import { CastCanvas, CastFallbackNote, CastLights, Character3D, useCast3D } from './Character3D';
 import { EXPRESSIONS, type Expression } from './rig';
-import type { Built } from './archetypes';
+import type { Built, Detail } from './archetypes';
 
-type Scene = 'all' | 'quickcart' | 'express';
+type Scene = 'all' | 'quickcart' | 'express' | 'overlay' | 'map' | 'header';
 type Slot = { key: string; label: string; sub: string; archetype: Archetype; variant: Variant; color: string; stats: ModuleStats; keys?: number };
 
-const REPOS: Record<Exclude<Scene, 'all'>, Module[]> = {
+/** Performance scenes, sized like where they'll live: canvas size, detail, and who's in it. */
+const PERF: Record<'overlay' | 'map' | 'header', { label: string; w: number; h: number; detail: Detail }> = {
+  overlay: { label: '3 lite (overlay)', w: 480, h: 240, detail: 'lite' },
+  map: { label: '8 lite (map)', w: 1100, h: 520, detail: 'lite' },
+  header: { label: '1 full (chat header)', w: 420, h: 380, detail: 'full' },
+};
+const isPerf = (s: Scene): s is keyof typeof PERF => s in PERF;
+
+const REPOS: Record<'quickcart' | 'express', Module[]> = {
   quickcart: detectModules((demoRepo as { files: { path: string; content: string; lineCount: number }[] }).files),
   express: expressSnap.modules as Module[],
 };
 const castRows = (mods: Module[]) => assignCast(mods).map((c, i) => ({ module: mods[i], ...c }));
 const SPACING = 2.15;
-/** The tavern's original dark theme (the 2D palette was picked to read on it). */
+/** The app's real background (globals.css --color-ink), and the tavern's original dark theme. */
+const APP_BG = '#ffffff';
 const DARK = { bg: '#17110e', ground: '#211712', text: '#f6e7cf' };
 
 function Spin({ on, children, x }: { on: boolean; children: React.ReactNode; x: number }) {
@@ -62,7 +72,7 @@ function PerfMeter({ out }: { out: React.RefObject<HTMLSpanElement | null> }) {
       frames++;
       if (now - t0 >= 1000 && out.current) {
         const { calls, triangles } = gl.info.render;
-        out.current.textContent = `${Math.round((frames * 1000) / (now - t0))} fps · ${calls} draw calls · ${triangles.toLocaleString('en')} triangles`;
+        out.current.textContent = `${Math.round((frames * 1000) / (now - t0))} fps · ${calls} draw calls · ${triangles.toLocaleString('en')} triangles · DPR ${gl.getPixelRatio().toFixed(2)} · frame ${gl.info.render.frame}`;
         frames = 0;
         t0 = now;
       }
@@ -110,7 +120,11 @@ function Slider({ label, value, min, max, step = 1, onChange, fmt = String }: { 
 }
 
 export default function Lab() {
-  const [scene, setScene] = useState<Scene>('all');
+  // Deep links for review and measurement: /lab?scene=map (all, quickcart, express, overlay, map, header).
+  const [scene, setScene] = useState<Scene>(() => {
+    const q = new URLSearchParams(window.location.search).get('scene');
+    return q && ['all', 'quickcart', 'express', 'overlay', 'map', 'header'].includes(q) ? (q as Scene) : 'all';
+  });
   const [expression, setExpression] = useState<Expression>('deadpan');
   const [turntable, setTurntable] = useState(false);
   const [silhouette, setSilhouette] = useState(false);
@@ -124,6 +138,10 @@ export default function Lab() {
   const [nesting, setNesting] = useState(3);
   const [biggest, setBiggest] = useState(120);
   const [keys, setKeys] = useState(7);
+  const [detailPick, setDetailPick] = useState<Detail | 'auto'>('full');
+  const [autoFallback, setAutoFallback] = useState(true);
+  const threeD = useCast3D((s) => s.on);
+  const setThreeD = useCast3D((s) => s.setOn);
   const perf = useRef<HTMLSpanElement>(null);
   const [tris, setTris] = useState<Record<string, Built['tris']>>({});
   const labels = useRef<(HTMLDivElement | null)[]>([]);
@@ -136,20 +154,23 @@ export default function Lab() {
   const slots = useMemo<Slot[]>(() => {
     if (scene === 'all')
       return ARCHETYPES.map((a, i) => ({ key: a, label: CAST[a].name, sub: variant && a !== 'landlord' ? 'alternate props' : '', archetype: a, variant, color: PALETTE[(i + shift) % PALETTE.length], stats, keys }));
-    const mods = REPOS[scene], colors = assignColors(mods);
+    if (scene === 'header') return [{ key: 'plumber', label: 'The Plumber', sub: 'heaviest character, full detail', archetype: 'plumber', variant: 0, color: PALETTE[(7 + shift) % PALETTE.length], stats }];
+    const mods = REPOS[scene === 'express' ? 'express' : 'quickcart'], colors = assignColors(mods);
     // The Landlord narrates every repo: first in line, one key per module, a colour no tenant uses.
     const free = PALETTE.find((p) => !Object.values(colors).includes(p)) ?? '#c38bff';
-    return [
+    const cast: Slot[] = [
       { key: 'landlord', label: 'The Landlord', sub: `narrator · ${mods.length} keys`, archetype: 'landlord' as const, variant: 0 as Variant, color: cycle(free), stats, keys: mods.length },
       ...castRows(mods).map((r) => ({
         key: r.module.id, label: r.module.name, sub: `${CAST[r.archetype].name}${r.variant ? ' (alt)' : ''}`,
         archetype: r.archetype, variant: r.variant, color: cycle(colors[r.module.id]), stats: r.module.stats,
       })),
     ];
+    return scene === 'overlay' ? [cast[0], cast[1], cast[5]] : cast;
   }, [scene, variant, shift, stats, cycle, keys]);
+  const detail: Detail | undefined = isPerf(scene) ? PERF[scene].detail : detailPick === 'auto' ? undefined : detailPick;
   const xs = slots.map((_, i) => (i - (slots.length - 1) / 2) * SPACING);
   const onBuilt = useCallback((key: string, b: Built) => {
-    setTris((t) => (t[key]?.base === b.tris.base && t[key]?.outline === b.tris.outline ? t : { ...t, [key]: b.tris }));
+    setTris((t) => (t[key]?.base === b.tris.base && t[key]?.outline === b.tris.outline && t[key]?.calls === b.tris.calls ? t : { ...t, [key]: b.tris }));
   }, []);
   const focused = focus === null ? null : slots[focus];
 
@@ -168,6 +189,26 @@ export default function Lab() {
           ))}
         </section>
         <section className="flex flex-col gap-1.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Detail {isPerf(scene) && '(set by the perf scene)'}</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {(['full', 'lite', 'auto'] as const).map((d) => (
+              <button key={d} className={btn(!isPerf(scene) && detailPick === d)} disabled={isPerf(scene)} onClick={() => setDetailPick(d)}>
+                {d === 'auto' ? 'Auto (on-screen size)' : d}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="flex flex-col gap-1.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Perf scenes</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {(Object.keys(PERF) as (keyof typeof PERF)[]).map((k) => (
+              <button key={k} className={btn(scene === k)} onClick={() => { setScene(k); setFocus(null); }}>
+                {PERF[k].label}
+              </button>
+            ))}
+          </div>
+        </section>
+        <section className="flex flex-col gap-1.5">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Expression</h2>
           <div className="flex flex-wrap gap-1.5">
             {EXPRESSIONS.map((e) => (
@@ -183,6 +224,8 @@ export default function Lab() {
           <button className={btn(dark)} onClick={() => setDark((v) => !v)}>Dark background</button>
           <button className={btn(variant === 1)} disabled={scene !== 'all'} onClick={() => setVariant((v) => (v ? 0 : 1))}>Alternate props</button>
           <button className={btn(false)} onClick={() => setShift((v) => (v + 1) % PALETTE.length)}>Cycle colours</button>
+          <button className={btn(threeD)} onClick={() => setThreeD(!threeD)}>3D characters: {threeD ? 'on' : 'off'}</button>
+          <button className={btn(autoFallback)} onClick={() => setAutoFallback((v) => !v)}>Auto 2D when slow</button>
           {focus !== null && <button className={btn(false)} onClick={() => setFocus(null)}>Show all</button>}
         </section>
         <section className={`flex flex-col gap-2 ${scene !== 'all' ? 'opacity-40' : ''}`}>
@@ -220,66 +263,91 @@ export default function Lab() {
           <span ref={perf} className="font-mono text-xs" data-testid="perf">measuring…</span>
         </section>
         <section className="flex flex-col gap-1">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Triangles (body / outline)</h2>
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">Per character: triangles (body + outline) · draw calls</h2>
           <table className="text-xs" data-testid="tris">
             <tbody>
               {slots.map((s) => (
                 <tr key={s.key}>
                   <td className="pr-2">{s.label}</td>
-                  <td className="font-mono">{tris[`${scene}:${s.key}`] ? `${tris[`${scene}:${s.key}`].base} / ${tris[`${scene}:${s.key}`].outline}` : '…'}</td>
+                  <td className="font-mono">{((t) => (t ? `${t.base} + ${t.outline} = ${t.base + t.outline} · ${t.calls}` : '…'))(tris[`${scene}:${detail ?? 'auto'}:${s.key}`])}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </section>
       </aside>
-      <main className="relative min-w-0 flex-1" data-testid="stage">
-        <Canvas {...castCanvasProps} camera={{ fov: 30, position: [0, 1.45, 22] }}>
-          <color attach="background" args={[silhouette ? '#ffffff' : dark ? DARK.bg : '#fafaf8']} />
-          <CastLights />
-          {!silhouette && (
-            <mesh rotation-x={-Math.PI / 2} position={[0, -0.001, 0]}>
-              <circleGeometry args={[30, 64]} />
-              <meshBasicMaterial color={dark ? DARK.ground : '#efeee9'} />
-            </mesh>
-          )}
-          {slots.map((s, i) => (
-            <Spin key={s.key} on={turntable} x={xs[i]}>
-              <Character3D
-                archetype={s.archetype}
-                variant={s.variant}
-                color={s.color}
-                stats={s.stats}
-                expression={expression}
-                silhouette={silhouette}
-                keys={s.keys}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setFocus(i);
+      <main className="relative flex min-w-0 flex-1 items-center justify-center" style={{ background: silhouette || !dark ? APP_BG : DARK.bg }}>
+        <div
+          className="relative"
+          data-testid="stage"
+          style={isPerf(scene) ? { width: PERF[scene].w, height: PERF[scene].h, outline: '1px dashed #d4d4d4' } : { width: '100%', height: '100%' }}
+        >
+          <CastCanvas
+            camera={{ fov: 30, position: [0, 1.45, 22] }}
+            look={dark && !silhouette ? 'dark' : 'light'}
+            autoFallback={autoFallback}
+            fallback={
+              <div className="flex h-full w-full flex-col items-center justify-center gap-6">
+                <div className="flex flex-wrap items-end justify-center gap-6">
+                  {slots.map((s) => (
+                    <div key={s.key} className="flex flex-col items-center gap-1">
+                      <CharacterFace name={s.label} stats={s.stats} color={s.color} size={isPerf(scene) && scene !== 'header' ? 56 : 96} />
+                      <span className="text-[11px] font-semibold" style={{ color: dark ? DARK.text : undefined }}>{s.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <CastFallbackNote />
+              </div>
+            }
+          >
+            <color attach="background" args={[silhouette || !dark ? APP_BG : DARK.bg]} />
+            <CastLights />
+            {!silhouette && dark && (
+              <mesh rotation-x={-Math.PI / 2} position={[0, -0.001, 0]}>
+                <circleGeometry args={[30, 64]} />
+                <meshBasicMaterial color={DARK.ground} />
+              </mesh>
+            )}
+            {slots.map((s, i) => (
+              <Spin key={s.key} on={turntable} x={xs[i]}>
+                <Character3D
+                  archetype={s.archetype}
+                  variant={s.variant}
+                  color={s.color}
+                  stats={s.stats}
+                  expression={expression}
+                  silhouette={silhouette}
+                  keys={s.keys}
+                  detail={detail}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFocus(i);
+                  }}
+                  onBuilt={(b) => onBuilt(`${scene}:${detail ?? 'auto'}:${s.key}`, b)}
+                />
+              </Spin>
+            ))}
+            <OrbitControls makeDefault target={[0, 0.95, 0]} maxPolarAngle={Math.PI / 2 - 0.02} />
+            <Framing focusX={focus === null ? null : xs[focus]} width={slots.length * SPACING} />
+            <LabelTracker xs={xs} refs={labels} />
+            <PerfMeter out={perf} />
+          </CastCanvas>
+          {threeD &&
+            !silhouette &&
+            slots.map((s, i) => (
+              <div
+                key={s.key}
+                ref={(el) => {
+                  labels.current[i] = el;
                 }}
-                onBuilt={(b) => onBuilt(`${scene}:${s.key}`, b)}
-              />
-            </Spin>
-          ))}
-          <OrbitControls makeDefault target={[0, 0.95, 0]} maxPolarAngle={Math.PI / 2 - 0.02} />
-          <Framing focusX={focus === null ? null : xs[focus]} width={slots.length * SPACING} />
-          <LabelTracker xs={xs} refs={labels} />
-          <PerfMeter out={perf} />
-        </Canvas>
-        {!silhouette &&
-          slots.map((s, i) => (
-            <div
-              key={s.key}
-              ref={(el) => {
-                labels.current[i] = el;
-              }}
-              data-testid="label"
-              className="pointer-events-none absolute left-0 top-0 whitespace-nowrap text-center leading-tight"
-            >
-              <div className="text-[11px] font-semibold" style={{ color: dark ? DARK.text : undefined }}>{s.label}</div>
-              {s.sub && <div className="text-[10px] text-muted">{s.sub}</div>}
-            </div>
-          ))}
+                data-testid="label"
+                className="pointer-events-none absolute left-0 top-0 whitespace-nowrap text-center leading-tight"
+              >
+                <div className="text-[11px] font-semibold" style={{ color: dark ? DARK.text : undefined }}>{s.label}</div>
+                {s.sub && <div className="text-[10px] text-muted">{s.sub}</div>}
+              </div>
+            ))}
+        </div>
       </main>
     </div>
   );

@@ -6,8 +6,8 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 import type { ModuleStats } from '@/lib/types';
 import type { Archetype, Variant } from '@/lib/cast';
 import { faceTraits, sizeOf } from '@/lib/characters';
-import { C, G, INK, bake, flat, glow, hull, mesh, outlineFor, pagesMat, receiptMat, ribbon, shade, shadowMat, tinted, toon, tris, tube, wantsOutline, type Part, type V3 } from './kit';
-import { aim, applyExpression, at, bones, createRig, face, limb, prop, snapshotRest, up, type CharacterRig, type Face } from './rig';
+import { C, G, INK, bake, dropInLite, flat, flatVertex, glow, hull, mesh, outlineColor, outlineFor, outlineSkinned, pagesMat, receiptMat, ribbon, seg, setDetail, shade, shadowMat, tinted, toon, tris, tube, wantsOutline, type Part, type V3 } from './kit';
+import { JOINTS, aim, applyExpression, at, bones, createRig, face, limb, prop, snapshotRest, up, type CharacterRig, type Face } from './rig';
 
 export type BuildParams = {
   archetype: Archetype;
@@ -17,8 +17,15 @@ export type BuildParams = {
   silhouette?: boolean;
   /** Landlord only: one key per module on its key ring. */
   keys?: number;
+  /** full: every detail (big stages, /lab). lite: for small on-screen sizes; same rig, far fewer triangles and draw calls. */
+  detail?: Detail;
 };
-export type Built = { root: THREE.Group; rig: CharacterRig; neutral: Face; tris: { base: number; outline: number }; dispose: () => void };
+export type Detail = 'full' | 'lite';
+/** Triangles (body, outline hulls) and draw calls for one character at its build pose. */
+export type CastStats = { base: number; outline: number; calls: number };
+export type Built = { root: THREE.Group; rig: CharacterRig; neutral: Face; tris: CastStats; dispose: () => void };
+/** Segment scale for lite builds. */
+const LITE = 0.4;
 
 type Side = 'L' | 'R';
 const SIDES = ['L', 'R'] as const;
@@ -106,8 +113,8 @@ function sweat(c: Ctx, parent: THREE.Object3D, pts: V3[]) {
     const g = new THREE.Group();
     g.position.set(...p);
     parent.add(g);
-    mesh(g, G.sphere(), toon(C.water, { gloss: true }), { s: [0.022, 0.026, 0.018], outline: false });
-    mesh(g, G.cyl(0), toon(C.water, { gloss: true }), { p: [0, 0.03, 0], s: [0.0195, 0.04, 0.0155], outline: false });
+    mesh(g, G.sphere(), toon(C.water, { gloss: true }), { s: [0.022, 0.026, 0.018], outline: false, keep: true });
+    mesh(g, G.cyl(0), toon(C.water, { gloss: true }), { p: [0, 0.03, 0], s: [0.0195, 0.04, 0.0155], outline: false, keep: true });
   }
 }
 
@@ -115,7 +122,7 @@ function sweat(c: Ctx, parent: THREE.Object3D, pts: V3[]) {
 function tubeIn(c: Ctx, parent: THREE.Object3D, pts: V3[], r: number, m: THREE.Material, t: Part & { segs?: number; radial?: number } = {}) {
   parent.updateWorldMatrix(true, false);
   const curve = new THREE.CatmullRomCurve3(pts.map((p) => parent.worldToLocal(new THREE.Vector3(...p))));
-  return mesh(parent, c.own(new THREE.TubeGeometry(curve, t.segs ?? 64, r, t.radial ?? 8, false)), m, t);
+  return mesh(parent, c.own(new THREE.TubeGeometry(curve, seg(t.segs ?? 64, 12), r, seg(t.radial ?? 8, 3), false)), m, t);
 }
 
 /** A group with its own transform inside a bake, for props made of several parts. */
@@ -271,8 +278,8 @@ function accountant(c: Ctx): Result {
     }
     mesh(g, G.rbox(0.034, 0.012, 0.012, 0.004, 1), dark, { p: [0, 0.01, 0.294] });
   });
-  for (const s of SIDES) mesh(glasses, G.disc(), glow('#e3f4ff', 0.18), { p: [X(s, 0.11), -0.01, 0.293], s: 0.098, fx: true });
-  for (const s of SIDES) mesh(glasses, G.sphere(10, 6), flat('#ffffff'), { p: [X(s, 0.11) - 0.04, 0.03, 0.296], r: [0, 0, -0.6], s: [0.022, 0.008, 0.002], outline: false });
+  for (const s of SIDES) mesh(glasses, G.disc(), glow('#e3f4ff', 0.18), { p: [X(s, 0.11), -0.01, 0.293], s: 0.098, fx: true, full: true });
+  for (const s of SIDES) mesh(glasses, G.sphere(10, 6), flat('#ffffff'), { p: [X(s, 0.11) - 0.04, 0.03, 0.296], r: [0, 0, -0.6], s: [0.022, 0.008, 0.002], outline: false, full: true });
   // Green translucent visor, wider than its head.
   const visor = prop(rig, 'visor', rig.head);
   ring(visor, [0, 0.2, 0], 0.186, 0.173, toon(green), 0.08);
@@ -452,7 +459,7 @@ function doorman(c: Ctx): Result {
       mesh(g, G.box(), flat(INK), hand(0.65, 0.15, 0.037, 0.009));
       mesh(g, G.box(), flat(INK), hand(4.3, 0.1, 0.039, 0.013));
       mesh(g, G.sphere(), toon(gold, { gloss: true }), { p: [0, 0, 0.041], s: 0.013, outline: false });
-      mesh(g, G.sphere(32, 12), toon('#eef6ff', { gloss: true, opacity: 0.22 }), { p: [0, 0, 0.03], s: [0.2, 0.2, 0.025], outline: false });
+      mesh(g, G.sphere(32, 12), toon('#eef6ff', { gloss: true, opacity: 0.22 }), { p: [0, 0, 0.03], s: [0.2, 0.2, 0.025], outline: false, full: true });
       mesh(g, G.cyl(1, 20), g1, { p: [0, 0.255, 0], s: [0.03, 0.05, 0.03] });
       for (let i = 0; i < 4; i++) mesh(g, G.torus(0.12), toon('#b8892a'), { p: [0, 0.24 + i * 0.01, 0], r: [PI / 2, 0, 0], s: 0.032, outline: false });
       mesh(g, G.torus(0.22), g1, { p: [0, 0.3, 0], s: 0.04 });
@@ -649,8 +656,8 @@ function inspector(c: Ctx): Result {
       mesh(g, G.cyl(0.9, 16), wood(), { p: [0, 0.06, 0], s: [0.022, 0.13, 0.022] });
       mesh(g, G.torus(0.3), metal(), { p: [0, 0.13, 0], r: [PI / 2, 0, 0], s: 0.024, outline: false });
       mesh(g, G.torus(0.14, PI * 2, 48, 10), metal(), { p: [0, 0.22, 0.02], s: 0.11 });
-      mesh(g, G.disc(), glow('#dff2ff', 0.3), { p: [0, 0.22, 0.02], s: 0.1, fx: true });
-      mesh(g, G.sphere(10, 6), flat('#ffffff'), { p: [-0.04, 0.26, 0.025], r: [0, 0, -0.7], s: [0.03, 0.01, 0.002], outline: false });
+      mesh(g, G.disc(), glow('#dff2ff', 0.3), { p: [0, 0.22, 0.02], s: 0.1, fx: true, full: true });
+      mesh(g, G.sphere(10, 6), flat('#ffffff'), { p: [-0.04, 0.26, 0.025], r: [0, 0, -0.7], s: [0.03, 0.01, 0.002], outline: false, full: true });
     } else {
       // Tape measure, already extended at you.
       const o = piece(g, [0, 0.04, 0.02], [0.1, 1.05, 0]);
@@ -719,7 +726,7 @@ function junkDrawer(c: Ctx): Result {
     (g) => mesh(piece(g, [0.2 * w, 0.32, -0.12], [0.2, 0, -0.32]), G.cyl(0.7, 12), wood(), { s: [0.012, 0.8, 0.012] }), // a single chopstick
     (g) => { // tangled cables, looping up and over the front edge
       const pts: V3[] = [[0.02, fl + 0.05, -0.17], [0.05, 0.42, -0.16], [-0.04, 0.62, -0.14], [-0.15, 0.56, -0.1], [-0.2, 0.36, -0.06], [-0.3, 0.29, 0.01], [-0.36, 0.17, 0.05], [-0.33, 0.03, 0.065], [-0.4, -0.12, 0.06], [-0.37, -0.25, 0.07]];
-      g.add(new THREE.Mesh(c.own(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))), 80, 0.012, 8, false)), ink));
+      g.add(new THREE.Mesh(c.own(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts.map((p) => new THREE.Vector3(...p))), seg(80, 24), 0.012, seg(8, 3), false)), ink));
       mesh(g, G.rbox(0.04, 0.05, 0.025, 0.008, 2), ink, { p: [-0.37, -0.28, 0.07] });
       for (const dx of [-0.008, 0.008]) mesh(g, G.box(), metal(), { p: [-0.37 + dx, -0.315, 0.07], s: [0.004, 0.025, 0.008], outline: false });
     },
@@ -839,7 +846,7 @@ function plumber(c: Ctx): Result {
   pipe.push([end[0] + 0.05, end[1] - 0.01, end[2] + 0.1], [end[0] + 0.08, end[1] - 0.08, end[2] + 0.13]);
   const pipeGroup = prop(rig, 'pipe', rig.torso);
   const curve = new THREE.CatmullRomCurve3(pipe.map((p) => new THREE.Vector3(...p)));
-  mesh(pipeGroup, c.own(new THREE.TubeGeometry(curve, 160, 0.045, 12, false)), pipeM);
+  mesh(pipeGroup, c.own(new THREE.TubeGeometry(curve, seg(160, 40), 0.045, seg(12, 6), false)), pipeM);
   // Duct tape: always one on the pipe, plus one patch per TODO (up to 6) on coveralls and pipe.
   const patches = 1 + Math.min(6, c.s.todoCount);
   c.bake(pipeGroup, (g) => {
@@ -1113,7 +1120,7 @@ function landlord(c: Ctx): Result {
     for (const s of SIDES) {
       mesh(o, G.torus(0.14, PI, 32, 8), frame, { p: [X(s, 0.085), 0, 0], r: [0, 0, PI], s: 0.064, outline: true });
       mesh(o, G.rbox(0.135, 0.011, 0.011, 0.004, 1), frame, { p: [X(s, 0.085), 0, 0], outline: true });
-      mesh(o, G.disc(), toon('#dff1fb', { gloss: true, opacity: 0.55 }), { p: [X(s, 0.085), -0.03, -0.002], s: [0.062, 0.03, 1], outline: false });
+      mesh(o, G.disc(), toon('#dff1fb', { gloss: true, opacity: 0.55 }), { p: [X(s, 0.085), -0.03, -0.002], s: [0.062, 0.03, 1], outline: false, full: true });
     }
     mesh(o, G.rbox(0.05, 0.011, 0.011, 0.004, 1), frame, { outline: true });
     for (const s of SIDES) mesh(g, G.rbox(0.01, 0.01, 0.22, 0.004, 1), frame, { p: [X(s, 0.17), 0.16, 0.05], r: [0.3, X(s, 0.3), 0] });
@@ -1186,7 +1193,135 @@ function mergeSiblings(root: THREE.Object3D, keep: Set<THREE.Object3D>, owned: T
   }
 }
 
+// ---------- lite finishing: few draw calls, same rig ----------
+const colourOf = (m: THREE.Material | THREE.Material[]) => ((m as THREE.MeshBasicMaterial).color ?? new THREE.Color('#ffffff')).clone();
+/** Geometry baked by `matrix`, coloured per vertex, optionally bound rigidly (weight 1) to one bone. */
+function coloured(src: THREE.BufferGeometry, matrix: THREE.Matrix4, color: THREE.Color, bone = -1) {
+  let g = src.clone().applyMatrix4(matrix);
+  for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
+  g.morphAttributes = {};
+  if (!g.index) g = mergeVertices(g);
+  if (!g.getAttribute('normal')) g.computeVertexNormals();
+  // A mirrored part (negative scale, like the right eyebrow) reverses winding once baked: put it back.
+  if (matrix.determinant() < 0) {
+    const idx = g.index!;
+    for (let i = 0; i < idx.count; i += 3) {
+      const t = idx.getX(i + 1);
+      idx.setX(i + 1, idx.getX(i + 2));
+      idx.setX(i + 2, t);
+    }
+  }
+  const n = g.getAttribute('position').count;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) col.set([color.r, color.g, color.b], i * 3);
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  if (bone >= 0) {
+    const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      idx[i * 4] = bone;
+      wt[i * 4] = 1;
+    }
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(wt, 4));
+  }
+  return g;
+}
+/** Reverse winding and normals: the back side of an open or paper-thin part, as front faces. */
+function flipped(g: THREE.BufferGeometry) {
+  const f = g.clone(), idx = f.index!, n = f.getAttribute('normal');
+  for (let i = 0; i < idx.count; i += 3) {
+    const b = idx.getX(i + 1);
+    idx.setX(i + 1, idx.getX(i + 2));
+    idx.setX(i + 2, b);
+  }
+  for (let i = 0; i < n.count; i++) n.setXYZ(i, -n.getX(i), -n.getY(i), -n.getZ(i));
+  return f;
+}
+const within = (o: THREE.Object3D, set: Set<THREE.Object3D>) => {
+  for (let p: THREE.Object3D | null = o; p; p = p.parent) if (set.has(p)) return true;
+  return false;
+};
+/** Merge a group's direct mesh children into one unlit, vertex-coloured mesh (pupil shapes, mouth interior). */
+function mergeUnlit(group: THREE.Object3D, owned: THREE.BufferGeometry[]) {
+  const kids = group.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh);
+  if (kids.length < 2) return;
+  const merged = mergeGeometries(kids.map((m) => (m.updateMatrix(), coloured(m.geometry, m.matrix, colourOf(m.material)))));
+  owned.push(merged);
+  kids.forEach((m) => group.remove(m));
+  mesh(group, merged, flatVertex(), { outline: false, keep: true });
+}
+/** Merge light-effect siblings that share a material (the Star's sparkles) into one mesh. */
+function mergeFx(root: THREE.Object3D, owned: THREE.BufferGeometry[]) {
+  const groups = new Map<string, THREE.Mesh[]>();
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || !o.userData.fx) return;
+    const key = `${o.parent!.uuid}${(o.material as THREE.Material).uuid}`;
+    groups.set(key, [...(groups.get(key) ?? []), o]);
+  });
+  for (const list of groups.values()) {
+    if (list.length < 2) continue;
+    const parent = list[0].parent!, material = list[0].material as THREE.Material;
+    const merged = mergeGeometries(list.map((m) => (m.updateMatrix(), coloured(m.geometry, m.matrix, colourOf(m.material)))).map((g) => (g.deleteAttribute('color'), g)));
+    owned.push(merged);
+    list.forEach((m) => parent.remove(m));
+    const o = mesh(parent, merged, material, { fx: true });
+    o.raycast = () => {};
+  }
+}
+/**
+ * Lite: every remaining mesh becomes part of one vertex-coloured mesh rigidly skinned to the joint (or prop
+ * group) it hung from, plus one skinned outline hull for the main silhouette parts. The joints stay the same
+ * named groups, so moving them (animation, expressions) moves the parts exactly as in full detail.
+ */
+function skinLite(rig: CharacterRig, owned: THREE.BufferGeometry[], silhouette: boolean) {
+  const boneList: THREE.Object3D[] = [...JOINTS.map((j) => rig[j] as THREE.Object3D), ...Object.values(rig.props)];
+  const index = new Map(boneList.map((b, i) => [b, i]));
+  const separate = new Set<THREE.Object3D>([rig.mouthLine, rig.mouthOpen, ...SIDES.flatMap((s) => Object.values(rig.pupils[s]))]);
+  rig.root.updateMatrixWorld(true);
+  const meshes: THREE.Mesh[] = [];
+  rig.root.traverse((o) => o instanceof THREE.Mesh && meshes.push(o));
+  const body: THREE.BufferGeometry[] = [], lines: THREE.BufferGeometry[] = [];
+  for (const m of meshes) {
+    if (m.userData.fx || within(m, separate)) continue;
+    let b: THREE.Object3D | null = m.parent;
+    while (b && !index.has(b)) b = b.parent;
+    const bone = index.get(b!) ?? 0, color = colourOf(m.material);
+    const g = coloured(m.geometry, m.matrixWorld, silhouette ? new THREE.Color(0, 0, 0) : color, bone);
+    body.push(g);
+    // Single-sided body (half the raster work); open or paper-thin parts get their back side as real faces.
+    if ((m.material as THREE.Material).side === THREE.DoubleSide) body.push(flipped(g));
+    if (!silhouette && wantsOutline(m)) lines.push(coloured(hull(m.geometry), m.matrixWorld, outlineColor(color), bone));
+    m.removeFromParent();
+  }
+  const skeleton = new THREE.Skeleton(boneList as unknown as THREE.Bone[], boneList.map((b) => b.matrixWorld.clone().invert()));
+  const add = (geos: THREE.BufferGeometry[], material: THREE.Material, isHull: boolean) => {
+    if (!geos.length) return;
+    const merged = mergeGeometries(geos);
+    geos.forEach((g) => g.dispose());
+    owned.push(merged);
+    const sm = new THREE.SkinnedMesh(merged, material);
+    sm.bind(skeleton, new THREE.Matrix4());
+    sm.frustumCulled = false; // parts can move past the bind-pose bounds once animated
+    sm.userData.outline = false;
+    sm.userData.isHull = isHull;
+    if (isHull) sm.raycast = () => {};
+    rig.root.add(sm);
+  };
+  add(body, silhouette ? flat('#000000') : toon('#ffffff', { vertex: true }), false);
+  add(lines, outlineSkinned(), true);
+}
+
 export function buildCharacter(p: BuildParams): Built {
+  const lite = p.detail === 'lite';
+  setDetail(lite ? LITE : 1);
+  try {
+    return build(p, lite);
+  } finally {
+    setDetail(1);
+  }
+}
+
+function build(p: BuildParams, lite: boolean): Built {
   const rig = createRig();
   const owned: THREE.BufferGeometry[] = [];
   const traits = faceTraits(p.stats);
@@ -1201,9 +1336,19 @@ export function buildCharacter(p: BuildParams): Built {
   const { neutral, shadow } = BUILDERS[p.archetype](c);
   if (!p.silhouette) mesh(rig.root, G.disc(), shadowMat(), { p: [shadow[0], 0.003, shadow[1]], r: [-PI / 2, 0, 0], s: [shadow[2] * 1.3, shadow[3] * 1.3, 1], fx: true });
 
-  const keep = new Set<THREE.Object3D>([rig.mouthLine, ...SIDES.flatMap((s) => Object.values(rig.pupils[s]))]);
   rig.root.updateMatrixWorld(true);
-  mergeSiblings(rig.root, keep, owned);
+  if (lite) {
+    const small: THREE.Mesh[] = [];
+    rig.root.traverse((o) => o instanceof THREE.Mesh && dropInLite(o) && small.push(o));
+    small.forEach((m) => m.removeFromParent());
+    for (const s of SIDES) for (const kind of Object.values(rig.pupils[s])) mergeUnlit(kind, owned);
+    mergeUnlit(rig.mouthOpen, owned);
+    mergeFx(rig.root, owned);
+    skinLite(rig, owned, !!p.silhouette);
+  } else {
+    const keep = new Set<THREE.Object3D>([rig.mouthLine, ...SIDES.flatMap((s) => Object.values(rig.pupils[s]))]);
+    mergeSiblings(rig.root, keep, owned);
+  }
 
   // Finish: outlines in a darkened version of each part's colour, or everything solid black for silhouette mode.
   const ownedSet = new Set(owned);
@@ -1226,9 +1371,11 @@ export function buildCharacter(p: BuildParams): Built {
   }
   snapshotRest(rig);
   applyExpression(rig, neutral, traits);
-  const count = { base: 0, outline: 0 };
+  const count: CastStats = { base: 0, outline: 0, calls: 0 };
   rig.root.traverseVisible((o) => {
-    if (o instanceof THREE.Mesh) count[o.userData.isHull ? 'outline' : 'base'] += tris(o.geometry);
+    if (!(o instanceof THREE.Mesh)) return;
+    count[o.userData.isHull ? 'outline' : 'base'] += tris(o.geometry);
+    count.calls++;
   });
   return { root: rig.root, rig, neutral, tris: count, dispose: () => owned.forEach((g) => g.dispose()) };
 }
