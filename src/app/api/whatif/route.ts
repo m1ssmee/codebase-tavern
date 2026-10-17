@@ -20,7 +20,11 @@ const VERDICTS = ['breaks', 'at risk', 'fine', 'relieved'] as const;
 const DIFF_SCHEMA = obj({ title: S, diff: { type: 'string', description: 'Unified diff: ---/+++ headers, @@ hunks, then " "/-/+ lines.' } });
 const ASSESS_SCHEMA = obj({
   items: { type: 'array', items: obj({ moduleId: S, verdict: { type: 'string', enum: [...VERDICTS] }, reason: S, reaction: S }) },
-  summary: obj({ update: S, check: S }),
+  summary: obj({
+    update: S,
+    check: S,
+    followUps: { type: 'array', items: obj({ moduleId: S, path: S, description: S }), description: 'Other modules that must change for this change to work; [] when complete.' },
+  }),
 });
 
 const numbered = (lines: string[], first = 1) => lines.map((l, i) => `${first + i}| ${l}`).join('\n');
@@ -57,6 +61,7 @@ async function writeDiff(b: Record<string, unknown>) {
 - Change only ${path}, as few lines as possible, in the file's own style. Do not fix other problems.
 - Context lines start with a space and are copied exactly from the file, without the line numbers. Use "--- a/${path}" and "+++ b/${path}" headers and @@ hunks.
 - If the request is unclear, make the smallest change that matches it.
+- Reuse the file's existing functions, types and storage where you can (e.g. record a field next to the data the module already keeps) instead of adding new machinery.
 - title: under 10 plain words naming the change with real names and values, e.g. "Raise UPSTREAM_TIMEOUT_MS to 5000".`,
       prompt: `Request: ${description}\nSelected lines: ${path}:${start}-${end}\n\n=== ${path} (lines ${from}-${from + window.length - 1}) ===\n${numbered(window, from)}`,
       schema: DIFF_SCHEMA,
@@ -129,6 +134,8 @@ ${VOICE_GUIDE}
 
 Rules:
 - Return exactly one item per module in the impact list, with the same moduleId, in the same order. Never add a module. Code from other modules is evidence only: cite it, but never give those modules a verdict.
+- The diff may be several stacked changes: judge them together, as one change.
+- Judge against the code as it is. A limitation the module already has (for example it keeps all its data only in memory, like an in-memory ledger) is not a new risk when the change follows the same approach; mention it at most as a follow-up note.
 - verdict:
   - "breaks": after the change this module's code fails or misbehaves (it still uses a renamed or deleted symbol, reads a field that is gone, gets input it rejects).
   - "at risk": it still works, but an assumption it relies on becomes fragile (timing, a missing check, a problem now hidden instead of fixed).
@@ -140,7 +147,8 @@ Rules:
 - If the change makes a failure rarer without removing its cause (for example a longer timeout while a retry without an idempotency key still exists), say it hides the problem rather than fixing it, and name the failure that remains and when it still happens (e.g. "a charge slower than 5000ms is still sent twice"). Say this in the affected modules' reasons, in at least one reaction, and in the first sentence of summary.update. Check the numbers in the code (timeouts, typical and worst-case times) before saying a change makes something more or less likely.
 - Remember how timeouts work across services: when a caller stops waiting, the service it called may still finish the work. A caller that then retries without an idempotency key (a unique ID that lets the receiver spot a repeat) can make the work happen twice, e.g. a second charge. Use this when a change touches timeouts or retries.
 - summary.update: 1-3 sentences: what else must change for this to be complete (files and functions), with citations.
-- summary.check: 1-3 sentences: which tests to run or add and which behaviours to verify.${beginner ? `\n- ${PLAIN_WORDS}` : ''}`;
+- summary.check: 1-3 sentences: which tests to run or add and which behaviours to verify.
+- summary.followUps: one entry per module in the list that must also change for this change to actually work (for example it now receives a field it ignores, or calls something that does not exist yet): moduleId from the list, path = that module's file shown above that needs the change, description = one imperative sentence under 25 words naming the exact function and field (e.g. "Make processCharge() return the earlier charge when idempotency_key was already recorded."). Leave it empty when the change works on its own.${beginner ? `\n- ${PLAIN_WORDS}` : ''}`;
 
   const prompt = `Repo: ${str(b.repoName, 200)}
 Change: ${str(b.title, 200)}
@@ -200,9 +208,13 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
             full += text;
             scanner.push(text).forEach(emit);
           }
-          const out = JSON.parse(full) as { items?: unknown[]; summary?: { update?: string; check?: string } };
+          const out = JSON.parse(full) as { items?: unknown[]; summary?: { update?: string; check?: string; followUps?: unknown } };
           arr(out?.items, 12).forEach(emit); // anything the scanner missed
-          send({ type: 'summary', summary: { update: clean(str(out?.summary?.update, 800)), check: clean(str(out?.summary?.check, 800)) } });
+          // Follow-ups: only modules in the list, only files the model was shown, once per module.
+          const followUps = arr<{ moduleId?: string; path?: string; description?: string }>(out?.summary?.followUps, 4)
+            .map((f) => ({ moduleId: alias.get(str(f?.moduleId, 200).trim().toLowerCase()) ?? '', path: str(f?.path, 300), description: clean(str(f?.description, 240), false) }))
+            .filter((f, i, all) => ids.includes(f.moduleId) && lineCount.has(f.path) && f.description && all.findIndex((x) => x.moduleId === f.moduleId) === i);
+          send({ type: 'summary', summary: { update: clean(str(out?.summary?.update, 800)), check: clean(str(out?.summary?.check, 800)), followUps } });
         } catch (err) {
           console.error('[whatif] assess failed mid-stream:', err);
           send({ type: 'error' });

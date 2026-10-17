@@ -80,8 +80,12 @@ export function applyDiff(original: string, fd: FileDiff): { text: string; chang
   return { text: out.join('\n'), changedOld: [...changed].sort((a, b) => a - b), added, removed };
 }
 
-/** One-hunk unified diff between two versions of a file, 3 lines of context. Empty when nothing changed. */
-export function makeDiff(path: string, before: string, after: string): string {
+/**
+ * Unified diff between two versions of a file: a line-level LCS, hunks with `context` lines around each change.
+ * ponytail: O(n·m) table on the part between the common prefix and suffix; past ~4M cells it degrades to one
+ * remove-all/add-all hunk (still correct, just noisy).
+ */
+export function makeDiff(path: string, before: string, after: string, context = 3): string {
   const a = before.split('\n');
   const b = after.split('\n');
   let s = 0;
@@ -89,17 +93,40 @@ export function makeDiff(path: string, before: string, after: string): string {
   let e = 0;
   while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
   if (s === a.length && s === b.length) return '';
-  const [aEnd, bEnd] = [a.length - e, b.length - e];
-  const c0 = Math.max(0, s - 3);
-  const tail = a.slice(aEnd, Math.min(a.length, aEnd + 3));
-  const head = a.slice(c0, s);
-  return [
-    `--- a/${path}`,
-    `+++ b/${path}`,
-    `@@ -${c0 + 1},${head.length + aEnd - s + tail.length} +${c0 + 1},${head.length + bEnd - s + tail.length} @@`,
-    ...head.map((l) => ' ' + l),
-    ...a.slice(s, aEnd).map((l) => '-' + l),
-    ...b.slice(s, bEnd).map((l) => '+' + l),
-    ...tail.map((l) => ' ' + l),
-  ].join('\n');
+  const A = a.slice(s, a.length - e);
+  const B = b.slice(s, b.length - e);
+  const mid: DiffLine[] = [];
+  if (A.length * B.length > 4_000_000) {
+    mid.push(...A.map((text) => ({ op: '-' as const, text })), ...B.map((text) => ({ op: '+' as const, text })));
+  } else {
+    const w = B.length + 1;
+    const lcs = new Int32Array((A.length + 1) * w); // lcs[i*w+j] = LCS of A[i..] and B[j..]
+    for (let i = A.length - 1; i >= 0; i--)
+      for (let j = B.length - 1; j >= 0; j--) lcs[i * w + j] = A[i] === B[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1]);
+    let [i, j] = [0, 0];
+    while (i < A.length || j < B.length) {
+      if (i < A.length && j < B.length && A[i] === B[j]) {
+        mid.push({ op: ' ', text: A[i++] });
+        j++;
+      } else if (j >= B.length || (i < A.length && lcs[(i + 1) * w + j] >= lcs[i * w + j + 1])) mid.push({ op: '-', text: A[i++] });
+      else mid.push({ op: '+', text: B[j++] });
+    }
+  }
+  const all: DiffLine[] = [...a.slice(0, s).map((text) => ({ op: ' ' as const, text })), ...mid, ...a.slice(a.length - e).map((text) => ({ op: ' ' as const, text }))];
+  const ranges: [number, number][] = [];
+  all.forEach((l, k) => {
+    if (l.op === ' ') return;
+    const [lo, hi] = [Math.max(0, k - context), Math.min(all.length - 1, k + context)];
+    const last = ranges[ranges.length - 1];
+    if (last && lo <= last[1] + 1) last[1] = Math.max(last[1], hi);
+    else ranges.push([lo, hi]);
+  });
+  const out = [`--- a/${path}`, `+++ b/${path}`];
+  for (const [lo, hi] of ranges) {
+    const before = all.slice(0, lo);
+    const part = all.slice(lo, hi + 1);
+    const count = (xs: DiffLine[], skip: DiffLine['op']) => xs.filter((l) => l.op !== skip).length;
+    out.push(`@@ -${count(before, '+') + 1},${count(part, '+')} +${count(before, '-') + 1},${count(part, '-')} @@`, ...part.map((l) => l.op + l.text));
+  }
+  return out.join('\n');
 }

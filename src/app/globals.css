@@ -84,3 +84,20 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .nuclear-shake { animation: none; }
 }
+
+/* Mermaid diagrams: clickable citations and nodes, the tour's spotlight, the verdict playback. */
+.cite-target { cursor: pointer; }
+svg .node, svg .node-extra, svg .flowchart-link, svg .edgeLabel { transition: opacity 300ms; }
+svg.tour-dim .node-extra:not(.tour-focus),
+svg.tour-dim .node:not(.tour-focus),
+svg.tour-dim .flowchart-link:not(.tour-focus),
+svg.tour-dim .edgeLabel { opacity: 0.15; }
+svg .tour-focus.node rect, svg .tour-focus.node polygon, svg .tour-focus.node path {
+  stroke: #f5a524 !important;
+  stroke-width: 3.5px !important;
+  filter: drop-shadow(0 0 8px rgb(245 165 36 / 0.75));
+}
+svg path.flowchart-link.tour-focus { stroke: #f5a524 !important; stroke-width: 3px !important; }
+svg .msg-active { stroke: #d9381e !important; stroke-width: 3px !important; }
+svg text.msg-active, svg text.msg-active tspan { fill: #d9381e !important; stroke: none !important; font-weight: 600; }
+svg .msg-dim { opacity: 0.35; }

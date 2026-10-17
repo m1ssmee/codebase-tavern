@@ -6,26 +6,68 @@
       "items": [
         {
           "moduleId": "orders",
-          "verdict": "relieved",
-          "reason": "Adding `idempotency_key: order.id` to the charge request makes the retry in `checkout()` safer: a timeout on the first `POST /payments/charges` can be retried without creating a second charge if payments uses that key. The retry loop still exists for `UpstreamTimeoutError` with `MAX_PAYMENT_ATTEMPTS = 2`, so this only fixes the duplicate-charge case when the receiver honors the key [orders/checkout.ts:18-30][orders/checkout.ts:43-57].",
-          "reaction": "I finally send a key instead of two blind stabs at /payments/charges. Fucking overdue."
+          "verdict": "fine",
+          "reason": "This only adds `idempotency_key: order.id` to the body sent to payments; `requestCharge()` still sends the same order data and `checkout()` still reads the same charge response [orders/checkout.ts:20-30][orders/checkout.ts:43-69]. Nothing in this module depends on the new field, so its own flow stays the same.",
+          "reaction": "I ship one extra key and keep marching. The rest of this checkout crap stays exactly where it was."
         },
         {
           "moduleId": "gateway",
           "verdict": "fine",
-          "reason": "The gateway only forwards the request from `orders` and enforces the same 2000ms upstream timeout. Changing the body in `orders/checkout.ts` does not change routing, timeout, or response handling here [gateway/config.ts:15-16][gateway/proxy.ts:25-53].",
-          "reaction": "I still wait 2000ms and then punt. This body tweak is not my damn problem."
+          "reason": "The gateway still just forwards the request from orders to payments; `forward()` copies `req.body` as JSON and does not care which fields are inside it [gateway/proxy.ts:29-45]. `SERVICES.payments` is unchanged, so this module's routing and timeout logic stay the same [gateway/config.ts:8-16].",
+          "reaction": "I forward the same junk with one new field. The timeout gambler stays stupid in exactly the same way."
         },
         {
           "moduleId": "payments",
           "verdict": "fine",
-          "reason": "`handleChargeRequest()` accepts unknown extra fields by casting the body to `Partial<ChargeRequest>` and only checking `order_id`, `payment_method_id`, `amount`, and `currency`. The new `idempotency_key` field is ignored unless this module is changed to read and store it [payments/processor.ts:52-63][payments/processor.ts:29-49].",
-          "reaction": "I ignore the shiny new key like a champ. That extra field is just dead weight unless somebody teaches me otherwise, shit."
+          "reason": "`handleChargeRequest()` only checks `order_id`, `payment_method_id`, `amount`, and `currency`, then passes the request to `processCharge()` [payments/processor.ts:52-59]. `processCharge()` reads those same fields and ignores anything extra, so `idempotency_key` is accepted but not used [payments/processor.ts:29-49].",
+          "reaction": "I see the new idempotency_key and ignore it like a professional. This damn clerk still records only the usual fields."
         }
       ],
       "summary": {
-        "update": "If this is meant to actually stop duplicate charges, `payments/processor.ts` needs to accept `idempotency_key` in `ChargeRequest` and use it when recording or deduplicating charges in `processCharge()` and `handleChargeRequest()` [payments/processor.ts:5-15][payments/processor.ts:29-49][payments/processor.ts:52-63]. Otherwise `orders/checkout.ts` is only sending a key into the void, which hides the retry problem instead of fixing the charge that still happens after a 2000ms timeout [orders/checkout.ts:43-57][gateway/config.ts:15-16].",
-        "check": "Add or update tests for `orders/checkout.ts` to verify one timeout-triggered retry still results in one recorded charge when the same `idempotency_key` is sent. Add a payments test that sends the same `order_id` twice with the same key and verifies the second request is rejected or reuses the first `chargeId`, and verify a request without the key still behaves as before [orders/checkout.ts:20-30][payments/processor.ts:29-49]."
+        "update": "To make this complete, `payments/processor.ts` needs to use `req.idempotency_key` inside `processCharge()` and `handleChargeRequest()` so repeated charges can return the same result instead of creating a new one [payments/processor.ts:29-49][payments/processor.ts:52-64]. If the payments store must remember prior keys, `payments/ledger.ts` will also need a lookup path for that key.",
+        "check": "Add a test that sends the same charge request twice with the same `idempotency_key` and verifies only one charge is recorded. Also verify a request without the key still behaves as it does now, and that `orders/checkout.ts` passes `order.id` through unchanged [orders/checkout.ts:20-30][payments/processor.ts:29-49].",
+        "followUps": [
+          {
+            "moduleId": "payments",
+            "path": "payments/processor.ts",
+            "description": "Make processCharge() return the earlier charge when idempotency_key was already recorded."
+          }
+        ]
+      }
+    },
+    {
+      "title": "Apply the payments side too",
+      "parent": "Add an idempotency key",
+      "followUp": {
+        "moduleId": "payments",
+        "path": "payments/processor.ts"
+      },
+      "patch": "--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -7,6 +7,7 @@\n   amount: number;\n   currency: string;\n   payment_method_id: string;\n+  idempotency_key?: string;\n }\n \n export interface ChargeResult {\n@@ -20,6 +21,9 @@\n \n const SUPPORTED_CURRENCIES = new Set(['EUR', 'USD', 'GBP']);\n \n+// First charge per idempotency key, kept in memory like the ledger: a retry gets the same charge back.\n+const chargesByKey = new Map<string, Promise<ChargeResult>>();\n+\n /**\n  * Charges a payment method for an order.\n  *\n@@ -29,7 +33,17 @@\n export async function processCharge(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   if (!Number.isInteger(req.amount) || req.amount <= 0) throw new Error('amount must be a positive integer in minor units');\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n+  if (!req.idempotency_key) return chargeOnce(req, network);\n \n+  const earlier = chargesByKey.get(req.idempotency_key);\n+  if (earlier) return earlier; // the retry: same charge, no second capture\n+  const charge = chargeOnce(req, network);\n+  chargesByKey.set(req.idempotency_key, charge);\n+  charge.catch(() => chargesByKey.delete(req.idempotency_key!)); // a failed charge may be retried for real\n+  return charge;\n+}\n+\n+async function chargeOnce(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   const started = Date.now();\n   const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);\n   const chargeId = `ch_${randomUUID().slice(0, 10)}`;",
+      "diff": "--- a/orders/checkout.ts\n+++ b/orders/checkout.ts\n@@ -22,6 +22,7 @@\n     method: 'POST',\n     path: '/payments/charges',\n     body: {\n+      idempotency_key: order.id,\n       order_id: order.id,\n       amount: orderTotal(order),\n       currency: order.currency,\n--- a/payments/processor.ts\n+++ b/payments/processor.ts\n@@ -7,6 +7,7 @@\n   amount: number;\n   currency: string;\n   payment_method_id: string;\n+  idempotency_key?: string;\n }\n \n export interface ChargeResult {\n@@ -20,6 +21,9 @@\n \n const SUPPORTED_CURRENCIES = new Set(['EUR', 'USD', 'GBP']);\n \n+// First charge per idempotency key, kept in memory like the ledger: a retry gets the same charge back.\n+const chargesByKey = new Map<string, Promise<ChargeResult>>();\n+\n /**\n  * Charges a payment method for an order.\n  *\n@@ -29,7 +33,17 @@\n export async function processCharge(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   if (!Number.isInteger(req.amount) || req.amount <= 0) throw new Error('amount must be a positive integer in minor units');\n   if (!SUPPORTED_CURRENCIES.has(req.currency)) throw new Error(`unsupported currency ${req.currency}`);\n+  if (!req.idempotency_key) return chargeOnce(req, network);\n \n+  const earlier = chargesByKey.get(req.idempotency_key);\n+  if (earlier) return earlier; // the retry: same charge, no second capture\n+  const charge = chargeOnce(req, network);\n+  chargesByKey.set(req.idempotency_key, charge);\n+  charge.catch(() => chargesByKey.delete(req.idempotency_key!)); // a failed charge may be retried for real\n+  return charge;\n+}\n+\n+async function chargeOnce(req: ChargeRequest, network: CardNetworkClient): Promise<ChargeResult> {\n   const started = Date.now();\n   const result = await network.authorizeAndCapture(req.payment_method_id, req.amount, req.currency);\n   const chargeId = `ch_${randomUUID().slice(0, 10)}`;",
+      "items": [
+        {
+          "moduleId": "orders",
+          "verdict": "relieved",
+          "reason": "`requestCharge()` now sends `idempotency_key: order.id` with the payment request, so the retry in `checkout()` no longer risks a second capture when the gateway times out and replays the same order [orders/checkout.ts:20-30][orders/checkout.ts:43-58]. That turns the existing retry from a double-charge trap into a safe repeat for this order ID [orders/checkout.ts:44-52].",
+          "reaction": "I finally stopped firing the same charge twice. Damn, that retry loop was a dumb little duplicate factory."
+        },
+        {
+          "moduleId": "payments",
+          "verdict": "relieved",
+          "reason": "`processCharge()` now accepts `idempotency_key` and remembers the first `ChargeResult` for that key, so a repeated request returns the earlier charge instead of calling the card network again [payments/processor.ts:5-10][payments/processor.ts:21-43]. The cache is kept only in the server's memory, so a restart still forgets old keys and can repeat a charge after a crash, but the common retry path is now safer [payments/processor.ts:21-43].",
+          "reaction": "I keep one promise per key now. Shit, that `Map` is doing the job the whole file should have done."
+        },
+        {
+          "moduleId": "gateway",
+          "verdict": "fine",
+          "reason": "This module still only forwards requests and enforces the 2000ms upstream timeout; the new payment field passes through the gateway untouched because `forward()` already serializes whatever body it receives [gateway/config.ts:15-17][gateway/proxy.ts:29-44]. No gateway behavior changes in practice [gateway/proxy.ts:29-54].",
+          "reaction": "I still just wait 2000ms and panic politely. This timeout gambler has not learned a damn thing."
+        }
+      ],
+      "summary": {
+        "update": "No extra files need to change for this preview to work as shown; `orders/checkout.ts` now sends the key and `payments/processor.ts` now honors it [orders/checkout.ts:20-30][payments/processor.ts:5-43]. If you want this to survive a payments restart, `payments/processor.ts` will need persistent key storage instead of the current `Map` [payments/processor.ts:21-43].",
+        "check": "Run checkout retry tests to verify one order ID produces one charge after `UpstreamTimeoutError`, and add a payments test that repeats the same `idempotency_key` and gets the same `chargeId` back [orders/checkout.ts:44-58][payments/processor.ts:21-43]. Also verify a missing key still charges once and that a restarted payments process forgets old keys [payments/processor.ts:29-43].",
+        "followUps": []
       }
     },
     {

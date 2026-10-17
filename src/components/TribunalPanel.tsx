@@ -10,10 +10,11 @@ import { isCode } from '@/lib/analyze';
 import demoTribunal from '@/data/demoTribunal.json';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
+import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 
 type Turn = { moduleId: string; text: string; accuses?: string };
-type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string };
+type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string };
 type Result = { suspects: string[]; turns: Turn[]; verdict: Verdict };
 type Phase = 'input' | 'picking' | 'hearing' | 'playing' | 'verdict' | 'error';
 
@@ -347,6 +348,7 @@ export default function TribunalPanel() {
                   ))}
               </div>
             )}
+            {verdict.diagram && <VerdictDiagram diagram={verdict.diagram} culprits={verdict.culprits} />}
             {verdict.fix.diff && (
               <div>
                 <div className="mb-1 flex items-center gap-2">

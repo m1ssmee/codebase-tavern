@@ -3,6 +3,7 @@ import { llmJSON, llmStream, type Timing } from '@/lib/llm';
 import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice';
 import { extractCitations, parseCitations } from '@/lib/citations';
 import { fixProblem, realFixNeeded, rejectNote, TurnScanner } from '@/lib/verdict';
+import { participantId, parseSequence, sanitizeDiagram } from '@/lib/diagram';
 import type { Citation } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -34,6 +35,7 @@ const VERDICT = obj({
     evidence: { type: 'array', items: CITE },
     fix: obj({ path: S, diff: { type: 'string', description: 'Small unified diff (---/+++/@@ lines, then -/+ lines).' } }),
     judgeLine: S,
+    diagram: { type: 'string', description: 'Mermaid sequenceDiagram of how the bug happens (see the rules).' },
   });
 const TRIAL_SCHEMA = obj({
   turns: { type: 'array', items: obj({ moduleId: S, text: S, accuses: { type: 'string', description: 'moduleId being accused, or "" if none' } }) },
@@ -46,6 +48,28 @@ type InSuspect = { id: string; title: string; personality: string; files: { path
 // Timings for the client: provider, model and durations only. Raw provider errors stay in the server log.
 const publicTimings = (ts: Timing[]) =>
   ts.map((t) => ({ label: t.label, provider: t.provider, ok: t.ok, ms: t.ms, firstChunkMs: t.firstChunkMs, totalMs: t.totalMs }));
+
+/**
+ * The verdict's sequence diagram, made safe: no click/init/HTML/URLs, only citations to code the court saw, and a
+ * "Where it all went wrong" label in every rect. The client still runs mermaid.parse and drops it if invalid.
+ */
+function cleanDiagram(raw: string, ok: (c: Citation) => boolean): string {
+  const text = sanitizeDiagram(raw);
+  if (!/^sequenceDiagram\b/.test(text) || !parseSequence(text).length) return '';
+  const out: string[] = [];
+  const lines = text.split('\n');
+  lines.forEach((l, i) => {
+    const c = l.match(/^\s*%%\s*cite\s+([^\s:]+):(\d+)(?:-(\d+))?\s*$/);
+    if (c && !ok({ path: c[1], startLine: Number(c[2]), endLine: Number(c[3] ?? c[2]) })) return;
+    if (/^\s*%%/.test(l) && !c) return; // other comments can carry directives
+    out.push(l);
+    if (/^\s*rect\b/.test(l) && !/went wrong/i.test(lines[i + 1] ?? '')) {
+      const m = lines.slice(i + 1).join('\n').match(/^\s*(\w+)\s*-[->x)]+[+-]?\s*(\w+)\s*:/m);
+      if (m) out.push(`  Note over ${m[1] === m[2] ? m[1] : `${m[1]},${m[2]}`}: Where it all went wrong`);
+    }
+  });
+  return out.slice(0, 80).join('\n');
+}
 
 const numbered = (code: string) =>
   code
@@ -136,6 +160,12 @@ Rules:
 - accuses: the moduleId being accused in that turn, or "" if none.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
 - verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: one dry closing sentence from the judge.
+- verdict.diagram: a Mermaid sequenceDiagram showing how the bug happens, step by step, at most 10 messages:
+  - First line "sequenceDiagram". One "participant <id> as <title>" line per module involved, using these ids and titles: ${suspects.map((sp) => `${participantId(sp.id)} as ${sp.title.replace(/[:;#]/g, ' ')}`).join('; ')}.
+  - Messages ("A->>B: text", "B-->>A: text" for replies) are strictly factual, from the code shown, with real values (function names, 2000ms, field names). Directly under each message, a line "%% cite path:start-end" pointing at the code that does it.
+  - 2-4 "Note over <id>: ..." lines (at most two ids per note) with short in-character remarks at key moments (the spice level applies).
+  - Wrap the fatal step(s) in "rect rgb(255, 228, 222)" ... "end", with "Note over <ids>: Where it all went wrong" as the first line inside.
+  - Nothing else: no click, links, HTML, styling or init lines.
 - Use only these moduleIds: ${ids.join(', ')}.`;
 
     const prompt = `Bug report: ${bug}
@@ -151,7 +181,7 @@ ${s.files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${n
 
 ${levelReminder(b.spice)}`;
 
-    type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string } };
+    type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string } };
     const started = Date.now();
     const timings: Timing[] = [];
     // Call 2 streams schema-enforced JSON; provider errors throw here (before anything is sent).
@@ -230,6 +260,7 @@ ${levelReminder(b.spice)}`;
             ].filter((c) => c && ok({ path: str(c.path, 300), startLine: Number(c.startLine), endLine: Number(c.endLine) })),
             fix: { path: str(v?.fix?.path, 300), diff: str(v?.fix?.diff, 4000) },
             judgeLine: str(v?.judgeLine, 300),
+            diagram: cleanDiagram(str(v?.diagram, 6000), ok),
           };
           // Still unacceptable after the retry: keep it, but say what the real code change is.
           if (problem) {

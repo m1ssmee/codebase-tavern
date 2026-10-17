@@ -12,7 +12,9 @@
         "requiredString() trims input, because raw strings were not trusted here.",
         "No tests exist for 503 lines; that is a choice, not a feature."
       ],
-      "voicePitch": 0.85
+      "voicePitch": 0.85,
+      "about": "Provides shared validation, money, and logging helpers.",
+      "landlordLine": "Utils is the most depended-on tenant: 3 other modules lean on it. At 503 lines, with `validation.ts` at 417 lines, it is the building's junk drawer with a lightbulb and a grudge."
     },
     {
       "moduleId": "orders",
@@ -26,7 +28,9 @@
         "It throws if getOrder(orderId) returns nothing; that error is blunt enough.",
         "MAX_PAYMENT_ATTEMPTS is 2, because optimism clearly ran out quickly."
       ],
-      "voicePitch": 0.95
+      "voicePitch": 0.95,
+      "about": "Creates orders and runs checkout.",
+      "landlordLine": "Orders has 169 lines and 1 test file, and gateway depends on it over the network. It also depends on gateway, inventory, payments, and utils, which is a lot of lease paperwork for one tenant."
     },
     {
       "moduleId": "gateway",
@@ -40,7 +44,9 @@
         "gateway/config.ts defines ServiceConfig, then proxy.ts trusts it immediately.",
         "The timeout timer is cleared in finally, because leaked timers are boring shit nobody wants."
       ],
-      "voicePitch": 1.05
+      "voicePitch": 1.05,
+      "about": "Routes requests and proxies calls to internal services.",
+      "landlordLine": "Gateway takes up 153 lines and leans on 5 other modules. It also sits in the orders <-> gateway loop, which is exactly the kind of damn rent dispute this building enjoys."
     },
     {
       "moduleId": "auth",
@@ -54,7 +60,9 @@
         "SECRET falls back to 'dev-only-secret', which is fine for local noise.",
         "The session lookup in refresh flow is called a read, because semantics never sleep."
       ],
-      "voicePitch": 0.9
+      "voicePitch": 0.9,
+      "about": "Issues and verifies access and refresh tokens.",
+      "landlordLine": "Auth brings 149 lines, 3 files, and 1 test file. Gateway leans on it over the network and by import, which is a tidy little shit sandwich of trust."
     },
     {
       "moduleId": "payments",
@@ -68,7 +76,9 @@
         "chargeId starts with ch_ and uses randomUUID().slice(0, 10).",
         "payments/logs/sample-charges.log exists, because the ledger likes memorabilia."
       ],
-      "voicePitch": 1
+      "voicePitch": 1,
+      "about": "Charges payment cards and records each charge in its list of charges.",
+      "landlordLine": "Payments is 130 lines in 3 files and depends on utils once. Gateway and orders both call it over the network, then wait around while the card network does its damn thing."
     },
     {
       "moduleId": "inventory",
@@ -82,7 +92,9 @@
         "available(sku) returns 0 when the SKU is missing.",
         "withSkuLock() deletes its lock entry only when the current promise still matches."
       ],
-      "voicePitch": 0.8
+      "voicePitch": 0.8,
+      "about": "Tracks stock and reserves items by SKU.",
+      "landlordLine": "Inventory is 108 lines in 2 files and gets traffic from gateway over the network. Orders also imports it once, because every checkout needs the stockroom key."
     },
     {
       "moduleId": "(misc)",
@@ -96,7 +108,13 @@
         "package.json and tsconfig.json are here, quietly doing the unsexy work.",
         "The README points configuration readers at gateway/config.ts, which is at least specific."
       ],
-      "voicePitch": 0.7
+      "voicePitch": 0.7,
+      "about": "Holds the repo files that are not application modules.",
+      "landlordLine": "Misc is 57 lines in 4 files and nobody depends on it. The building keeps it around anyway, which is the sort of damn hospitality only dead files get."
     }
-  ]
+  ],
+  "landlord": {
+    "intro": "Repo m1ssmee/quickcart has 21 files, 7 modules, and 4 TODOs; the place runs on hope and imports. The orders <-> gateway loop is already on the noticeboard, because of course it is.",
+    "outro": "Gateway needs 5 other modules, while utils is the most depended-on with 3 other modules leaning on it. Misc is unused, naturally, because every building needs one apartment that just sits there collecting dust and damn guilt."
+  }
 }

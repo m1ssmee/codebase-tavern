@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, FileDiff, Play, RotateCcw, Sparkles } from 'lucide-react';
 import { RIPPLE_HOP_MS, useTavern, type RippleStep, type WhatIfChange } from '@/lib/store';
 import { computeImpact, QUICKCART_SUGGESTIONS, sameChange, suggestionDiff, type Impact, type ImpactItem } from '@/lib/whatif';
-import { makeDiff } from '@/lib/diff';
+import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
+import { closingLine } from '@/lib/landlord';
+import LandlordFace from './LandlordFace';
 import { isValidCitation } from '@/lib/citations';
 import { blipText, unlockAudio } from '@/lib/blips';
 import type { Mood } from '@/lib/types';
@@ -14,8 +16,11 @@ import Rich from './Rich';
 
 type Verdict = 'breaks' | 'at risk' | 'fine' | 'relieved';
 type Result = { moduleId: string; verdict: Verdict; reason: string; reaction: string };
-type Summary = { update: string; check: string };
-type Run = { title: string; diff: string; items: Result[]; summary: Summary };
+type FollowUp = { moduleId: string; path: string; description: string };
+type Summary = { update: string; check: string; followUps?: FollowUp[] };
+// A saved follow-up run also keeps its parent's title and the patch it applied on top of it.
+type Run = { title: string; diff: string; items: Result[]; summary: Summary; parent?: string; followUp?: { moduleId: string; path: string }; patch?: string };
+type Snapshot = { title: string; impact: Impact; results: Record<string, Result>; summary: Summary | null; note: string | null };
 type Phase = 'writing' | 'assessing' | 'done' | 'error';
 
 const SAVED = (demoWhatIf as { runs: Run[] }).runs;
@@ -32,7 +37,7 @@ const BADGE: Record<Verdict, string> = {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export default function WhatIfPanel() {
-  const { repo, graph, characters, moods, whatIf, closeWhatIf, setView } = useTavern();
+  const { repo, graph, characters, moods, whatIf, closeWhatIf, setView, landlordSays } = useTavern();
   const [phase, setPhase] = useState<Phase>('writing');
   const [title, setTitle] = useState(whatIf?.change.title ?? '');
   const [impact, setImpact] = useState<Impact | null>(null);
@@ -41,6 +46,7 @@ export default function WhatIfPanel() {
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shown, setShown] = useState(true); // false after Undo
+  const [history, setHistory] = useState<Snapshot[]>([]); // earlier changes in the stack, oldest first
   const [input, setInput] = useState('');
   const gen = useRef(0); // bumped on unmount: an older run's callbacks see a different value and stop
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -72,34 +78,75 @@ export default function WhatIfPanel() {
     react(r.moduleId);
   };
 
-  /** The show: ripple from the changed modules; each one reacts as the pulse reaches it. */
-  const play = (imp: Impact, label: string) => {
+  /**
+   * The show: ripple from the changed modules; each one reacts as the pulse reaches it. A stacked change ripples
+   * from its own module only (`from`); modules the ripple doesn't pass are reached at once.
+   */
+  const play = (imp: Impact, label: string, from: Impact = imp) => {
     const s = useTavern.getState();
     reached.current = new Set();
-    const changed = imp.items.filter((i) => i.role === 'changed').map((i) => i.moduleId);
-    const steps: RippleStep[] = imp.items
+    const changed = from.items.filter((i) => i.role === 'changed').map((i) => i.moduleId);
+    const steps: RippleStep[] = from.items
       .filter((i) => i.role !== 'changed' && i.via)
       .map((i) => ({ id: i.moduleId, hops: i.hops, via: i.via!, dir: i.role === 'downstream' ? 'down' : 'up' }));
     s.ripple(changed, { steps, label: `What if: ${label}` });
     for (const i of imp.items) {
       const arrive = () => (reached.current.add(i.moduleId), react(i.moduleId));
-      if (i.hops === 0) arrive();
-      else later(i.hops * RIPPLE_HOP_MS, arrive);
+      const hops = from.items.find((x) => x.moduleId === i.moduleId)?.hops ?? 0;
+      if (hops === 0) arrive();
+      else later(hops * RIPPLE_HOP_MS, arrive);
     }
     setShown(true);
+  };
+
+  /** A step's results are all in: after stacked changes, if nobody is worse off, the Landlord shows up. */
+  const finish = (imp: Impact, depth: number) => {
+    setPhase('done');
+    const ok = imp.items.every((i) => ['fine', 'relieved'].includes(landed.current.get(i.moduleId)?.verdict ?? ''));
+    if (depth < 2 || !ok) return;
+    const s = useTavern.getState();
+    const line = closingLine(s.spice, depth, imp.items.length, imp.files.map((f) => f.path).join());
+    s.setLandlordSays(line);
+    blipText(line, 0.7, s.muted);
+  };
+
+  /** Back to an earlier step of the stack: its diff, its verdicts, its moods. */
+  const restore = (snap: Snapshot) => {
+    const s = useTavern.getState();
+    setTitle(snap.title);
+    setImpact(snap.impact);
+    setResults(snap.results);
+    landed.current = new Map(Object.entries(snap.results));
+    setSummary(snap.summary);
+    setNote(snap.note);
+    setError(null);
+    setPhase('done');
+    s.setWhatIfDiff(snap.impact.files.map((f) => ({ path: f.path, before: f.before, after: f.after })));
+    s.setLandlordSays(null);
+    for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
+    for (const r of Object.values(snap.results)) s.setMood(r.moduleId, r.verdict === 'breaks' ? 'fainted' : MOOD[r.verdict]);
+    useTavern.setState({ bubbles: {}, rippleFrom: null });
   };
 
   const undo = () => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
     reached.current = new Set();
+    gen.current++; // stop whatever the last step was still doing
+    ctrl.current?.abort();
+    if (history.length) {
+      restore(history[history.length - 1]);
+      setHistory((h) => h.slice(0, -1));
+      return;
+    }
     const s = useTavern.getState();
+    s.setLandlordSays(null);
     for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
     useTavern.setState({ bubbles: {}, rippleFrom: null });
     setShown(false);
   };
 
-  const replay = async (run: Run, why: string | null, dead: () => boolean) => {
+  const replay = async (run: Run, why: string | null, dead: () => boolean, imp: Impact, depth: number) => {
     setNote(why);
     for (const r of run.items) {
       await sleep(650);
@@ -107,7 +154,72 @@ export default function WhatIfPanel() {
       land(r);
     }
     setSummary(run.summary);
-    setPhase('done');
+    finish(imp, depth);
+  };
+  const savedFor = (imp: Impact) =>
+    SAVED.find((r) => {
+      const x = repo && graph && computeImpact(repo.files, repo.modules, graph, r.diff);
+      return !!x && !('error' in x) && sameChange(x.files, imp.files);
+    });
+
+  /**
+   * "Apply the X side too": a small diff for that module (call 1, written against the stacked files), then the
+   * impact of the combined change. Nothing touches the repo; the stack lives in this panel. Saved patch on the
+   * demo route, or when call 1 is slow or fails on quickcart.
+   */
+  const followUp = async (f: FollowUp) => {
+    if (!repo || !graph || !impact) return;
+    const s = useTavern.getState();
+    const mod = repo.modules.find((m) => m.id === f.moduleId);
+    const path = mod && (mod.filePaths.includes(f.path) ? f.path : mod.stats.biggestFile.path);
+    if (!mod || !path) return;
+    const my = ++gen.current;
+    const dead = () => gen.current !== my;
+    timers.current.forEach(clearTimeout);
+    const original = (p: string) => repo.files.find((x) => x.path === p)?.content ?? '';
+    const current = new Map(impact.files.map((x) => [x.path, x.after]));
+    const content = current.get(path) ?? original(path);
+    const label = `Apply the ${mod.name} side too`;
+    const parent = savedFor(impact);
+    const savedRun = SAVED.find((r) => r.patch && r.followUp?.moduleId === f.moduleId && r.parent === parent?.title);
+    const depth = history.length + 2;
+    setHistory((h) => [...h, { title, impact, results, summary, note }]);
+    setTitle(label);
+    setNote(null);
+    setError(null);
+    setResults({}); // the old verdicts don't apply to the stacked change
+    setSummary(null);
+    setPhase('writing');
+    let patch = '';
+    if (!s.demo) {
+      const ac = (ctrl.current = new AbortController());
+      const limit = repo.url?.includes('/quickcart') && savedRun ? setTimeout(() => ac.abort(), LIVE_LIMIT_MS) : undefined;
+      const res = await fetch('/api/whatif', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: 'diff', description: f.description, path, startLine: 1, endLine: content.split('\n').length, content }),
+        signal: ac.signal,
+      }).catch(() => null);
+      clearTimeout(limit);
+      const data = await res?.json().catch(() => null);
+      if (dead()) return;
+      patch = data?.diff ?? '';
+    }
+    const fd = parseDiff(patch || savedRun?.patch || '', path)[0];
+    const applied = fd && applyDiff(content, { ...fd, path });
+    if (!applied || 'error' in applied) {
+      restore({ title, impact, results, summary, note });
+      setHistory((h) => h.slice(0, -1));
+      setError(s.demo ? 'The demo route makes no AI calls, and there is no saved version of that follow-up.' : "Couldn't write that follow-up against the file. Try again in a minute.");
+      return;
+    }
+    if (!patch && savedRun) setNote(s.demo ? null : SLOW_NOTE);
+    current.set(path, applied.text);
+    const combined = [...current].map(([p, after]) => makeDiff(p, original(p), after)).filter(Boolean).join('\n');
+    const imp = computeImpact(repo.files, repo.modules, graph, combined);
+    const own = computeImpact(repo.files, repo.modules, graph, makeDiff(path, original(path), applied.text));
+    if ('error' in imp || 'error' in own) return;
+    await runStep(imp, label, depth, dead, own);
   };
 
   const start = async (change: WhatIfChange) => {
@@ -145,26 +257,35 @@ export default function WhatIfPanel() {
       setTitle(label);
     }
 
-    const imp = computeImpact(repo.files, repo.modules, graph, diff, change.kind === 'diff' ? change.path : change.path);
+    const imp = computeImpact(repo.files, repo.modules, graph, diff, change.path);
     if ('error' in imp) {
       setPhase('error');
       setError(imp.error);
       return;
     }
+    await runStep(imp, label, 1, dead);
+  };
+
+  /** One step of the stack: show the impact, ripple, then the verdicts (saved on the demo route, else live). */
+  const runStep = async (imp: Impact, label: string, depth: number, dead: () => boolean, from: Impact = imp) => {
+    const s = useTavern.getState();
+    if (!repo || !graph) return;
+    const ac = (ctrl.current = new AbortController());
     setImpact(imp);
+    setResults({});
+    landed.current = new Map();
+    setSummary(null);
+    s.setLandlordSays(null);
     s.setWhatIfDiff(imp.files.map((f) => ({ path: f.path, before: f.before, after: f.after })));
     setPhase('assessing');
-    play(imp, label);
+    play(imp, label, from);
 
-    const saved = SAVED.find((r) => {
-      const x = computeImpact(repo.files, repo.modules, graph, r.diff);
-      return !('error' in x) && sameChange(x.files, imp.files);
-    });
+    const saved = savedFor(imp);
     const graphOnly = (why: string) => {
       setNote(why);
       setPhase('done');
     };
-    if (s.demo) return saved ? replay(saved, null, dead) : graphOnly('The demo route makes no AI calls, so this preview shows the import graph only.');
+    if (s.demo) return saved ? replay(saved, null, dead, imp, depth) : graphOnly('The demo route makes no AI calls, so this preview shows the import graph only.');
 
     // Live. On quickcart, nothing within 20s (or a failure) replays the saved run of the same change.
     const isDemoRepo = !!repo.url?.includes('/quickcart');
@@ -226,12 +347,12 @@ export default function WhatIfPanel() {
         }
       }
       if (failed && !gotItem) throw new Error('assess failed');
-      if (!dead()) setPhase('done');
+      if (!dead()) finish(imp, depth);
     } catch (err) {
       clearTimeout(limit);
       if (dead()) return;
       console.warn('[whatif]', err);
-      if (isDemoRepo && saved) return replay(saved, ac.signal.aborted ? SLOW_NOTE : DOWN_NOTE, dead);
+      if (isDemoRepo && saved) return replay(saved, ac.signal.aborted ? SLOW_NOTE : DOWN_NOTE, dead, imp, depth);
       graphOnly(ac.signal.aborted ? 'Live AI is slow right now. The impact list comes from the import graph and is still accurate.' : 'The AI is busy right now. The impact list comes from the import graph and is still accurate.');
     }
   };
@@ -287,8 +408,16 @@ export default function WhatIfPanel() {
 
       <div className="flex-1 space-y-3 overflow-auto p-3">
         <div className="rounded-xl border border-edge bg-wood/60 p-3">
-          <div className="text-xs text-muted">The change</div>
-          <div className="font-medium">{title}</div>
+          <div className="text-xs text-muted">{history.length ? `The changes (${history.length + 1}, stacked)` : 'The change'}</div>
+          {history.map((h, k) => (
+            <div key={k} className="text-sm text-muted">
+              {k + 1}. {h.title}
+            </div>
+          ))}
+          <div className="font-medium">
+            {history.length ? `${history.length + 1}. ` : ''}
+            {title}
+          </div>
           {impact && (
             <div className="mt-0.5 font-mono text-xs text-muted">
               {impact.files.map((f) => `${f.path} +${f.added} −${f.removed}`).join(' · ')}
@@ -301,7 +430,7 @@ export default function WhatIfPanel() {
               </button>
               {shown ? (
                 <button type="button" onClick={undo} className="flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs text-cream hover:border-amber">
-                  <RotateCcw size={13} /> Undo
+                  <RotateCcw size={13} /> {history.length ? 'Undo the last change' : 'Undo'}
                 </button>
               ) : (
                 <button type="button" onClick={() => play(impact, title)} className="flex items-center gap-1 rounded-full border border-edge bg-panel px-3 py-1 text-xs text-cream hover:border-amber">
@@ -312,6 +441,15 @@ export default function WhatIfPanel() {
           )}
         </div>
 
+        {landlordSays && (
+          <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5">
+            <LandlordFace size={48} keys={repo.modules.length} talking />
+            <div className="text-sm leading-snug">
+              <div className="text-xs font-medium">The Landlord</div>
+              {landlordSays}
+            </div>
+          </div>
+        )}
         {phase === 'writing' && <p className="text-center text-sm text-muted italic">Writing the change against the real file.</p>}
         {error && <p className="text-center text-sm text-tomato">{error}</p>}
         {note && <p className="text-center text-xs text-neutral-400">{note}</p>}
@@ -326,7 +464,7 @@ export default function WhatIfPanel() {
               const r = results[i.moduleId];
               const cites = [...i.usages, ...i.lines]
                 .map((c) => ({ path: c.path, startLine: c.line, endLine: c.endLine }))
-                .filter((c) => isValidCitation(c, repo.files))
+                .filter((c, k, all) => isValidCitation(c, repo.files) && all.findIndex((x) => x.path === c.path && x.startLine === c.startLine) === k)
                 .slice(0, 6);
               return (
                 <div key={i.moduleId} className="rounded-xl border border-edge p-2.5">
@@ -374,6 +512,21 @@ export default function WhatIfPanel() {
                 <Rich text={summary.check} files={repo.files} />
               </div>
             )}
+            {phase === 'done' &&
+              summary.followUps
+                ?.filter((f) => repo.modules.some((m) => m.id === f.moduleId))
+                .map((f) => (
+                  <div key={f.moduleId} className="rounded-lg border border-edge bg-panel p-2">
+                    <div className="text-xs text-muted">Incomplete without {repo.modules.find((m) => m.id === f.moduleId)?.name}: {f.description}</div>
+                    <button
+                      type="button"
+                      onClick={() => void followUp(f)}
+                      className="bounce-hover mt-1.5 flex items-center gap-1 rounded-full bg-amber px-3 py-1 text-xs font-medium text-ink"
+                    >
+                      <Sparkles size={12} /> Apply the {repo.modules.find((m) => m.id === f.moduleId)?.name} side too
+                    </button>
+                  </div>
+                ))}
           </div>
         )}
       </div>

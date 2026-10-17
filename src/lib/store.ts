@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
 import { buildRepo, entryFile, nesting } from './analyze';
-import { affectedBy, buildGraph, type Graph } from './graph';
+import { affectedBy, buildGraph, dependenciesOf, dependentsOf, type Graph } from './graph';
+import { buildingFacts, tourOrder } from './landlord';
 import { toCharacters, toRaw, type RawCharacter } from './characters';
 import demoCharacters from '@/data/demoCharacters.json';
 
 /** One hop of a ripple: `up` travels from `via` to a module that imports or calls it, `down` from `via` to a module it calls. */
 export type RippleStep = { id: string; hops: number; via: string; dir: 'up' | 'down' };
+export type Landlord = { intro: string; outro: string };
 export type WhatIfChange =
   | { kind: 'diff'; diff: string; title: string; path?: string }
   | { kind: 'describe'; description: string; title: string; path: string; startLine: number; endLine: number };
@@ -28,7 +30,10 @@ type TavernState = {
   demo: boolean; // /tavern?demo=1: saved quickcart, saved cast, saved Tribunal, zero AI calls for those
   // Code-smell reaction for the module whose file was just opened (not in clean).
   smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
-  view: 'code' | 'map' | 'diff'; // middle panel
+  view: 'code' | 'map' | 'diagram' | 'diff'; // middle panel
+  tourOn: boolean; // the Landlord's guided tour, in the Diagram tab
+  landlord: Landlord | null; // the Landlord's intro and outro for this repo (model-written; null = templates)
+  landlordSays: string | null; // the What-if closing beat
   rippleFrom: { ids: string[]; at: number; steps?: RippleStep[]; label?: string } | null; // set while a ripple plays on the map
   whatIf: { id: number; change: WhatIfChange } | null; // right panel in What-if mode
   whatIfDiff: { path: string; before: string; after: string }[] | null; // the previewed change, for the diff view
@@ -48,7 +53,11 @@ type TavernState = {
   toggleMute: () => void;
   setLoading: (isLoading: boolean) => void;
   setTribunal: (on: boolean) => void;
-  setView: (view: 'code' | 'map' | 'diff') => void;
+  setView: (view: 'code' | 'map' | 'diagram' | 'diff') => void;
+  startTour: () => void;
+  endTour: () => void; // remembers, per repo, that the tour was seen
+  setLandlord: (l: Landlord | null) => void;
+  setLandlordSays: (text: string | null) => void;
   /**
    * Pulse from module(s) hop by hop on the map (switches to it): by default to everything that imports or calls
    * them; what-if passes explicit steps, including `down` hops to modules whose call sites changed.
@@ -88,6 +97,9 @@ export const useTavern = create<TavernState>()((set, get) => {
     demo: false,
     smell: null,
     view: 'code',
+    tourOn: false,
+    landlord: null,
+    landlordSays: null,
     rippleFrom: null,
     whatIf: null,
     whatIfDiff: null,
@@ -103,6 +115,9 @@ export const useTavern = create<TavernState>()((set, get) => {
         whatIfDiff: null,
         bubbles: {},
         view: 'code',
+        tourOn: false,
+        landlord: null,
+        landlordSays: null,
         characters: {},
         moods: {},
         chats: {},
@@ -114,6 +129,8 @@ export const useTavern = create<TavernState>()((set, get) => {
       }),
     setCharacters: (list) => {
       set({ characters: Object.fromEntries(list.map((c) => [c.moduleId, c])) });
+      // First visit to this repo: open the Diagram tab on the Landlord's tour (the chat greeting waits).
+      if (!tourSeen(get().repo)) return set({ tourOn: true, view: 'diagram' });
       greet(get().selectedModuleId);
     },
     selectModule: (selectedModuleId) => {
@@ -151,6 +168,14 @@ export const useTavern = create<TavernState>()((set, get) => {
     setLoading: (isLoading) => set({ isLoading }),
     setTribunal: (tribunal) => set(tribunal ? { tribunal, whatIf: null } : { tribunal }),
     setView: (view) => set({ view }),
+    startTour: () => set({ tourOn: true, view: 'diagram' }),
+    endTour: () => {
+      rememberTour(get().repo);
+      set({ tourOn: false });
+      greet(get().selectedModuleId);
+    },
+    setLandlord: (landlord) => set({ landlord }),
+    setLandlordSays: (landlordSays) => set({ landlordSays }),
     ripple: (from, opts = {}) => {
       const at = Date.now();
       const ids = [from].flat();
@@ -161,7 +186,7 @@ export const useTavern = create<TavernState>()((set, get) => {
       setTimeout(() => get().rippleFrom?.at === at && set({ rippleFrom: null }), RIPPLE_HOP_MS * hops + 3000);
     },
     openWhatIf: (change) => set({ whatIf: { id: Date.now(), change }, tribunal: false, whatIfDiff: null, bubbles: {} }),
-    closeWhatIf: () => set((s) => ({ whatIf: null, whatIfDiff: null, bubbles: {}, rippleFrom: null, view: s.view === 'diff' ? 'code' : s.view })),
+    closeWhatIf: () => set((s) => ({ whatIf: null, whatIfDiff: null, bubbles: {}, rippleFrom: null, landlordSays: null, view: s.view === 'diff' ? 'code' : s.view })),
     setWhatIfDiff: (whatIfDiff) => set({ whatIfDiff }),
     setBubble: (id, text) =>
       set((s) => {
@@ -174,6 +199,23 @@ export const useTavern = create<TavernState>()((set, get) => {
 });
 
 export const RIPPLE_HOP_MS = 400;
+
+// Tour memory per repo. localStorage can be missing or throw (private mode, blocked storage): then it just replays.
+const tourKey = (repo: Repo | null) => `tavern:tour:${repo?.url ?? repo?.name ?? ''}`;
+function tourSeen(repo: Repo | null): boolean {
+  try {
+    return localStorage.getItem(tourKey(repo)) === '1';
+  } catch {
+    return false;
+  }
+}
+export function rememberTour(repo: Repo | null) {
+  try {
+    localStorage.setItem(tourKey(repo), '1');
+  } catch {
+    // nothing to remember with
+  }
+}
 
 type IngestResponse = { name: string; url: string; branch: string; files: RepoFile[]; skipped: Repo['skipped']; error?: string };
 
@@ -201,8 +243,13 @@ export function summonRepo(input: string): Promise<Repo> {
   return p;
 }
 
-/** Characters for every module in one /api/characters call; any failure falls back to stat templates. Never throws. */
-export async function generateCharacters(repo: Repo): Promise<Character[]> {
+const savedLandlord = (demoCharacters as { landlord?: Landlord }).landlord ?? null;
+
+/**
+ * Characters (and the Landlord's tour lines) for every module in one /api/characters call; any failure falls back
+ * to stat templates. Never throws.
+ */
+export async function generateCharacters(repo: Repo): Promise<{ characters: Character[]; landlord: Landlord | null }> {
   const byPath = new Map(repo.files.map((f) => [f.path, f.content]));
   const modules = repo.modules.map((m) => ({
     ...m,
@@ -212,30 +259,60 @@ export async function generateCharacters(repo: Repo): Promise<Character[]> {
       .slice(0, 2)
       .map((p) => ({ path: p, head: byPath.get(p)!.split('\n', 40).join('\n') })),
   }));
+  // Graph facts for the Landlord's lines: who leans on whom (imports and calls), the tour order, the notable modules.
+  const g = buildGraph(repo.files, repo.modules);
+  const facts = buildingFacts(g, repo.modules);
+  const nameOf = (id: string) => repo.modules.find((m) => m.id === id)?.name ?? id;
+  const link = (e: { from: string; to: string; weight: number; kind: string }, id: string) => `${nameOf(id)} (${e.kind === 'calls' ? 'over the network' : `${e.weight} imports`})`;
+  const building = {
+    files: repo.files.length,
+    modules: repo.modules.length,
+    todos: repo.modules.reduce((s, m) => s + m.stats.todoCount, 0),
+    tourOrder: tourOrder(g, repo.modules).order.map(nameOf),
+    mostDependedOn: facts.hub && `${nameOf(facts.hub.id)}: ${facts.hub.n} other modules depend on it`,
+    nobodyUses: facts.orphans.map(nameOf),
+    dependencyLoops: facts.cycles.map((c) => c.map(nameOf).join(' <-> ')),
+    needsTheMost: facts.needy && `${nameOf(facts.needy.id)}: depends on ${facts.needy.n} other modules (it leans on them, not the reverse)`,
+  };
+  const withLinks = modules.map((m) => ({
+    ...m,
+    testFiles: m.filePaths.filter((p) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$/i.test(p)).length,
+    links: {
+      usedBy: dependentsOf(g, m.id).map((e) => link(e, e.from)),
+      uses: dependenciesOf(g, m.id).map((e) => link(e, e.to)),
+    },
+  }));
   let raw: RawCharacter[] = [];
+  let landlord: Landlord | null = null;
   let live = false;
   try {
+    const s = useTavern.getState();
     const res = await fetch('/api/characters', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repoName: repo.name, modules, spice: useTavern.getState().spice }),
+      body: JSON.stringify({ repoName: repo.name, modules: withLinks, building, spice: s.spice, mode: s.mode }),
       signal: AbortSignal.timeout(45_000),
     });
     const data = await res.json();
     raw = data.characters ?? [];
+    landlord = data.landlord?.intro && data.landlord?.outro ? { intro: String(data.landlord.intro), outro: String(data.landlord.outro) } : null;
     live = data.source === 'llm';
   } catch {
     // network/timeout: toRaw below fills every module from templates
   }
   // Demo safety: on the demo repo, a failed generation uses the saved cast instead of stat templates.
-  if (!live && repo.url?.includes('/quickcart') && demoCharacters.characters.length) raw = demoCharacters.characters as RawCharacter[];
-  return toCharacters(repo.modules, toRaw(repo.modules, raw));
+  if (!live && repo.url?.includes('/quickcart') && demoCharacters.characters.length) {
+    raw = demoCharacters.characters as RawCharacter[];
+    landlord = savedLandlord;
+  }
+  return { characters: toCharacters(repo.modules, toRaw(repo.modules, raw)), landlord };
 }
 
 /** Runs while the loading screen is up: characters first, then load, so the tavern opens fully populated. */
 export async function loadWithCharacters(repo: Repo) {
-  const characters = await generateCharacters(repo);
+  const { characters, landlord } = await generateCharacters(repo);
   useTavern.getState().loadRepo(repo);
+  useTavern.getState().setLandlord(landlord);
   useTavern.getState().setCharacters(characters);
 }
 
@@ -244,6 +321,7 @@ export async function loadSavedDemo(): Promise<Repo> {
   const { default: d } = await import('@/data/demoRepo.json');
   const repo = { ...buildRepo(d.name, d.files, d.url), branch: d.branch, skipped: d.skipped };
   useTavern.getState().loadRepo(repo);
+  useTavern.getState().setLandlord(savedLandlord);
   useTavern.getState().setCharacters(toCharacters(repo.modules, toRaw(repo.modules, demoCharacters.characters as RawCharacter[])));
   return repo;
 }

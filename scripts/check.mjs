@@ -219,6 +219,13 @@ assert.equal(applyDiff('  if (x) {\n    y();\n  }', parseDiff('@@\n if (x) {\n- 
 const before = 'a\nb\nc\nd\ne\nf\ng\nh', after = 'a\nb\nc\nD\nE2\ne\nf\ng\nh';
 assert.equal(applyDiff(before, parseDiff(makeDiff('x.ts', before, after))[0]).text, after);
 assert.equal(makeDiff('x.ts', before, before), '');
+const far = Array.from({ length: 40 }, (_, i) => `line ${i}`);
+const farAfter = far.map((l, i) => (i === 3 ? 'changed 3' : i === 35 ? 'changed 35' : l));
+farAfter.splice(20, 0, 'inserted');
+const farDiff = makeDiff('far.ts', far.join('\n'), farAfter.join('\n'));
+assert.equal(farDiff.split('\n').filter((l) => l.startsWith('@@')).length, 3); // three separate hunks, not one block
+assert.equal(farDiff.split('\n').filter((l) => /^[+-][^+-]/.test(l)).length, 5);
+assert.equal(applyDiff(far.join('\n'), parseDiff(farDiff)[0]).text, farAfter.join('\n'));
 console.log('diff checks ok');
 
 // What-if impact (deterministic ground truth)
@@ -272,3 +279,91 @@ for (const run of savedWhatIf.runs) {
 }
 assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, savedWhatIf.runs[0].diff).files, fix.files)); // replays for "Apply this fix" too
 console.log('saved what-if checks ok');
+
+// Diagrams: sanitising AI output, cites, sequence messages, deterministic charts
+const { sanitizeDiagram, parseCites, parseSequence, escLabel, moduleChart, fileChart, participantId } = await import('../src/lib/diagram.ts');
+const evil = 'flowchart LR\n%%{init: {"securityLevel": "loose"}}%%\n  a["<img src=x onerror=alert(1)>hi"] --> b\n  click a "https://evil.example" "x"\n  click b call alert()\n  b -->|"see https://x.io/a"| c\n  style a fill:red';
+const clean = sanitizeDiagram(evil);
+assert.ok(!/click|init|<img|https?:|style a/.test(clean), clean);
+assert.match(clean, /a\[" hi"\] --> b/);
+const seq = 'sequenceDiagram\n  participant orders as orders, the bouncer\n  orders->>gateway: POST /payments/charges\n  %% cite orders/checkout.ts:21-30\n  rect rgb(255, 228, 222)\n  Note over orders,gateway: Where it all went wrong\n  gateway-->>+orders: UpstreamTimeoutError after 2000ms\n  %% cite gateway/proxy.ts:46-48\n  end\n  orders->>gateway: same charge again\n  %% cite m3 orders/x.ts:1';
+assert.deepEqual(parseSequence(seq).map((m) => [m.from, m.to, m.fatal, m.cite?.startLine]), [['orders', 'gateway', false, 21], ['gateway', 'orders', true, 46], ['orders', 'gateway', false, undefined]]);
+assert.deepEqual(parseCites(seq).map((c) => `${c.target}:${c.path}:${c.startLine}-${c.endLine}`), ['0:orders/checkout.ts:21-30', '1:gateway/proxy.ts:46-48', 'm3:orders/x.ts:1-1']);
+assert.equal(escLabel('a "b" <c> #1 `d`'), 'a #quot;b#quot; #lt;c#gt; #35;1 #96;d#96;');
+assert.equal(participantId('(root)'), '_root_');
+assert.match(sanitizeDiagram('sequenceDiagram\n  Note over a,b,c: x'), /Note over a,c: x/); // Mermaid notes span two participants
+const noteCite = 'sequenceDiagram\n  a->>b: one\n  %% cite x.ts:1\n  Note over a: aside\n  %% cite y.ts:9\n  b->>a: two';
+assert.deepEqual(parseSequence(noteCite).map((m) => m.cite?.path), ['x.ts', undefined]); // a cite under a note isn't a message's
+assert.deepEqual(parseCites(noteCite).map((c) => c.path), ['x.ts']);
+const mc = moduleChart(qr.modules, qg, (id) => id, new Set(['gateway>orders']));
+assert.equal(mc.edges.length, qg.edges.length);
+assert.match(mc.code, /-\.->\|"talks over the network"\|/);
+assert.match(mc.code, /-->\|"imports 2×"\|/);
+assert.match(mc.code, /stroke:#d9381e/); // the cycle edge
+const fc = fileChart(qr.modules.find((m) => m.id === 'utils'), qr.files, qg, (id) => id);
+assert.match(fc.code, /validation\.ts<br\/>417 lines · the load-bearing file/);
+console.log('diagram checks ok');
+
+// The Landlord: tour order, graph bf, lines
+const { tourOrder, buildingFacts, captions, landlordIntro, landlordLine, landlordOutro, closingLine } = await import('../src/lib/landlord.ts');
+const tour = tourOrder(qg, qr.modules);
+// gateway first, then the services in the order its config lists them, then what they import; misc is never reached
+assert.deepEqual(tour.order, ['gateway', 'auth', 'orders', 'payments', 'inventory', 'utils', '(misc)']);
+assert.equal(tour.firstUnreachable, 6);
+const bf = buildingFacts(qg, qr.modules);
+assert.deepEqual(bf.cycles, [['orders', 'gateway']]); // orders imports gateway, gateway calls orders
+assert.deepEqual([...bf.cycleEdges].sort(), ['gateway>orders', 'orders>gateway']);
+assert.deepEqual(bf.hub, { id: 'utils', n: 3 });
+assert.deepEqual(bf.orphans, ['(misc)']);
+assert.deepEqual(bf.needy, { id: 'gateway', n: 5, givesBack: 1 });
+for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
+  const cap = captions(bf, spice, (id) => id);
+  assert.deepEqual([...cap.keys()].sort(), ['(misc)', 'gateway', 'orders', 'utils'], spice);
+  assert.match(cap.get('utils'), /3 MODULES|3 modules/);
+  const caps = [...cap.values(), landlordIntro('m1ssmee/quickcart', qr.files, qr.modules, spice), landlordOutro('q', qg, qr.modules, bf, spice), closingLine(spice, 2, 3, 'x')];
+  for (const l of caps) {
+    assert.ok(!/\{\w+\}/.test(l), l); // every placeholder filled
+    if (spice === 'clean') assert.ok(!/\b(damn|shit|fuck|hell)/i.test(l), l);
+    assert.ok((l.match(/\b[A-Z]{3,}(?:\s+[A-Z']{2,})*\b/g) ?? []).filter((w) => !/^(TODOs?)$/.test(w)).length <= 4, l); // one outburst at most
+  }
+}
+assert.match(landlordIntro('m1ssmee/quickcart', qr.files, qr.modules, 'clean'), /21 files.*7 (tenants|modules).*(5|\d+) TODOs/);
+assert.match(landlordLine(qr.modules.find((m) => m.id === 'utils'), qg, bf, 'clean', (id) => id), /503 lines.*3 tenants|3 other modules/);
+assert.match(landlordLine(qr.modules.find((m) => m.id === 'payments'), qg, bf, 'clean', (id) => id), /Used by gateway and orders\. Needs utils\./);
+assert.match(landlordOutro('q', qg, qr.modules, bf, 'clean'), /7 tenants, 11 connections, 1 codependent pair/);
+// express-shaped: index.js at the root is where a request starts; tests and examples are never reached
+const exTour = tourOrder(ex, buildRepo('x', [['lib/express.js', 'x\n'.repeat(80)], ['lib/application.js', ''], ['lib/view.js', ''], ['lib/router/index.js', ''], ['index.js', ''], ['test/app.js', ''], ['examples/x/index.js', '']].map(([path, content]) => ({ path, content, lineCount: content.split('\n').length }))).modules);
+assert.equal(exTour.entry, '(root)');
+console.log('landlord checks ok');
+
+// Saved hearing: the verdict diagram cites real lines and the fix diff is still the one every saved What-if run matches.
+assert.ok(sameChange(computeImpact(qr.files, qr.modules, qg, trib.verdict.fix.diff).files, fix.files));
+const msgs = parseSequence(sanitizeDiagram(trib.verdict.diagram));
+assert.equal(sanitizeDiagram(trib.verdict.diagram), trib.verdict.diagram.trim()); // nothing to strip
+assert.ok(msgs.length >= 4 && msgs.length <= 10 && msgs.some((m) => m.fatal));
+for (const m of msgs) {
+  const f = qc.files.find((x) => x.path === m.cite?.path);
+  assert.ok(f && m.cite.endLine <= f.lineCount, `${m.text} → ${JSON.stringify(m.cite)}`);
+}
+console.log('saved hearing checks ok');
+
+// The saved stacked sequence: the Tribunal fix (payments shrugs, follow-up offered), then the payments side.
+const parentRun = savedWhatIf.runs.find((r) => r.title === 'Add an idempotency key');
+const followRun = savedWhatIf.runs.find((r) => r.parent === parentRun.title);
+assert.ok(parentRun.summary.followUps.some((f) => f.moduleId === 'payments' && f.path === 'payments/processor.ts'));
+assert.equal(parentRun.items.find((i) => i.moduleId === 'payments').verdict, 'fine');
+assert.deepEqual(followRun.followUp, { moduleId: 'payments', path: 'payments/processor.ts' });
+const proc0 = qc.files.find((f) => f.path === 'payments/processor.ts').content;
+const procAfter = applyDiff(proc0, parseDiff(followRun.patch)[0]);
+assert.ok(!procAfter.error && /chargesByKey\.get\(req\.idempotency_key\)/.test(procAfter.text));
+const stacked = computeImpact(qr.files, qr.modules, qg, followRun.diff);
+assert.deepEqual(stacked.items.map((i) => `${i.moduleId}:${i.role}`), ['orders:changed', 'payments:changed', 'gateway:upstream']);
+assert.ok(followRun.items.every((i) => ['fine', 'relieved'].includes(i.verdict)) && followRun.items.find((i) => i.moduleId === 'payments').verdict === 'relieved');
+console.log('saved follow-up checks ok');
+
+// Saved cast: the Landlord's lines exist for every quickcart module and state the real counts.
+const { default: savedCast } = await import('../src/data/demoCharacters.json', { with: { type: 'json' } });
+assert.match(savedCast.landlord.intro, /21 files, 7 modules, and 4 TODOs/);
+for (const c of savedCast.characters) assert.ok(c.about && c.landlordLine, c.moduleId);
+assert.match(savedCast.characters.find((c) => c.moduleId === 'gateway').landlordLine, /leans on 5 other modules/);
+console.log('saved cast checks ok');

@@ -6,16 +6,21 @@ import { ChevronRight, Sparkles } from 'lucide-react';
 import { useTavern, type WhatIfChange } from '@/lib/store';
 import { declaredIn, deleteDiff, renameDiff, retryOrCheck } from '@/lib/whatif';
 import type { RepoFile } from '@/lib/types';
+import LandlordFace from './LandlordFace';
 import { languageFor } from '@/lib/lang';
 import Gossip from './Gossip';
 import { sendChat } from './ChatPanel';
 
 type Ed = Parameters<OnMount>[0];
 
-// three.js + R3F only download when someone opens the map.
+// three.js + R3F only download when someone opens the map; Mermaid only with the Diagram tab.
 const MapView = dynamic(() => import('./map/MapView'), {
   ssr: false,
   loading: () => <div className="grid h-full place-items-center bg-[#fbfaf8] text-muted">Drawing the map…</div>,
+});
+const DiagramView = dynamic(() => import('./DiagramView'), {
+  ssr: false,
+  loading: () => <div className="grid h-full place-items-center bg-panel text-muted">Drawing the floor plan…</div>,
 });
 
 const defineTheme: BeforeMount = (monaco) =>
@@ -33,7 +38,7 @@ const defineTheme: BeforeMount = (monaco) =>
   });
 
 export default function CodePanel() {
-  const { repo, openFilePath, highlight, tribunal, whatIf, whatIfDiff, view, setView } = useTavern();
+  const { repo, openFilePath, highlight, tribunal, whatIf, whatIfDiff, view, setView, landlordSays } = useTavern();
   const [menu, setMenu] = useState(false); // the "What if I change this?" presets
   const [diffIdx, setDiffIdx] = useState(0);
   const shownDiff = whatIfDiff?.[Math.min(diffIdx, whatIfDiff.length - 1)];
@@ -102,14 +107,14 @@ export default function CodePanel() {
           <span>no file open</span>
         )}
         <div className="ml-auto flex shrink-0 rounded-full border border-edge p-0.5 font-sans">
-          {(whatIfDiff ? (['code', 'map', 'diff'] as const) : (['code', 'map'] as const)).map((v) => (
+          {(whatIfDiff ? (['code', 'map', 'diagram', 'diff'] as const) : (['code', 'map', 'diagram'] as const)).map((v) => (
             <button
               key={v}
               type="button"
               onClick={() => setView(v)}
               className={`rounded-full px-3 py-0.5 text-xs transition-colors ${view === v ? 'bg-amber text-ink' : 'text-muted hover:text-cream'}`}
             >
-              {v === 'code' ? 'Code' : v === 'map' ? 'Map' : 'Diff'}
+              {{ code: 'Code', map: 'Map', diagram: 'Diagram', diff: 'Diff' }[v]}
             </button>
           ))}
         </div>
@@ -142,6 +147,11 @@ export default function CodePanel() {
         {view === 'map' && (
           <div className="absolute inset-0 z-10">
             <MapView />
+          </div>
+        )}
+        {view === 'diagram' && (
+          <div className="absolute inset-0 z-10">
+            <DiagramView />
           </div>
         )}
         {view === 'diff' && shownDiff && (
@@ -213,6 +223,15 @@ export default function CodePanel() {
           </div>
         )}
         <Gossip />
+        {landlordSays && view !== 'diff' && (
+          <div className="pointer-events-none absolute bottom-10 left-3 z-30 flex items-end gap-2">
+            <LandlordFace size={72} keys={repo?.modules.length} talking />
+            <div className="mb-8 max-w-xs rounded-2xl rounded-bl-sm border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-cream shadow-md">
+              <div className="text-xs font-medium">The Landlord</div>
+              {landlordSays}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
