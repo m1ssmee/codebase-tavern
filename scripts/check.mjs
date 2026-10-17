@@ -373,3 +373,30 @@ assert.match(savedCast.landlord.intro, /21 files, 7 modules, and 4 TODOs/);
 for (const c of savedCast.characters) assert.ok(c.about && c.landlordLine, c.moduleId);
 assert.match(savedCast.characters.find((c) => c.moduleId === 'gateway').landlordLine, /leans on 5 other modules/);
 console.log('saved cast checks ok');
+
+// Roast My Repo: violations and the grade from the real stats and graph; every template line filled and in voice.
+const { inspect, gradeFor, fallbackLine, fallbackHeadline, toCompact, fromCompact, SWEARING, STAMP } = await import('../src/lib/roast.ts');
+const qi = inspect(qr.files, qr.modules, qg, (id) => id, () => '#f5a524');
+assert.deepEqual([qi.grade, qi.violations, qi.modules], ['C', 6, 6]); // utils 2, gateway 1, payments 1, inventory 1, the gateway/orders loop 1
+assert.deepEqual(qi.entries.map((e) => e.stat), ['validation.ts: 417 lines, no tests', 'gateway: no tests, codependent with orders', 'orders: codependent with gateway', 'payments: no tests']);
+assert.equal(STAMP[qi.grade], 'PASSED WITH CONCERNS');
+assert.deepEqual(['A', 'B', 'C', 'D', 'F'], [gradeFor(0, 4), gradeFor(1, 4), gradeFor(6, 6), gradeFor(5, 4), gradeFor(9, 4)]);
+// tested by a test module that imports it (express keeps tests in test/); dot-folders and docs aren't inspected
+const tf = (path, content) => ({ path, content, lineCount: content.split('\n').length });
+const tfiles = [tf('lib/a.js', 'x\n'.repeat(400)), tf('test/a.js', "require('../lib/a')\n" + 'x\n'.repeat(500)), tf('docs/conf.py', 'x = 1'), tf('.devcontainer/setup.sh', 'echo hi')];
+const tmods = buildRepo('x', tfiles).modules;
+const ti = inspect(tfiles, tmods, buildGraph(tfiles, tmods), (id) => id, () => '#000');
+assert.deepEqual([ti.modules, ti.violations, ti.entries[0].stat], [2, 1, 'a.js: 401 lines']); // lib: big file only; test files are exempt
+assert.deepEqual(ti.entries.map((e) => e.stat), ['a.js: 401 lines', 'test: no violations found']); // topped up with a clean module
+for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
+  const lines = [...qi.entries.map((e) => fallbackLine(e, spice)), fallbackHeadline(qi, spice, 'q'), fallbackLine({ ...qi.entries[0], facts: {} }, spice)];
+  for (const l of lines) {
+    assert.ok(!/\{\w+\}/.test(l) && /\d|[a-z]+\.ts|gateway|orders|payments|utils/.test(l), l); // filled, and built on a real fact
+    if (spice === 'clean') assert.ok(!SWEARING.test(l), l);
+  }
+}
+const card = { repo: 'm1ssmee/quickcart', date: '2026-10-18', grade: qi.grade, violations: 6, modules: 6, headline: 'h', keys: 7, clean: false, entries: qi.entries.map((e) => ({ ...e, line: 'l' })) };
+const back = fromCompact(JSON.parse(JSON.stringify(toCompact(card))));
+assert.deepEqual([back.repo, back.grade, back.entries.length, back.entries[0].stat, back.entries[0].face], [card.repo, 'C', 4, card.entries[0].stat, card.entries[0].face]);
+assert.equal(fromCompact([2, 'x']), null);
+console.log('roast checks ok');

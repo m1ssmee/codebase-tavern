@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Gavel, Volume2, VolumeX } from 'lucide-react';
+import { Gavel, Stamp, Volume2, VolumeX } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
@@ -33,7 +33,7 @@ function Segmented<T extends string>({ options, value, onChange }: { options: { 
 }
 
 export default function TopBar() {
-  const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal } = useTavern();
+  const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal, setRoastOpen } = useTavern();
   const before = useRef<SpiceLevel>('unhinged');
 
   // Hidden clean mode: Ctrl+Shift+C toggles it, restoring whatever level was active before.
@@ -74,6 +74,14 @@ export default function TopBar() {
           className="rounded-full border border-edge bg-panel p-2 text-cream transition-colors hover:bg-wood"
         >
           {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+        </button>
+        <button
+          type="button"
+          disabled={!repo}
+          onClick={() => setRoastOpen(true)}
+          className="bounce-hover flex items-center gap-1.5 rounded-full border border-edge bg-panel px-4 py-2 text-sm font-medium text-cream disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Stamp size={15} /> Roast this repo
         </button>
         <button
           type="button"

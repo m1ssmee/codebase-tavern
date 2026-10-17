@@ -269,6 +269,9 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
             <button type="button" className={btn} onClick={() => end(() => useTavern.getState().setView('map'))}>
               Explore the map
             </button>
+            <button type="button" className={btn} onClick={() => end(() => useTavern.getState().setRoastOpen(true))}>
+              Roast this repo
+            </button>
           </>
         ) : (
           <>

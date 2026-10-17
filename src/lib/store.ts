@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
+import type { RoastCard } from './roast';
 import { buildRepo, entryFile, nesting } from './analyze';
 import { affectedBy, buildGraph, dependenciesOf, dependentsOf, type Graph } from './graph';
 import { buildingFacts, tourOrder } from './landlord';
@@ -9,6 +10,8 @@ import demoCharacters from '@/data/demoCharacters.json';
 /** One hop of a ripple: `up` travels from `via` to a module that imports or calls it, `down` from `via` to a module it calls. */
 export type RippleStep = { id: string; hops: number; via: string; dir: 'up' | 'down' };
 export type Landlord = { intro: string; outro: string };
+/** A generated roast: the card at the active spice level and clean, and their signed share payloads. */
+export type RoastResult = { cards: { spicy: RoastCard; clean: RoastCard }; links: { spicy: string; clean: string } | null; source: string };
 export type WhatIfChange =
   | { kind: 'diff'; diff: string; title: string; path?: string }
   | { kind: 'describe'; description: string; title: string; path: string; startLine: number; endLine: number };
@@ -34,6 +37,8 @@ type TavernState = {
   tourOn: boolean; // the Landlord's guided tour, in the Diagram tab
   landlord: Landlord | null; // the Landlord's intro and outro for this repo (model-written; null = templates)
   landlordSays: string | null; // the What-if closing beat
+  roastOpen: boolean;
+  roasts: Record<string, RoastResult>; // per repo, for this session
   rippleFrom: { ids: string[]; at: number; steps?: RippleStep[]; label?: string } | null; // set while a ripple plays on the map
   whatIf: { id: number; change: WhatIfChange } | null; // right panel in What-if mode
   whatIfDiff: { path: string; before: string; after: string }[] | null; // the previewed change, for the diff view
@@ -58,6 +63,8 @@ type TavernState = {
   endTour: () => void; // remembers, per repo, that the tour was seen
   setLandlord: (l: Landlord | null) => void;
   setLandlordSays: (text: string | null) => void;
+  setRoastOpen: (open: boolean) => void;
+  setRoast: (repoKey: string, r: RoastResult) => void;
   /**
    * Pulse from module(s) hop by hop on the map (switches to it): by default to everything that imports or calls
    * them; what-if passes explicit steps, including `down` hops to modules whose call sites changed.
@@ -100,6 +107,8 @@ export const useTavern = create<TavernState>()((set, get) => {
     tourOn: false,
     landlord: null,
     landlordSays: null,
+    roastOpen: false,
+    roasts: {},
     rippleFrom: null,
     whatIf: null,
     whatIfDiff: null,
@@ -118,6 +127,7 @@ export const useTavern = create<TavernState>()((set, get) => {
         tourOn: false,
         landlord: null,
         landlordSays: null,
+        roastOpen: false,
         characters: {},
         moods: {},
         chats: {},
@@ -176,6 +186,8 @@ export const useTavern = create<TavernState>()((set, get) => {
     },
     setLandlord: (landlord) => set({ landlord }),
     setLandlordSays: (landlordSays) => set({ landlordSays }),
+    setRoastOpen: (roastOpen) => set({ roastOpen }),
+    setRoast: (key, r) => set((s) => ({ roasts: { ...s.roasts, [key]: r } })),
     ripple: (from, opts = {}) => {
       const at = Date.now();
       const ids = [from].flat();
