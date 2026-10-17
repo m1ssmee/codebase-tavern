@@ -24,7 +24,7 @@ New developers usually meet a codebase as a wall of files with no one to ask. Th
 ## Tech stack
 
 - Next.js (App Router) and TypeScript, Tailwind CSS, Zustand
-- OpenAI (`gpt-5.4-mini`, capped by a daily budget, `OPENAI_DAILY_BUDGET_USD`, default $2.50), then Gemini (`gemini-3.8-flash`, then `gemini-3.5-flash`), then templates
+- OpenAI (`gpt-5.4-mini`; `OPENAI_API_KEY`, then `OPENAI_API_KEY_BACKUP` once the first account is out of credit; capped by a daily budget, `OPENAI_DAILY_BUDGET_USD`, default $3.00), then Gemini (`gemini-3.8-flash`, then `gemini-3.5-flash`), then templates
 - Monaco editor for the code viewer and line highlights
 - Web Audio for the character voices and the verdict airhorn; Framer Motion for the faces
 - Deployed on Vercel. No database: the repo lives in the browser and only the relevant files are sent with each request.
@@ -33,7 +33,7 @@ New developers usually meet a codebase as a wall of files with no one to ask. Th
 
 ```bash
 npm install
-cp .env.example .env.local   # add GEMINI_API_KEY, OPENAI_API_KEY, GITHUB_TOKEN
+cp .env.example .env.local   # add GEMINI_API_KEY, OPENAI_API_KEY (and OPENAI_API_KEY_BACKUP), GITHUB_TOKEN
 npm run dev
 npm run check                # self-checks for parsing and analysis
 ```

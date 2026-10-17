@@ -42,11 +42,12 @@ export async function POST(req: Request) {
     return `- ${r.from} ${r.kind === 'calls' ? `calls ${r.to} over the network` : `imports ${r.to}`} at [${r.file}:${r.line}${end > r.line ? `-${end}` : ''}]: ${code}`;
   };
   const beginner = b?.mode !== 'expert';
-  const system = `You write a short argument between two modules of the repo ${str(b?.repoName, 200)} in Codebase Tavern. Modules are characters; they argue about how they depend on each other.
+  // Cache-friendly order (llm.ts): voice guide, rules, the two modules and their code (sorted by path) first; the
+  // spice level and mode last.
+  const shown = [...files].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+  const system = `${VOICE_GUIDE}
 
-${levelBlock(b?.spice)}
-
-${VOICE_GUIDE}
+You write a short argument between two modules of the repo ${str(b?.repoName, 200)} in Codebase Tavern. Modules are characters; they argue about how they depend on each other.
 
 Characters:
 - ${A.id} ("${A.title}"): ${A.personality}
@@ -59,16 +60,19 @@ Rules:
 - turns: exactly 4, alternating ${A.id}, ${B.id}, ${A.id}, ${B.id}. moduleId is the speaker's id.
 - Each turn is 1-2 short sentences, under 35 words, first person, in that module's voice, about this real dependency: who imports or calls whom, how often, with what (function names, fields, values from the code), and what that costs the other.
 - Each turn cites the line it is talking about as [path:line] or [path:start-end], using the line numbers shown before "|". Never invent code.
-- Roast the code, never people. ${beginner ? `No undefined jargon: plain words, or define a term in parentheses. ${PLAIN_WORDS}` : 'Standard technical terms are fine.'}
+- Roast the code, never people.
 - The last turn is the last word: short and final.
 
 Code:
-${files.map((f) => `=== ${f.path} ===\n${numbered(f.content)}`).join('\n\n')}
+${shown.map((f) => `=== ${f.path} ===\n${numbered(f.content)}`).join('\n\n')}`;
+  const dynamic = `${levelBlock(b?.spice)}
+
+${beginner ? `MODE: BEGINNER. No undefined jargon: plain words, or define a term in parentheses. ${PLAIN_WORDS}` : 'MODE: EXPERT. Standard technical terms are fine.'}
 
 ${levelReminder(b?.spice)}`;
 
   try {
-    const llm = await llmStream('argue', { system, messages: [{ role: 'user', text: `Write the 4 turns: ${A.id} starts.` }], schema: SCHEMA, maxTokens: 1500, timeoutMs: 30_000 });
+    const llm = await llmStream('argue', { system, dynamic, messages: [{ role: 'user', text: `Write the 4 turns: ${A.id} starts.` }], schema: SCHEMA, maxTokens: 1500, timeoutMs: 30_000 });
     const checker = new CiteChecker(lines);
     const fmt = (c: Citation) => `[${c.path}:${c.startLine}${c.endLine !== c.startLine ? `-${c.endLine}` : ''}]`;
     // Citations only to the files shown, re-anchored or dropped when the cited lines don't hold what the sentence names.

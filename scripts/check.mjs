@@ -697,3 +697,68 @@ console.log('judge template checks ok');
   assert.match(qc.files.find((f) => f.path === 'orders/checkout.ts').content.split('\n')[49], /UpstreamTimeoutError && attempt < MAX_PAYMENT_ATTEMPTS/);
   console.log('saved stage checks ok');
 }
+{
+  // OpenAI key rotation, driven by the real SDK against a fake server (no network, no spend). The fake answers by key.
+  const { default: OpenAI } = await import('openai');
+  const { keyPool, keyError } = await import('../src/lib/openaiKeys.ts');
+  const http = await import('node:http');
+  const hits = {};
+  const QUOTA = { error: { message: 'You exceeded your current quota, please check your plan and billing details.', type: 'insufficient_quota', param: null, code: 'insufficient_quota' } };
+  const RATE = { error: { message: 'Rate limit reached for gpt-5.4-mini on requests per min (RPM): Limit 500.', type: 'requests', param: null, code: 'rate_limit_exceeded' } };
+  const REVOKED = { error: { message: 'Incorrect API key provided: sk-test-r********oked. You can find your API key at https://platform.openai.com/account/api-keys.', type: 'invalid_request_error', param: null, code: 'invalid_api_key' } };
+  const OK = (who) => ({ id: 'x', object: 'chat.completion', created: 0, model: 'gpt-5.4-mini', choices: [{ index: 0, message: { role: 'assistant', content: `ok from ${who}` }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } });
+  const server = http.createServer((req, res) => {
+    const key = (req.headers.authorization ?? '').replace('Bearer ', '');
+    hits[key] = (hits[key] ?? 0) + 1;
+    req.resume();
+    const send = (status, body, headers = {}) => (res.writeHead(status, { 'content-type': 'application/json', ...headers }), res.end(JSON.stringify(body)));
+    if (key === 'sk-test-quota') return send(429, QUOTA);
+    if (key === 'sk-test-revoked') return send(401, REVOKED);
+    if (key === 'sk-test-busy' && hits[key] === 1) return send(429, RATE, { 'retry-after-ms': '20' });
+    return send(200, OK(key));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const baseURL = `http://127.0.0.1:${server.address().port}/v1`;
+  const make = (apiKey) => new OpenAI({ apiKey, baseURL, maxRetries: 0 });
+  const ask = (pool) => pool.call((c) => c.chat.completions.create({ model: 'gpt-5.4-mini', messages: [{ role: 'user', content: 'hi' }] })).then((r) => r.choices[0].message.content);
+  const logs = [];
+  const log = (m) => logs.push(m);
+  const sleep = () => Promise.resolve();
+  // Out of credit on the primary: the same request goes to the backup and succeeds; the primary stays out; logged once.
+  let pool = keyPool([{ name: 'primary', key: 'sk-test-quota' }, { name: 'backup', key: 'sk-test-backup' }], make, { log, sleep });
+  assert.equal(await ask(pool), 'ok from sk-test-backup');
+  assert.deepEqual(logs, ['OpenAI primary key out of credit; switched to backup.']);
+  assert.equal(await ask(pool), 'ok from sk-test-backup');
+  assert.equal(hits['sk-test-quota'], 1); // never asked again
+  assert.equal(logs.length, 1);
+  assert.equal(pool.current(), 'backup');
+  // An ordinary rate limit: wait and retry the same key, no switch.
+  logs.length = 0;
+  pool = keyPool([{ name: 'primary', key: 'sk-test-busy' }, { name: 'backup', key: 'sk-test-backup2' }], make, { log, sleep });
+  assert.equal(await ask(pool), 'ok from sk-test-busy');
+  assert.equal(hits['sk-test-busy'], 2);
+  assert.equal(hits['sk-test-backup2'], undefined);
+  assert.deepEqual(logs, []);
+  assert.equal(pool.current(), 'primary');
+  // A revoked key switches too, and the key fragment OpenAI echoes is scrubbed before anything can log it.
+  logs.length = 0;
+  pool = keyPool([{ name: 'primary', key: 'sk-test-revoked' }, { name: 'backup', key: 'sk-test-quota' }], make, { log, sleep });
+  await assert.rejects(ask(pool), (e) => /insufficient_quota/.test(e.message)); // both out: falls through to Gemini
+  assert.equal(pool.available(), false);
+  assert.equal(logs.length, 2);
+  const e401 = await make('sk-test-revoked').chat.completions.create({ model: 'm', messages: [] }).catch((e) => e);
+  assert.equal(keyError(e401), 'switch');
+  const { scrub } = await import('../src/lib/openaiKeys.ts');
+  assert.doesNotMatch(scrub(e401).message, /sk-test/);
+  // Classification of the shapes OpenAI uses.
+  assert.equal(keyError({ status: 429, code: 'rate_limit_exceeded' }), 'retry');
+  assert.equal(keyError({ status: 429, error: { code: 'insufficient_quota' } }), 'switch');
+  assert.equal(keyError({ status: 400, error: { code: 'billing_hard_limit_reached', message: 'Billing hard limit has been reached' } }), 'switch');
+  assert.equal(keyError({ status: 400, error: { message: 'temperature unsupported' } }), 'other');
+  assert.equal(keyError({ status: 500 }), 'retry');
+  // Missing keys are skipped; no key at all means no OpenAI.
+  assert.equal(keyPool([{ name: 'primary', key: undefined }, { name: 'backup', key: 'sk-test-backup' }], make).current(), 'backup');
+  assert.equal(keyPool([{ name: 'primary', key: '' }, { name: 'backup', key: undefined }], make).available(), false);
+  server.close();
+  console.log('openai key rotation checks ok');
+}

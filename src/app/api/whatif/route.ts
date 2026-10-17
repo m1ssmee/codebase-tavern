@@ -146,12 +146,13 @@ async function assess(b: Record<string, unknown>) {
   const beginner = b.mode !== 'expert';
   const level = typeof b.spice === 'string' && ['clean', 'unhinged', 'feral', 'nuclear'].includes(b.spice) ? b.spice : 'unhinged';
 
-  const system = `You narrate "What if I change this?" in Codebase Tavern: code modules are characters, and a developer is previewing a change. Nothing has been applied.
+  // Cache-friendly order (llm.ts): voice guide, rules and the code as it is (sorted by path) first; the spice level and
+  // mode, then the change itself (title, diff, impact list) last.
+  const shown = [...files].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+  const codeText = shown.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.lines)}`).join('\n\n');
+  const system = `${VOICE_GUIDE}
 
-${levelBlock(b.spice)}
-- Here the reaction is the only place for swearing and attitude: at this level each reaction carries it. The reason and summary sentences stay plain, clear and free of swearing at every level.
-
-${VOICE_GUIDE}
+You narrate "What if I change this?" in Codebase Tavern: code modules are characters, and a developer is previewing a change. Nothing has been applied.
 
 Rules:
 - Return exactly one item per module in the impact list, with the same moduleId, in the same order. Never add a module. Code from other modules is evidence only: cite it, but never give those modules a verdict.
@@ -163,13 +164,24 @@ Rules:
   - "fine": nothing it does changes in practice.
   - "relieved": the change removes a problem it had or makes its job safer, even if follow-up work remains (say what).
   - A module whose problem is only made rarer, not removed, is "at risk", never "relieved".
-- reason: 1-2 plain sentences${beginner ? ' a beginner can follow (define technical terms in parentheses on first use, never square brackets)' : ''}, citing [path:line] or [path:start-end] from the numbered code below. Use the lines listed for that module where they apply. Never invent code.
+- reason: 1-2 plain sentences (the mode rules at the end say how plain), citing [path:line] or [path:start-end] from the numbered code below. Use the lines listed for that module where they apply. Never invent code.
 - reaction: 3 variants of one line in that module's own voice, first person, under 25 words, at the active spice level, each built on a real fact (a number, a name, a line) and each a different joke; an editor picks the best. No citations in the reaction.
 - If the change makes a failure rarer without removing its cause (for example a longer timeout while a retry without an idempotency key still exists), say it hides the problem rather than fixing it, and name the failure that remains and when it still happens (e.g. "a charge slower than 5000ms is still sent twice"). Say this in the affected modules' reasons, in at least one reaction, and in the first sentence of summary.update. Check the numbers in the code (timeouts, typical and worst-case times) before saying a change makes something more or less likely.
 - Remember how timeouts work across services: when a caller stops waiting, the service it called may still finish the work. A caller that then retries without an idempotency key (a unique ID that lets the receiver spot a repeat) can make the work happen twice, e.g. a second charge. Use this when a change touches timeouts or retries.
 - summary.update: 1-3 sentences: what else must change for this to be complete (files and functions), with citations.
 - summary.check: 1-3 sentences: which tests to run or add and which behaviours to verify.
-- summary.followUps: one entry per module in the list that must also change for this change to actually work (for example it now receives a field it ignores, or calls something that does not exist yet): moduleId from the list, path = that module's file shown above that needs the change, description = one imperative sentence under 25 words naming the exact function and field (e.g. "Make processCharge() return the earlier charge when idempotency_key was already recorded."). Leave it empty when the change works on its own.${beginner ? `\n- ${PLAIN_WORDS}` : ''}`;
+- summary.followUps: one entry per module in the list that must also change for this change to actually work (for example it now receives a field it ignores, or calls something that does not exist yet): moduleId from the list, path = that module's file shown above that needs the change, description = one imperative sentence under 25 words naming the exact function and field (e.g. "Make processCharge() return the earlier charge when idempotency_key was already recorded."). Leave it empty when the change works on its own.
+
+Code (line numbers before "|"):
+${codeText}`;
+
+  const dynamic = `${levelBlock(b.spice)}
+- Here the reaction is the only place for swearing and attitude: at this level each reaction carries it. The reason and summary sentences stay plain, clear and free of swearing at every level.
+
+Mode rules:
+- reason: ${beginner ? `a beginner can follow it: define technical terms in parentheses on first use, never square brackets. ${PLAIN_WORDS}` : 'standard technical terms are fine.'}
+
+Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No swearing anywhere.' : 'Swear only in the reactions, at this level; the reason and summary sentences stay plain, with no swearing.'} Cite every claim in reasons and summary. Aim it at the code, never at people.`;
 
   const prompt = `Repo: ${str(b.repoName, 200)}
 Change: ${str(b.title, 200)}
@@ -184,17 +196,12 @@ ${items
     const uses = i.usages.map((u) => `    uses ${str(u.symbol, 80)} at ${cite(u)} ${str(u.code, 160)}`).join('\n');
     return `- ${i.moduleId} ("${i.name}"): ${role}\n${lines}${uses ? '\n' + uses : ''}`;
   })
-  .join('\n')}
-
-Code (line numbers before "|"):
-${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.lines)}`).join('\n\n')}
-
-Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No swearing anywhere.' : 'Swear only in the reactions, at this level; the reason and summary sentences stay plain, with no swearing.'} Cite every claim in reasons and summary. Aim it at the code, never at people.`;
+  .join('\n')}`;
 
   const started = Date.now();
   const timings: Timing[] = [];
   try {
-    const llm = await llmStream('whatif-assess', { system, messages: [{ role: 'user', text: prompt }], schema: ASSESS_SCHEMA, maxTokens: 4000, timeoutMs: 45_000, timings });
+    const llm = await llmStream('whatif-assess', { system, dynamic, messages: [{ role: 'user', text: prompt }], schema: ASSESS_SCHEMA, maxTokens: 4000, timeoutMs: 45_000, timings });
     const enc = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
@@ -234,7 +241,7 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
             const left = 50_000 - (Date.now() - started);
             console.warn(`[whatif] assess returned ${parsed}; ${left > 12_000 ? 'retrying once' : 'too late to retry'}`);
             if (left <= 12_000) throw new Error(`assess output unusable: ${parsed}`);
-            out = await llmJSON<Out>('whatif-assess-retry', { system, prompt, schema: ASSESS_SCHEMA, timeoutMs: left, timings });
+            out = await llmJSON<Out>('whatif-assess-retry', { system, dynamic, prompt, schema: ASSESS_SCHEMA, timeoutMs: left, timings });
           }
           arr(out?.items, 12).forEach(emit); // anything the scanner missed
           // One verdict per listed module is part of the contract: a skipped module counts as a schema failure, asked once.
@@ -245,6 +252,7 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
             try {
               const again = await llmJSON<Out>('whatif-assess-missing', {
                 system,
+                dynamic,
                 prompt: `${prompt}\n\nYour previous answer skipped these modules from the impact list: ${missing.join(', ')}. Return items for exactly those modules.`,
                 schema: ASSESS_SCHEMA,
                 timeoutMs: left - 8_000,
@@ -261,8 +269,10 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
             .filter((f, i, all) => ids.includes(f.moduleId) && lineCount.has(f.path) && f.description && all.findIndex((x) => x.moduleId === f.moduleId) === i);
           send({ type: 'summary', summary: { update: unswear(clean(str(out?.summary?.update, 800))), check: unswear(clean(str(out?.summary?.check, 800))), followUps } });
           // Reactions: 3 variants each → the filter → the comedy editor; no survivor → a template on the module's own line.
-          const known = knownNumbers(prompt);
-          const facts = codeFacts(prompt);
+          // The facts a reaction may use: the change and the code it was judged against.
+          const evidence = `${prompt}\n\n${codeText}`;
+          const known = knownNumbers(evidence);
+          const facts = codeFacts(evidence);
           // A real fact for a reaction: a module's name, a code name or number from the diff, or from that module's own lines.
           const codeWords = (t: string) => [...(t.match(/[A-Za-z_$][\w$]*/g) ?? []).filter((w) => w.length > 3 && /_|[a-z][A-Z]|^[A-Z]{2,}/.test(w)), ...numbersIn(t).filter((x) => Number(x) >= 10)];
           const changed = diff.split('\n').filter((l) => /^[+-](?![+-])/.test(l)).join(' ');
@@ -272,7 +282,7 @@ Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No 
             'whatif',
             [...reactions].map(([id, r]) => {
               const it = items.find((i) => i.moduleId === id)!;
-              return { id, variants: r.variants, rules: { needs: [...shared, ...own(it)], facts, source: prompt, known, clean: level === 'clean', maxWords: 28 }, about: `${it.name}: ${r.verdict}` };
+              return { id, variants: r.variants, rules: { needs: [...shared, ...own(it)], facts, source: evidence, known, clean: level === 'clean', maxWords: 28 }, about: `${it.name}: ${r.verdict}` };
             }),
             level,
             Math.min(6000, 55_000 - (Date.now() - started)),

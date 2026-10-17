@@ -6,7 +6,7 @@ import { SendHorizontal } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation } from '@/lib/citations';
 import { PALETTE, statsLine } from '@/lib/characters';
-import { pickContext } from '@/lib/context';
+import { CHAT_BUDGET, FOCUS_BUDGET, pickContext } from '@/lib/context';
 import { graphFacts, type Graph } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
 import { entryFile } from '@/lib/analyze';
@@ -82,7 +82,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
   }
 
   // A question about named lines needs less of the module around them (cheaper, and it stays on those lines).
-  const ctx = pickContext(mod, repo.files, focus?.path ?? openFilePath, text, focus ? 40_000 : undefined);
+  const ctx = pickContext(mod, repo.files, focus?.path ?? openFilePath, text, focus ? FOCUS_BUDGET : CHAT_BUDGET);
   const nameOf = (mid: string) => repo.modules.find((m) => m.id === mid)?.name ?? mid;
   const facts = s.graph ? graphFacts(s.graph, mod.id, repo.files, nameOf) : { dependents: [], dependencies: [] };
   // Someone else's line: the code goes along, and the speaker explains it as an outsider.

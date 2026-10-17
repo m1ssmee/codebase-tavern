@@ -5,7 +5,7 @@
 // gpt-5.4-mini's published prices, USD per token: input $0.75/M, cached input $0.075/M, output $4.50/M (reasoning
 // tokens bill as output). Used for any OPENAI_MODEL; update them if the model changes.
 const PRICE = { input: 0.75e-6, cached: 0.075e-6, output: 4.5e-6 };
-const DEFAULT_BUDGET = 2.5;
+const DEFAULT_BUDGET = 3;
 
 export const costOf = (input: number, cached: number, output: number) => (input - cached) * PRICE.input + cached * PRICE.cached + output * PRICE.output;
 

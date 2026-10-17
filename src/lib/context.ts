@@ -2,7 +2,10 @@
 // not the whole module. Type-only imports so `node scripts/check.mjs` can run it directly.
 import type { Module, RepoFile } from './types';
 
-export const CONTEXT_BUDGET = 120_000;
+export const CONTEXT_BUDGET = 120_000; // the Tribunal's, shared by its suspects
+/** A chat turn: 60KB of the module's code; a question about named lines needs less around them. */
+export const CHAT_BUDGET = 60_000;
+export const FOCUS_BUDGET = 40_000;
 
 export type ContextFile = { path: string; content: string; truncated: boolean };
 export type ChatContext = { files: ContextFile[]; omitted: string[]; allPaths: string[] };

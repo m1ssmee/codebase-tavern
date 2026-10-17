@@ -1,7 +1,7 @@
 import { rateLimited } from '@/lib/gemini';
 import { llmStream, type Msg } from '@/lib/llm';
 import { levelBlock, levelReminder, modeBlock, modeReminder, VOICE_GUIDE } from '@/lib/voice';
-import { CONTEXT_BUDGET } from '@/lib/context';
+import { CHAT_BUDGET } from '@/lib/context';
 import { CiteChecker, CiteStream } from '@/lib/citations';
 
 export const runtime = 'nodejs';
@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   if (!b?.moduleId) return Response.json({ error: 'bad request' }, { status: 400 });
 
   // Trust boundary: clip everything; total code capped at the budget plus a little slack.
-  let left = CONTEXT_BUDGET + 10_000;
+  let left = CHAT_BUDGET + 10_000;
   const files = arr<{ path: string; content: string; truncated: boolean }>(b.files, 200).flatMap((f) => {
     const content = str(f?.content, left);
     left -= content.length;
@@ -51,22 +51,21 @@ export async function POST(req: Request) {
     .map((o) => `- ${str(o?.title, 100)} (owns ${str(o?.path, 200) || 'the repo root files'})`)
     .join('\n');
 
-  const system = `You are "${title}", a module of the repo ${str(b.repoName, 200)}, in Codebase Tavern.
+  // Cache-friendly order (llm.ts): what stays the same for this module first (voice guide, rules, the module, its
+  // code sorted by path), what changes per question last (spice, mode, the lines pointed at, grudges).
+  const own = files.filter((f) => f.path !== (foreign && fp)).sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+  const system = `${VOICE_GUIDE}
+
+You are "${title}", a module of the repo ${str(b.repoName, 200)}, in Codebase Tavern.
 Personality: ${str(b.character?.personality, 300)}
 Catchphrase: ${str(b.character?.catchphrase, 150)}
 
-${levelBlock(b.spice)}
-
-${modeBlock(b.mode, b.spice)}
-
-${VOICE_GUIDE}
-
 Rules:
-- Speak in first person as this module. Answer first, joke second. Follow the MODE structure and word limit above.
+- Speak in first person as this module. Answer first, joke second. Follow the MODE structure and word limit given at the end.
 - Simple markdown only: numbered lists, **bold**, \`inline code\`. No headings, no code blocks. Don't repeat your catchphrase.
 - Every factual claim about code cites [path:line] or [path:start-end] in square brackets, using the exact paths and the line numbers shown before "|". Never put citations in backticks. Cite the narrowest range that supports the claim, usually under 15 lines; never a whole file.
 - Never invent code, files or behaviour. Only use the code below.
-- If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below${focus?.owner ? ', unless the user points at a line (see below)' : ''}.
+- If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below, unless the user points at lines of it (the instructions at the end say how to answer then).
 - If the answer is in a file marked [left out] or [truncated], say that file was left out of what you can see.
 
 Other modules:
@@ -82,7 +81,11 @@ Modules you import:
 ${arr<string>(b.dependencies, 13).map((d) => '- ' + str(d, 1500)).join('\n') || '- none'}
 
 Your code:
-${files.filter((f) => f.path !== (foreign && fp)).map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
+${own.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`;
+
+  const dynamic = `${levelBlock(b.spice)}
+
+${modeBlock(b.mode, b.spice)}
 ${foreign ? `\nCode the user pointed at (owned by ${focus?.owner || 'another module'}, not you):\n=== ${fp} ===\n${numbered(foreign)}\n` : ''}${
   focus
     ? `\nThe user is pointing at ${focus.path}:${focus.start}${focus.end > focus.start ? `-${focus.end}` : ''}. Answer about exactly those lines first: what they do and why they matter, citing them.${
@@ -113,7 +116,7 @@ ${modeReminder(b.mode)}`;
 
   try {
     // maxTokens includes thinking tokens, so keep it roomy; the prompt holds answers under 100 words.
-    const stream = await llmStream('chat', { system, messages, maxTokens: 2048 });
+    const stream = await llmStream('chat', { system, dynamic, messages, maxTokens: 2048 });
     // Every citation is checked against the code it points at on the way out (re-anchored or dropped if wrong).
     const checker = new CiteChecker(new Map(files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
     const cites = new CiteStream(checker);

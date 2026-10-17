@@ -3,9 +3,16 @@ import OpenAI from 'openai';
 import { FALLBACK_MODEL, FAST, gemini, MODEL } from './gemini';
 import { matchesSchema } from './guards';
 import { costOf, openaiSpend, reserve, type Reservation } from './spend';
+import { keyPool } from './openaiKeys';
 
 // Provider chain for every route: OpenAI mini → gemini-3.8-flash → gemini-3.5-flash; the routes' templates after that.
-// OpenAI is skipped once this instance has spent OPENAI_DAILY_BUDGET_USD today (spend.ts).
+// OpenAI has two keys (openaiKeys.ts): OPENAI_API_KEY until its account is out of credit, then OPENAI_API_KEY_BACKUP.
+// OpenAI is skipped once this instance has spent OPENAI_DAILY_BUDGET_USD today across both keys (spend.ts).
+//
+// Prompts are cache-friendly (OpenAI caches a repeated prefix of 1024+ tokens): `system` holds what stays the same
+// for a module or a case (voice guide, rules, the code in a fixed order); `dynamic` holds what changes per call (spice
+// level, mode, grudges, the lines pointed at). OpenAI gets `dynamic` as a second system message right before the
+// newest user message, so the stable prompt and the earlier conversation stay one cacheable prefix.
 // LLM_PROVIDER=openai forces OpenAI (still within the budget); LLM_PROVIDER=gemini forces Gemini (temperature tuning).
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'; // verified live: reasoning_effort none/low, json_schema, stream
 
@@ -41,7 +48,8 @@ function logUsage(label: string, p: Provider, input?: number, cached?: number, o
   if (input === undefined) return;
   const usd = p.kind === 'openai' ? costOf(input, cached ?? 0, output ?? 0) : 0;
   const today = p.kind === 'openai' ? ` usd=${usd.toFixed(5)} today=${(held ? held.settle(usd) : openaiSpend.add(usd)).toFixed(4)}` : '';
-  console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${today}`);
+  const share = input ? Math.round((100 * (cached ?? 0)) / input) : 0;
+  console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${today} cache=${share}%${p.kind === 'openai' ? ` key=${keys.current() ?? 'none'}` : ''}`);
 }
 export type Msg = { role: 'user' | 'assistant'; text: string };
 /** One provider attempt: who, how long to the first chunk (streams) and in total. Failed attempts are recorded too. */
@@ -50,7 +58,7 @@ export type Timing = { label: string; provider: string; ok: boolean; ms: number;
 let budgetLogged = '';
 /** OpenAI unless its key is missing or today's budget is spent (logged once a day per instance). */
 function openaiOk() {
-  if (!process.env.OPENAI_API_KEY) return false;
+  if (!keys.available()) return false; // no key set, or both accounts out of credit
   if (!openaiSpend.over()) return true;
   const day = new Date().toISOString().slice(0, 10);
   if (budgetLogged !== day) {
@@ -72,8 +80,14 @@ function chain(): Provider[] {
   return useOpenAI ? [openai, ...gem] : gem;
 }
 
-let oai: OpenAI | null = null;
-const openai = () => (oai ??= new OpenAI({ apiKey: process.env.OPENAI_API_KEY }));
+// The SDK's own retries are off: the pool retries rate limits on the same key and switches keys on credit errors.
+const keys = keyPool(
+  [
+    { name: 'primary', key: process.env.OPENAI_API_KEY },
+    { name: 'backup', key: process.env.OPENAI_API_KEY_BACKUP },
+  ],
+  (apiKey) => new OpenAI({ apiKey, maxRetries: 0 }),
+);
 
 // 429 / 503 / quota / missing key / blocked or empty output → try the next provider. Anything else is a real error.
 const fallsThrough = (err: unknown) =>
@@ -116,7 +130,7 @@ async function run<T>(label: string, fn: (p: Provider, t: Timing) => Promise<T>,
  */
 export function llmStream(
   label: string,
-  opts: { system: string; messages: Msg[]; maxTokens?: number; schema?: object; timeoutMs?: number; timings?: Timing[]; temperature?: number },
+  opts: { system: string; dynamic?: string; messages: Msg[]; maxTokens?: number; schema?: object; timeoutMs?: number; timings?: Timing[]; temperature?: number },
 ): Promise<ReadableStream<Uint8Array>> {
   const enc = new TextEncoder();
   return run(
@@ -132,7 +146,7 @@ export function llmStream(
           contents: opts.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.text }] })),
           config: {
             ...FAST,
-            systemInstruction: opts.system,
+            systemInstruction: opts.dynamic ? `${opts.system}\n\n${opts.dynamic}` : opts.system,
             ...(temperature !== undefined && { temperature }),
             maxOutputTokens: opts.maxTokens ?? 2048,
             ...(opts.schema && { responseMimeType: 'application/json', responseJsonSchema: opts.schema }),
@@ -151,9 +165,11 @@ export function llmStream(
         logUsage(label, p, usage?.promptTokenCount, usage?.cachedContentTokenCount, (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0));
       })();
     } else {
-      const held = reserve(opts.system.length + opts.messages.reduce((n, m) => n + m.text.length, 0), opts.maxTokens ?? 2048);
+      const held = reserve(opts.system.length + (opts.dynamic?.length ?? 0) + opts.messages.reduce((n, m) => n + m.text.length, 0), opts.maxTokens ?? 2048);
+      const turns = opts.messages.map((m) => ({ role: m.role, content: m.text }));
+      const messages = [{ role: 'system' as const, content: opts.system }, ...turns.slice(0, -1), ...(opts.dynamic ? [{ role: 'system' as const, content: opts.dynamic }] : []), ...turns.slice(-1)];
       const res = await withTemperature(p, temp, (temperature) =>
-        openai().chat.completions.create(
+        keys.call((c) => c.chat.completions.create(
           {
             model: p.model,
             reasoning_effort: 'low',
@@ -161,13 +177,13 @@ export function llmStream(
             stream_options: { include_usage: true },
             max_completion_tokens: opts.maxTokens ?? 2048,
             ...(temperature !== undefined && { temperature }),
-            messages: [{ role: 'system', content: opts.system }, ...opts.messages.map((m) => ({ role: m.role, content: m.text }))],
+            messages,
             ...(opts.schema && {
               response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
             }),
           },
           opts.timeoutMs ? { timeout: opts.timeoutMs } : undefined,
-        ),
+        )),
       ).catch((err) => {
         held.refund(); // never started: nothing billed
         throw err;
@@ -211,7 +227,7 @@ export function llmStream(
  * Unparseable or off-schema output is retried once on the same provider, then falls through to the next one.
  * `temperature` overrides the shared setting (the comedy editor judges, it doesn't invent).
  */
-export function llmJSON<T>(label: string, opts: { system: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[]; temperature?: number }): Promise<T> {
+export function llmJSON<T>(label: string, opts: { system: string; dynamic?: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[]; temperature?: number }): Promise<T> {
   const timeout = opts.timeoutMs ?? 40_000;
   const temp = opts.temperature ?? TEMPERATURE;
   return run(label, async (p) => {
@@ -224,7 +240,7 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
             contents: opts.prompt,
             config: {
               ...FAST,
-              systemInstruction: opts.system,
+              systemInstruction: opts.dynamic ? `${opts.system}\n\n${opts.dynamic}` : opts.system,
               responseMimeType: 'application/json',
               responseJsonSchema: opts.schema,
               ...(temperature !== undefined && { temperature }),
@@ -238,21 +254,22 @@ export function llmJSON<T>(label: string, opts: { system: string; prompt: string
         if (!res.text || (why && BLOCKED.test(String(why)))) throw new Blocked(p.name, String(why ?? 'no text'));
         return res.text;
       }
-      const held = reserve(opts.system.length + opts.prompt.length, 4000); // no output cap on JSON calls: a generous guess
+      const held = reserve(opts.system.length + (opts.dynamic?.length ?? 0) + opts.prompt.length, 4000); // no output cap on JSON calls: a generous guess
       const res = await withTemperature(p, temp, (temperature) =>
-        openai().chat.completions.create(
+        keys.call((c) => c.chat.completions.create(
           {
             model: p.model,
             reasoning_effort: 'low',
             ...(temperature !== undefined && { temperature }),
             messages: [
               { role: 'system', content: opts.system },
+              ...(opts.dynamic ? [{ role: 'system' as const, content: opts.dynamic }] : []),
               { role: 'user', content: opts.prompt },
             ],
             response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
           },
           { timeout: Math.max(1000, deadline - Date.now()) },
-        ),
+        )),
       ).catch((err) => {
         held.refund();
         throw err;

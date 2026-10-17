@@ -169,47 +169,55 @@ export async function POST(req: Request) {
       return { path, diff: makeDiff(path, file, applied.text) };
     };
 
-    const system = `You run the Incident Tribunal in Codebase Tavern: code modules, played as characters, argue about who caused a bug.
+    // Cache-friendly order (llm.ts): voice guide, rules, the suspects and their code (files sorted by path) first; the
+    // spice level, mode and the bug report last.
+    const byPath = (x: { path: string }, y: { path: string }) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0);
+    const code = suspects
+      .map(
+        (s) => `### ${s.id} ("${s.title}") ${s.personality}
+Files: ${s.allPaths.join(', ')}
+${[...s.files].sort(byPath).map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`,
+      )
+      .join('\n\n');
+    const system = `${VOICE_GUIDE}
 
-${levelBlock(b.spice)}
-- In the turns, every module speaks at this level. The rootCause stays plain and professional; the judgeLine follows the level${b.spice === 'nuclear' ? ' (the judge swears too)' : ''}.
-
-${VOICE_GUIDE}
+You run the Incident Tribunal in Codebase Tavern: code modules, played as characters, argue about who caused a bug.
 
 Rules:
 - Find the real root cause from the code, comments and logs shown. Bugs often come from how modules interact: compare timeouts with processing times, look for retries without idempotency keys, check logs for duplicates.
-- Turns stay short and avoid undefined jargon${b.mode === 'expert' ? '' : ` (plain words, or define the term in parentheses, never square brackets). ${PLAIN_WORDS}`}; swearing adds emphasis, never replaces information.
+- Turns stay short (the mode rules at the end say how plain); swearing adds emphasis, never replaces information.
 - turns: 6-8 items in two rounds. Round 1: every suspect speaks once (defends itself or accuses another). Round 2: rebuttals. Each turn is 2-3 sentences, first person, in that module's voice.
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
-- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'} verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: 3 variants of one dry closing sentence from the judge, three different jokes, each naming a culprit or a real value from the case; an editor picks the best one.
+- verdict.rootCause: plain sentences, no jokes, as the mode rules at the end say. verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: 3 variants of one dry closing sentence from the judge, three different jokes, each naming a culprit or a real value from the case; an editor picks the best one.
 - verdict.diagram: a Mermaid sequenceDiagram showing how the bug happens, step by step, at most 10 messages:
   - First line "sequenceDiagram". One "participant <id> as <title>" line per module involved, using these ids and titles: ${suspects.map((sp) => `${participantId(sp.id)} as ${sp.title.replace(/[:;#]/g, ' ')}`).join('; ')}.
   - Messages ("A->>B: text", "B-->>A: text" for replies) are strictly factual, from the code shown, with real values (function names, 2000ms, field names). Directly under each message, a line "%% cite path:start-end" pointing at the code that does it.
   - 2-4 "Note over <id>: ..." lines (at most two ids per note) with short in-character remarks at key moments (the spice level applies).
   - Wrap the fatal step(s) in "rect rgb(255, 228, 222)" ... "end", with "Note over <ids>: Where it all went wrong" as the first line inside.
   - Nothing else: no click, links, HTML, styling or init lines.
-- Use only these moduleIds: ${ids.join(', ')}.`;
-
-    const prompt = `Bug report: ${bug}
+- Use only these moduleIds: ${ids.join(', ')}.
 
 Suspects:
-${suspects
-  .map(
-    (s) => `### ${s.id} ("${s.title}") ${s.personality}
-Files: ${s.allPaths.join(', ')}
-${s.files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}`,
-  )
-  .join('\n\n')}
+${code}`;
+
+    const dynamic = `${levelBlock(b.spice)}
+- In the turns, every module speaks at this level. The rootCause stays plain and professional; the judgeLine follows the level${b.spice === 'nuclear' ? ' (the judge swears too)' : ''}.
+
+Mode rules:
+- Turns: ${b.mode === 'expert' ? 'standard technical terms are fine.' : `no undefined jargon (plain words, or define the term in parentheses, never square brackets). ${PLAIN_WORDS}`}
+- verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'}
 
 ${levelReminder(b.spice)}`;
+
+    const prompt = `Bug report: ${bug}`;
 
     type Out = { turns: { moduleId: string; text: string; accuses: string }[]; verdict: { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string } };
     const started = Date.now();
     const timings: Timing[] = [];
     // Call 2 streams schema-enforced JSON; provider errors throw here (before anything is sent).
-    const llm = await llmStream('tribunal-trial', { system, messages: [{ role: 'user', text: prompt }], schema: TRIAL_SCHEMA, maxTokens: 6000, timeoutMs: 45_000, timings });
+    const llm = await llmStream('tribunal-trial', { system, dynamic, messages: [{ role: 'user', text: prompt }], schema: TRIAL_SCHEMA, maxTokens: 6000, timeoutMs: 45_000, timings });
     const cleanTurn = (t: unknown) => {
       const x = t as Out['turns'][number];
       if (!x || !ids.includes(x.moduleId) || !str(x.text, 10)) return null;
@@ -254,6 +262,7 @@ ${levelReminder(b.spice)}`;
             if (sent < 2 || left <= 10_000) throw new Error(`trial output unusable: ${parsed}`);
             const again = await llmJSON<{ verdict: Out['verdict'] }>('tribunal-verdict-retry', {
               system,
+              dynamic,
               prompt: `${prompt}\n\nThe hearing so far:\n${heard.map((t) => `${t.moduleId}: ${t.text}`).join('\n')}\n\nReturn only the verdict.`,
               schema: VERDICT_SCHEMA,
               timeoutMs: left,
@@ -283,6 +292,7 @@ ${levelReminder(b.spice)}`;
                 const turnsText = (out?.turns ?? []).map((t) => `${t?.moduleId}: ${t?.text}`).join('\n');
                 const again = await llmJSON<{ verdict: Out['verdict'] }>('tribunal-verdict-retry', {
                   system,
+                  dynamic,
                   prompt: `${prompt}\n\nThe hearing so far:\n${turnsText}\n\n${rejectNote(problem)} Return only the verdict.`,
                   schema: VERDICT_SCHEMA,
                   timeoutMs: left,
@@ -324,7 +334,7 @@ ${levelReminder(b.spice)}`;
           const names = suspects.flatMap((sp) => [sp.id, sp.title.split(',')[0].trim()]);
           const picked = await editLines(
             'judge',
-            [{ id: 'judge', variants: v?.judgeLine, rules: { needs: [...names, ...numbersIn(rootCause)], facts: codeFacts(prompt), source: prompt, known: knownNumbers(prompt), clean: b.spice === 'clean', maxWords: 35 }, about: `closing the case; culprits: ${culprits.join(', ')}` }],
+            [{ id: 'judge', variants: v?.judgeLine, rules: { needs: [...names, ...numbersIn(rootCause)], facts: codeFacts(`${prompt}\n\n${code}`), source: `${prompt}\n\n${code}`, known: knownNumbers(`${prompt}\n\n${code}`), clean: b.spice === 'clean', maxWords: 35 }, about: `closing the case; culprits: ${culprits.join(', ')}` }],
             b.spice,
             Math.min(6000, 55_000 - (Date.now() - started)),
             (x) => x.replace(/\[[^\]]*\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 300),
