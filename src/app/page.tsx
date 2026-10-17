@@ -21,7 +21,7 @@ export default function Landing() {
   const summon = async (input: string) => {
     setError(null);
     const parsed = parseGitHubUrl(input);
-    if (!parsed) return setError('Yeh GitHub link hai ya shayari? Paste something like github.com/owner/repo.');
+    if (!parsed) return setError("That's not a GitHub link.");
     setLoading(parsed.slug);
     try {
       await summonRepo(input);
@@ -42,7 +42,7 @@ export default function Landing() {
       else entries.push({ path: f.name, content: await f.text() });
     }
     const { files, skipped } = filterFiles(entries, pre);
-    if (!files.length) return setError('Yeh kya upload kar diya? Code ka ek line bhi nahi hai isme.');
+    if (!files.length) return setError('None of those files are source code.');
     const name = files.length === 1 ? files[0].path : 'uploaded-files';
     useTavern.getState().loadRepo({ ...buildRepo(name, files), skipped });
     router.push('/tavern?upload=1');
@@ -67,7 +67,7 @@ export default function Landing() {
         <h1 className="font-display text-6xl leading-none tracking-wide text-amber drop-shadow-[0_6px_0_#000] sm:text-8xl">
           Codebase Tavern
         </h1>
-        <p className="mt-5 text-xl text-cream/90 sm:text-2xl">Your code, but it talks back. And it&apos;s rude.</p>
+        <p className="mt-5 text-xl text-cream/90 sm:text-2xl">Every module gets a voice. Most of them have complaints.</p>
       </div>
 
       <div className="w-full max-w-2xl">

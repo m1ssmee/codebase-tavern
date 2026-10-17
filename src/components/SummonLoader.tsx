@@ -4,13 +4,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import CharacterFace from './CharacterFace';
 
 const LINES = [
-  'Bribing the modules to move in',
-  "Waking up the utils folder (it's hungover)",
-  'Counting your TODOs… this might take a while',
-  'Untangling your spaghetti',
-  'Throwing node_modules out of the tavern',
-  'Asking the README if it is still accurate (it is not)',
-  'Pouring chai for the senior devs',
+  'Skipping node_modules',
+  'Counting your TODOs',
+  'Reading files nobody documented',
+  'Measuring nesting depth',
+  'Finding the biggest file',
 ];
 
 export default function SummonLoader({ what }: { what?: string }) {

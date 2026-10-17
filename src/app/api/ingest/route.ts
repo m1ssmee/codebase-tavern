@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { byPriority, filterFiles, MAX_FILES, MAX_TOTAL, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
+import { byPriority, CAP_REASON, filterFiles, MAX_FILES, MAX_TOTAL, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -8,13 +8,13 @@ const MAX_ZIP = 60 * 1024 * 1024;
 const MAX_RESPONSE = 4 * 1024 * 1024;
 
 const MSG = {
-  invalid: 'Yeh GitHub link hai ya shayari? Paste something like github.com/owner/repo.',
-  notFound: 'Bhai, yeh repo ya toh private hai ya exist hi nahi karta.',
-  tooBig: 'Yeh repo toh poora haathi hai. Too big for the tavern; try a /tree/<branch>/<folder> link.',
-  slow: 'GitHub so gaya beech mein. Repo too big or GitHub too slow, try a smaller folder.',
-  rateLimit: 'GitHub ne bola "bas karo bhai". Rate limited, try again in a few minutes.',
-  empty: 'Poora repo chhaan maara, code ka ek tukda nahi mila. Sirf kachra.',
-  generic: 'Tavern ka darwaza jam ho gaya. Something broke, try again.',
+  invalid: "That's not a GitHub link.",
+  notFound: "That repo is private or doesn't exist.",
+  tooBig: 'Repo too large. Try a smaller one or a subfolder link.',
+  slow: 'GitHub took too long to send the repo. Try a smaller one or a subfolder link.',
+  rateLimit: "GitHub's rate limit is used up. Try again in a few minutes.",
+  empty: 'No source files in that repo. Only docs, config or binaries.',
+  generic: 'Something went wrong fetching that repo. Try again.',
 };
 
 class Oops extends Error {
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
     let decoded = 0;
     for (const { rel, f } of candidates) {
       if (decoded > MAX_TOTAL * 2 || entries.length >= MAX_FILES * 2) {
-        tally('over the cap');
+        tally(CAP_REASON);
         continue;
       }
       const content = await f.async('string');
@@ -112,7 +112,7 @@ export async function POST(req: Request) {
     while (Buffer.byteLength(json) > MAX_RESPONSE && files.length) {
       files.pop();
       skipped.count++;
-      skipped.reasons['over the cap'] = (skipped.reasons['over the cap'] ?? 0) + 1;
+      skipped.reasons[CAP_REASON] = (skipped.reasons[CAP_REASON] ?? 0) + 1;
       json = JSON.stringify(payload);
     }
     return new Response(json, { headers: { 'Content-Type': 'application/json' } });

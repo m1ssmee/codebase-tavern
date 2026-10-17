@@ -9,14 +9,15 @@ import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
 
 // ponytail: Phase 4 replaces this with a streamed Gemini reply.
-function mockReply(mod: Module, files: RepoFile[], name: string, turn: number): string {
+function mockReply(mod: Module, files: RepoFile[], turn: number): string {
   const own = files.filter((f) => mod.filePaths.includes(f.path));
   const f = own[turn % own.length];
   const lines = f.content.split('\n');
   const hit = lines.findIndex((l) => /\b(TODO|FIXME|HACK)\b/.test(l));
-  const line = hit >= 0 ? hit + 1 : 1;
-  const start = Math.max(1, line - 1);
-  return `Arre sun na! Main ${name} hoon, ${mod.name} ka maalik. Yeh dekh, mera sabse sharam-naak raaz yahan pada hai: [${f.path}:${start}-${Math.min(lines.length, line + 1)}]. Kisi ko mat batana, warna Tribunal mein ghaseet lenge mujhe.`;
+  if (hit < 0) return `${f.path} is ${lines.length} lines with no TODOs. Start at [${f.path}:1-${Math.min(lines.length, 3)}].`;
+  const tag = lines[hit].match(/\b(TODO|FIXME|HACK)\b/)![1];
+  const cite = `[${f.path}:${Math.max(1, hit)}-${Math.min(lines.length, hit + 2)}]`;
+  return `${f.path} is ${lines.length} lines. The part worth reading is ${cite}: a ${tag} nobody has come back for.`;
 }
 
 export default function ChatPanel() {
@@ -42,7 +43,6 @@ export default function ChatPanel() {
             ))}
           </div>
           <p className="font-display text-2xl tracking-wide text-amber">Pick a module.</p>
-          <p className="text-muted">They&apos;re all a little unhinged.</p>
         </div>
       </div>
     );
@@ -57,7 +57,7 @@ export default function ChatPanel() {
     setMood(mod.id, 'talking');
     const turn = messages.filter((m) => m.role === 'character').length;
     setTimeout(() => {
-      const reply = mockReply(mod, repo.files, name, turn);
+      const reply = mockReply(mod, repo.files, turn);
       addMessage(mod.id, { id: crypto.randomUUID(), role: 'character', characterId: mod.id, text: reply, citations: extractCitations(reply) });
       setLoading(false);
       setMood(mod.id, 'idle');
@@ -79,7 +79,7 @@ export default function ChatPanel() {
 
       <div className="flex-1 space-y-3 overflow-auto p-3">
         {messages.length === 0 && (
-          <p className="text-center text-sm text-muted">Ask {name} anything about their code. They will overshare.</p>
+          <p className="text-center text-sm text-muted">Ask {name} about their code.</p>
         )}
         {messages.map((m) => (
           <motion.div
@@ -100,7 +100,7 @@ export default function ChatPanel() {
             </div>
           </motion.div>
         ))}
-        {isLoading && <div className="text-sm text-muted italic">{name} is typing something rude…</div>}
+        {isLoading && <div className="text-sm text-muted italic">{name} is typing…</div>}
         <div ref={endRef} />
       </div>
 

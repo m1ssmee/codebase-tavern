@@ -6,7 +6,8 @@ export const MAX_FILES = 300;
 export const MAX_TOTAL = 3 * 1024 * 1024;
 export const MAX_FILE = 150 * 1024;
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage', 'vendor', '__pycache__', 'venv', '.venv']);
+const DEP_DIRS = new Set(['node_modules', 'vendor', 'venv', '.venv']);
+const BUILD_DIRS = new Set(['.git', 'dist', 'build', 'out', '.next', 'coverage', '__pycache__']);
 const LOCK_FILES = new Set(['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'poetry.lock', 'cargo.lock', 'bun.lockb', 'composer.lock', 'gemfile.lock']);
 const BINARY_EXT = new Set(
   ('png jpg jpeg gif webp bmp ico svg tif tiff psd avif heic woff woff2 ttf otf eot mp3 wav ogg flac m4a aac mp4 mov avi mkv webm ' +
@@ -26,18 +27,22 @@ const ext = (p: string) => {
 };
 export const isCode = (p: string) => CODE_EXT.has(ext(p)) || /^(dockerfile|makefile)$/i.test(base(p));
 
+export const CAP_REASON = `over the ${MAX_FILES}-file / 3MB cap`;
+
 export type Skipped = { count: number; reasons: Record<string, number> };
 export type Entry = { path: string; content: string };
 
 /** Path/size-only check, so callers can skip without reading the file. */
 export function skipReason(path: string, size?: number): string | null {
   const parts = path.split('/');
-  if (parts.slice(0, -1).some((d) => SKIP_DIRS.has(d))) return 'junk folders';
+  const dirs = parts.slice(0, -1);
+  if (dirs.some((d) => DEP_DIRS.has(d))) return 'dependencies';
+  if (dirs.some((d) => BUILD_DIRS.has(d))) return 'build output';
   const b = base(path).toLowerCase();
   if (LOCK_FILES.has(b)) return 'lock files';
-  if (BINARY_EXT.has(ext(path))) return 'binary/media';
-  if (/\.min\.(js|css)$/.test(b)) return 'minified';
-  if (size !== undefined && size > MAX_FILE) return 'too big';
+  if (BINARY_EXT.has(ext(path))) return 'images and binaries';
+  if (/\.min\.(js|css)$/.test(b)) return 'minified files';
+  if (size !== undefined && size > MAX_FILE) return 'files over 150KB';
   return null;
 }
 
@@ -56,7 +61,7 @@ export function filterFiles(entries: Entry[], preSkipped: Record<string, number>
     const lines = lineCount(e.content);
     const why =
       skipReason(e.path, e.content.length) ??
-      (e.content.includes('\0') ? 'binary/media' : e.content.length / lines > 300 ? 'minified' : null);
+      (e.content.includes('\0') ? 'images and binaries' : e.content.length / lines > 300 ? 'minified files' : null);
     if (why) skip(why);
     else ok.push({ path: e.path, content: e.content, lineCount: lines });
   }
@@ -65,7 +70,7 @@ export function filterFiles(entries: Entry[], preSkipped: Record<string, number>
   let total = 0;
   for (const f of ok) {
     if (files.length >= MAX_FILES || total + f.content.length > MAX_TOTAL) {
-      skip('over the cap');
+      skip(CAP_REASON);
     } else {
       files.push(f);
       total += f.content.length;

@@ -8,7 +8,7 @@ const mono = JetBrains_Mono({ variable: '--font-jetbrains', subsets: ['latin'] }
 
 export const metadata: Metadata = {
   title: 'Codebase Tavern',
-  description: "Your code, but it talks back. And it's rude.",
+  description: "Every module gets a voice. Most of them have complaints.",
 };
 
 export default function RootLayout({ children }: LayoutProps<'/'>) {

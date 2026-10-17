@@ -5,9 +5,9 @@ import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
 const SPICES: { value: SpiceLevel; label: string }[] = [
-  { value: 'clean', label: '😇 Clean' },
-  { value: 'spicy', label: '🌶️ Spicy' },
-  { value: 'unhinged', label: '💀 Unhinged' },
+  { value: 'clean', label: 'Clean' },
+  { value: 'spicy', label: 'Spicy' },
+  { value: 'unhinged', label: 'Unhinged' },
 ];
 const MODES: ExplainMode[] = ['beginner', 'expert'];
 
@@ -42,7 +42,7 @@ export default function TopBar() {
       )}
       <div className="ml-auto flex flex-wrap items-center gap-3">
         <Segmented options={SPICES} value={spice} onChange={setSpice} />
-        <Segmented options={MODES.map((m) => ({ value: m, label: m === 'beginner' ? '🐣 Beginner' : '🧠 Expert' }))} value={mode} onChange={setMode} />
+        <Segmented options={MODES.map((m) => ({ value: m, label: m === 'beginner' ? 'Beginner' : 'Expert' }))} value={mode} onChange={setMode} />
         <button
           type="button"
           onClick={toggleMute}

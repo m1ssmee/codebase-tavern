@@ -70,14 +70,14 @@ export default function TavernPage() {
       {sk && !bannerHidden && (
         <div className="flex items-center gap-3 border-b-2 border-edge bg-amber/15 px-4 py-2 text-cream">
           <span>
-            🍻 Loaded <b>{repo.files.length}</b> {repo.files.length === 1 ? 'file' : 'files'} across <b>{repo.modules.length}</b>{' '}
+            Loaded <b>{repo.files.length}</b> {repo.files.length === 1 ? 'file' : 'files'} across <b>{repo.modules.length}</b>{' '}
             {repo.modules.length === 1 ? 'module' : 'modules'}.{' '}
             {sk.count ? (
               <>
-                Threw out <b>{sk.count}</b> junk files (node_modules ka kachra).
+                Skipped <b>{sk.count}</b> ({Object.entries(sk.reasons).sort((a, b) => b[1] - a[1]).map(([r]) => r).join(', ')}).
               </>
             ) : (
-              'Zero junk. Suspiciously clean.'
+              'Skipped nothing.'
             )}
           </span>
           <button type="button" onClick={() => setBannerHidden(true)} aria-label="Dismiss" className="ml-auto text-muted hover:text-cream">

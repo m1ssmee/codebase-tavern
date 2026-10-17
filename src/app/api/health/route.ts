@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const res = await gemini().models.generateContent({
       model: MODEL,
-      contents: 'Say hello to a hackathon judge in one short, funny Hinglish sentence.',
+      contents: 'Introduce yourself to a hackathon judge in one dry, deadpan English sentence. No emojis, no exclamation marks.',
     });
     return Response.json({ ok: true, model: MODEL, reply: res.text });
   } catch (err) {

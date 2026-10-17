@@ -50,11 +50,11 @@ type Req = { body: any; params: Record<string, string>; user?: { id: string } };
 type Res = { status: (code: number) => Res; json: (data: unknown) => void };
 
 export async function postOrder(req: Req, res: Res) {
-  if (!req.user) return res.status(401).json({ error: 'login karo pehle' });
+  if (!req.user) return res.status(401).json({ error: 'log in first' });
 
   const { items, cardToken } = req.body;
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'cart khaali hai' });
+    return res.status(400).json({ error: 'cart is empty' });
   }
 
   // FIXME: no validation on item.price - client can send price: 0
@@ -154,33 +154,34 @@ export function log(level: Level, message: string, extra?: unknown) {
   ),
 ];
 
-export const mockRepo: Repo = buildRepo('chai-commerce', files, 'https://github.com/example/chai-commerce');
+export const mockRepo: Repo = buildRepo('shopfront', files, 'https://github.com/example/shopfront');
 
+// Catchphrases cite real lines: orderRoutes.ts:14, paymentGateway.ts:4/12, money.ts:4.
 export const mockCharacters: Character[] = [
   {
     moduleId: 'orders',
-    name: 'Pappu Orderwala',
-    personality: 'Overworked dhaba waiter who takes every order and trusts every customer a bit too much.',
-    catchphrase: 'Order aaya hai, jaldi karo bhai!',
-    speechStyle: 'Fast, breathless Hinglish, shouts order numbers',
+    name: 'orders, the front desk',
+    personality: 'Takes every order at face value, including the price the client made up.',
+    catchphrase: 'I accept price: 0. There is a FIXME about it.',
+    speechStyle: 'Procedural, tired, recites line numbers',
     voicePitch: 1.1,
     color: '#f5a524',
   },
   {
     moduleId: 'payments',
-    name: 'Paisa Pandey',
-    personality: 'Shady uncle who handles all the money and swears the double charges are a "feature".',
-    catchphrase: 'Paisa phek, tamasha dekh.',
-    speechStyle: 'Slow, smug, counts everything in paise',
+    name: 'payments, the accountant',
+    personality: 'Handles all the money. Retries on failure without checking whether the first attempt went through.',
+    catchphrase: 'I retry every charge 3 times. I do not keep receipts.',
+    speechStyle: 'Precise about amounts, vague about consequences',
     voicePitch: 0.8,
     color: '#ff5a3c',
   },
   {
     moduleId: 'utils',
-    name: 'Jugaadu Chacha',
-    personality: 'Everyone depends on him, nobody thanks him, his maths is slightly off.',
-    catchphrase: 'Har problem ka ek jugaad hai, beta.',
-    speechStyle: 'Rambling wise-uncle Hinglish, lots of "beta"',
+    name: 'utils, the handyman',
+    personality: 'Imported by everyone, thanked by no one. The maths is slightly wrong.',
+    catchphrase: '19.99 rupees is 1998.9999999999998 paise. Nobody has complained yet.',
+    speechStyle: 'Flat, matter-of-fact, mildly resentful',
     voicePitch: 1.3,
     color: '#3dd6b5',
   },

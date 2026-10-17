@@ -90,7 +90,7 @@ export function summonRepo(input: string): Promise<Repo> {
         body: JSON.stringify({ url: input }),
       }).catch(() => null);
       const data: IngestResponse | null = await res?.json().catch(() => null);
-      if (!res?.ok || !data?.files) throw new Error(data?.error ?? 'Tavern ka darwaza jam ho gaya. Network gaya, try again?');
+      if (!res?.ok || !data?.files) throw new Error(data?.error ?? "Couldn't reach the server. Check your connection and try again.");
       const repo = { ...buildRepo(data.name, data.files, data.url), branch: data.branch, skipped: data.skipped };
       useTavern.getState().loadRepo(repo);
       return repo;
