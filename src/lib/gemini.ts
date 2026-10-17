@@ -57,14 +57,20 @@ export async function streamText(opts: { contents: ContentListUnion; system?: st
 const hits = new Map<string, number[]>();
 /** 20 requests/minute per IP, shared by every route that calls it. */
 export function rateLimited(req: Request, limit = 20, windowMs = 60_000): boolean {
-  // Vercel sets (and overwrites) x-real-ip, so clients can't spoof it there.
-  const ip = req.headers.get('x-real-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'local';
+  // Vercel sets (and overwrites) x-real-ip. x-forwarded-for is client-forgeable, so it's ignored;
+  // without x-real-ip (local dev) everyone shares one bucket.
+  const ip = req.headers.get('x-real-ip') || 'local';
   const now = Date.now();
+  // Map order = least recently seen first. Evict only idle IPs from the front (stops at the first active one).
+  for (const [k, ts] of hits) {
+    if (hits.size < 5000 || now - ts[ts.length - 1] < windowMs) break;
+    hits.delete(k);
+  }
+  const known = hits.has(ip);
+  if (!known && hits.size >= 5000) return true; // full of active IPs: fail closed for newcomers, never evict active ones
   const recent = (hits.get(ip) ?? []).filter((t) => now - t < windowMs);
   recent.push(now);
-  // Re-insert so Map order = least recently seen first; hard cap evicts from the front (LRU, O(1) per request).
   hits.delete(ip);
   hits.set(ip, recent);
-  while (hits.size > 5000) hits.delete(hits.keys().next().value!);
   return recent.length > limit;
 }
