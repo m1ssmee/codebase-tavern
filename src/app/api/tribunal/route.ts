@@ -43,6 +43,10 @@ const VERDICT_SCHEMA = obj({ verdict: VERDICT });
 
 
 type InSuspect = { id: string; title: string; personality: string; files: { path: string; content: string; truncated?: boolean }[]; allPaths: string[] };
+// Timings for the client: provider, model and durations only. Raw provider errors stay in the server log.
+const publicTimings = (ts: Timing[]) =>
+  ts.map((t) => ({ label: t.label, provider: t.provider, ok: t.ok, ms: t.ms, firstChunkMs: t.firstChunkMs, totalMs: t.totalMs }));
+
 const numbered = (code: string) =>
   code
     .replace(/\n$/, '')
@@ -79,7 +83,7 @@ export async function POST(req: Request) {
       for (const id of ids) if (suspects.length < 2 && !suspects.includes(id)) suspects.push(id);
       suspects = suspects.slice(0, 4);
       console.info('[tribunal] suspects timings', JSON.stringify({ totalMs: Date.now() - t0, calls: timings }));
-      return Response.json({ suspects, timings }); // timings: diagnostics only
+      return Response.json({ suspects, timings: publicTimings(timings) }); // timings: diagnostics only
     }
 
     // --- trial
@@ -229,7 +233,7 @@ ${levelReminder(b.spice)}`;
         }
         const summary = { firstTurnMs, totalMs: Date.now() - started, calls: timings };
         console.info('[tribunal] trial timings', JSON.stringify({ suspects: ids, ...summary }));
-        send({ type: 'timings', ...summary });
+        send({ type: 'timings', ...summary, calls: publicTimings(timings) });
         controller.close();
       },
     });
