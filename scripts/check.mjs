@@ -657,6 +657,7 @@ console.log('judge template checks ok');
   assert.equal(convertNotebook(nb), '# # Title\n# Intro\n\n# In[2]:\nimport pandas as pd\ndf = pd.read_csv("x.csv")');
   assert.equal(filterFiles([{ path: 'analysis.ipynb', content: nb }]).files[0].lineCount, 6);
   assert.equal(convertNotebook('not json'), null);
+  assert.equal(filterFiles([{ path: 'done.ipynb', content: convertNotebook(nb) }]).files[0].lineCount, 6); // already converted (big-repo path)
   // imports: Java package → folder, Go module path → folder, Rust crate::, mod and workspace crates
   const edges = (fs) => {
     const mods = detectModules(fs);

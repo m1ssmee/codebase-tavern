@@ -1,6 +1,6 @@
 import 'server-only';
 import JSZip from 'jszip';
-import { byPriority, capNote, CAP_REASON, fileTier, filterFiles, MAX_FILE, MAX_FILES, MAX_TOTAL, parseGitHubUrl, skipReason, type Entry, type Skipped } from './analyze';
+import { byPriority, capNote, CAP_REASON, convertNotebook, fileTier, filterFiles, MAX_FILE, MAX_FILES, MAX_NOTEBOOK, MAX_TOTAL, parseGitHubUrl, skipReason, type Entry, type Skipped } from './analyze';
 import type { RepoFile } from './types';
 
 // Fetches a public GitHub repo and keeps the best files within the caps. Shared by /api/ingest (the browser's copy)
@@ -10,6 +10,7 @@ import type { RepoFile } from './types';
 
 const MAX_ZIP = 60 * 1024 * 1024;
 const BIG_REPO_KB = 25_000; // GitHub's size field: above this, skip the zipball
+const NOTEBOOK_BUDGET = 24 * 1024 * 1024; // raw notebook bytes downloaded per repo (big repo path)
 export const MAX_RESPONSE = 4 * 1024 * 1024;
 
 // In character: the Landlord at the door. Every failure gets one of these, never a blank screen.
@@ -219,25 +220,38 @@ async function fromTree(owner: string, repo: string, api: string, sha: string, p
   const reserve = Math.min(Math.round(limit / 10), keep.filter((k) => fileTier(k.rel) === 1).length);
   const pick: typeof keep = [];
   let bytes = 0;
+  let notebookBytes = 0; // raw notebook downloads have their own budget: they shrink a lot once converted
   let source = 0;
   for (const k of keep) {
-    const size = /\.ipynb$/i.test(k.rel) ? Math.min(k.size, 40_000) : Math.min(k.size, MAX_FILE);
+    const nb = /\.ipynb$/i.test(k.rel);
+    const raw = Math.min(k.size, nb ? MAX_NOTEBOOK : MAX_FILE);
+    const size = nb ? Math.min(raw, 40_000) : raw; // what it will weigh once kept
     const isSource = fileTier(k.rel) === 0;
-    if (pick.length >= limit || bytes + size > MAX_TOTAL * 1.15 || (isSource && source >= limit - reserve)) tally(CAP_REASON);
+    if (pick.length >= limit || bytes + size > MAX_TOTAL * 1.15 || (nb && notebookBytes + raw > NOTEBOOK_BUDGET) || (isSource && source >= limit - reserve)) tally(CAP_REASON);
     else {
       pick.push(k);
       bytes += size;
+      if (nb) notebookBytes += raw;
       if (isSource) source++;
     }
   }
   say(`Downloading ${plural(pick.length, 'file')}`);
   const out: Entry[] = new Array(pick.length);
   let next = 0;
+  const dec = new TextDecoder();
   const worker = async () => {
     for (let i = next++; i < pick.length; i = next++) {
+      const nb = /\.ipynb$/i.test(pick[i].rel);
       const res = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/${sha}/${pick[i].path.split('/').map(encodeURIComponent).join('/')}`, { signal });
-      if (res.ok) out[i] = { path: pick[i].rel, content: await res.text() };
-      else tally('unreadable files');
+      if (!res.ok) {
+        tally('unreadable files');
+        continue;
+      }
+      // Never more than the per-file cap in memory, whatever the file list claimed; a notebook is converted at once.
+      const text = await readCapped(res, nb ? MAX_NOTEBOOK : MAX_FILE, () => {}).then((b) => dec.decode(b), () => null);
+      const content = text !== null && nb ? convertNotebook(text) : text;
+      if (content === null) tally(nb ? 'unreadable notebooks' : 'files over 150KB');
+      else out[i] = { path: pick[i].rel, content };
     }
   };
   await Promise.all(Array.from({ length: 48 }, worker));

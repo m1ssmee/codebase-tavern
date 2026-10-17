@@ -21,7 +21,7 @@ const DOC_EXT = new Set(['md', 'mdx', 'txt', 'rst', 'adoc']);
 const DOMINANT = ['src', 'app', 'lib', 'packages'];
 // Monorepo and Go layouts: each child is its own tenant (packages/react, crates/core, cmd/cobra, internal/render).
 const CONTAINERS = ['packages', 'apps', 'crates', 'libs', 'services', 'plugins', 'cmd', 'internal', 'pkg'];
-const MAX_NOTEBOOK = 2 * 1024 * 1024;
+export const MAX_NOTEBOOK = 2 * 1024 * 1024;
 const TEST_PATH = /(^|\/)(__tests__|tests?|spec|testdata)\/|[._-](test|spec)\.[a-z]+$/i;
 // Code, but not what a newcomer needs first: examples, fixtures, benchmarks, vendored code and type stubs.
 const SIDE_DIRS = /(^|\/)(examples?|samples?|fixtures?|__fixtures__|demos?|benchmarks?|benches|bench|third_party|e2e|flow-typed|typings|__mocks__|docs?_src|docs?_examples)\//i;
@@ -96,7 +96,8 @@ export function filterFiles(entries: Entry[], preSkipped: Record<string, number>
   const skip = (why: string) => (reasons[why] = (reasons[why] ?? 0) + 1);
   const ok: RepoFile[] = [];
   for (const e of entries) {
-    const content = ext(e.path) === 'ipynb' ? convertNotebook(e.content) : e.content;
+    // Raw notebook JSON is converted here; one the big-repo path already converted is plain text by now.
+    const content = ext(e.path) === 'ipynb' && e.content.trimStart().startsWith('{') ? convertNotebook(e.content) : e.content;
     if (content === null) {
       skip('unreadable notebooks');
       continue;
