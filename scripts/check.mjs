@@ -623,3 +623,77 @@ console.log('judge template checks ok');
   assert.ok(Math.abs(n.spent(morn) - 0.002) < 1e-12);
   console.log('spend reservation checks ok');
 }
+{
+  // Unreadable citations are normalised (the line they start with) or dropped, in every route and on screen.
+  const { normaliseCitations, parseCitations: pc, extractCitations: ec } = await import('../src/lib/citations.ts');
+  assert.equal(normaliseCitations('see [a/b.ts:12-?] now'), 'see [a/b.ts:12] now');
+  assert.equal(normaliseCitations('see [a/b.ts:?] now'), 'see now');
+  assert.equal(normaliseCitations('see [a/b.ts:abc].'), 'see.');
+  assert.equal(normaliseCitations('see [a/b.ts:1-?]'), 'see [a/b.ts:1]');
+  assert.equal(normaliseCitations('[a.ts:3-9] and [a.ts:4]'), '[a.ts:3-9] and [a.ts:4]'); // fine ones untouched
+  assert.equal(normaliseCitations('[a.ts:1, oops] [here] [x: 3]'), '[a.ts:1, oops] [here] [x: 3]');
+  assert.equal(normaliseCitations('[utils/logger.ts:0]'), '[utils/logger.ts:0]'); // readable: the range checks drop it later
+  assert.deepEqual(ec('it logs [utils/logger.ts:1-?] there'), [{ path: 'utils/logger.ts', startLine: 1, endLine: 1 }]);
+  assert.deepEqual(pc('x [a.ts:?] y'), ['x y']);
+  console.log('citation normalising checks ok');
+}
+{
+  // Line references in what the user types, resolved against the module asking.
+  const { parseLineRef, resolveLineRef } = await import('../src/lib/lines.ts');
+  const P = (t) => parseLineRef(t);
+  assert.deepEqual(P('explain line 29'), { startLine: 29, endLine: 29 });
+  assert.deepEqual(P('what do lines 40-52 do?'), { startLine: 40, endLine: 52 });
+  assert.deepEqual(P('lines 40 to 52'), { startLine: 40, endLine: 52 });
+  assert.deepEqual(P('L29 looks odd'), { startLine: 29, endLine: 29 });
+  assert.deepEqual(P('why 29-35?'), { startLine: 29, endLine: 35 });
+  assert.deepEqual(P('line 29 of auth/session.ts'), { path: 'auth/session.ts', startLine: 29, endLine: 29 });
+  assert.deepEqual(P('look at `tokens.ts` line 7'), { startLine: 7, endLine: 7 });
+  assert.deepEqual(P('Explain these lines [orders/checkout.ts:44-52]'), { path: 'orders/checkout.ts', startLine: 44, endLine: 52 });
+  assert.deepEqual(P('gateway/config.ts:16 is the timeout'), { path: 'gateway/config.ts', startLine: 16, endLine: 16 });
+  assert.equal(P('what does 2000ms-2400ms mean'), null);
+  assert.equal(P('explain yourself'), null);
+  assert.equal(P('lines 52-40'), null);
+  const files = [{ path: 'auth/tokens.ts', lineCount: 58 }, { path: 'auth/middleware.ts', lineCount: 48 }, { path: 'orders/checkout.ts', lineCount: 90 }];
+  const ctx = { files, openFilePath: 'orders/checkout.ts', ownPaths: ['auth/tokens.ts', 'auth/middleware.ts'], mainFile: 'auth/tokens.ts' };
+  assert.deepEqual(resolveLineRef(P('line 29'), ctx), { path: 'auth/tokens.ts', startLine: 29, endLine: 29 }); // open file isn't auth's
+  assert.deepEqual(resolveLineRef(P('line 29'), { ...ctx, openFilePath: 'auth/middleware.ts' }), { path: 'auth/middleware.ts', startLine: 29, endLine: 29 });
+  assert.deepEqual(resolveLineRef(P('line 50 of checkout.ts'), ctx), { path: 'orders/checkout.ts', startLine: 50, endLine: 50 }); // someone else's file
+  assert.deepEqual(resolveLineRef(P('lines 40-80'), { ...ctx, openFilePath: 'auth/middleware.ts' }), { path: 'auth/middleware.ts', startLine: 40, endLine: 48 });
+  assert.equal(resolveLineRef(P('line 99'), ctx), null);
+  assert.equal(resolveLineRef(P('line 3 of nope.ts'), ctx), null);
+  console.log('line reference checks ok');
+}
+{
+  // Stage lines with no AI: every level states real numbers; swearing only at the swearing levels.
+  const { neverMet, flingLine, aiOffLine, needsLine, needsSummary } = await import('../src/lib/stageLines.ts');
+  const st = (n, f, t) => ({ totalLines: n, fileCount: f, todoCount: t, maxNesting: 2, hasTests: false, biggestFile: { path: 'x', lines: 1 } });
+  const a = { id: 'misc', name: 'misc', stats: st(57, 1, 0) }, b = { id: 'auth', name: 'auth', stats: st(149, 3, 2) };
+  const SWEAR = /\b(damn|hell|shit|fuck\w*)\b/i;
+  for (const sp of ['clean', 'unhinged', 'feral', 'nuclear']) {
+    const t = neverMet(a, b, sp);
+    assert.deepEqual(t.map((x) => x.moduleId), ['misc', 'auth', 'misc', 'auth']);
+    assert.match(t[0].text, /never even met/i);
+    assert.ok(t.some((x) => x.text.includes('149 lines')) && t.some((x) => x.text.includes('57 lines')), sp);
+    const all = [...t.map((x) => x.text), flingLine(a, sp, 's'), aiOffLine(sp), needsLine(a, 'auth', { path: 'misc/x.ts', startLine: 3, endLine: 3, kind: 'imports' }, 2, sp)].join(' ');
+    assert.equal(SWEAR.test(all), sp !== 'clean', sp);
+    assert.doesNotMatch(all, /!|\p{Extended_Pictographic}/u);
+  }
+  assert.match(needsLine(a, 'auth', { path: 'misc/x.ts', startLine: 3, endLine: 4, kind: 'calls' }, 1, 'clean'), /call auth over the network once, starting here \[misc\/x\.ts:3-4\]/);
+  assert.match(needsSummary('auth', [{ name: 'misc', weight: 2, kind: 'imports', ref: { path: 'misc/x.ts', startLine: 3, endLine: 3 } }], 'clean'), /^1 module need me: misc imports me 2 times \[misc\/x\.ts:3\]/);
+  console.log('stage line checks ok');
+}
+{
+  // Saved stage pieces for the demo route: the argument alternates and cites real lines; the line explanation too.
+  const { default: argue } = await import('../src/data/demoArgue.json', { with: { type: 'json' } });
+  const { default: lines } = await import('../src/data/demoLines.json', { with: { type: 'json' } });
+  const { extractCitations: ec, isValidCitation: ok } = await import('../src/lib/citations.ts');
+  const pair = argue.pairs.find((p) => p.a === 'orders' && p.b === 'payments');
+  assert.ok(pair && pair.turns.length === 4);
+  assert.deepEqual(pair.turns.map((t) => t.moduleId), ['orders', 'payments', 'orders', 'payments']);
+  for (const t of pair.turns) assert.ok(ec(t.text).length && ec(t.text).every((c) => ok(c, qc.files)), t.text);
+  const retry = lines.items.find((x) => x.moduleId === 'orders' && x.path === 'orders/checkout.ts');
+  assert.ok(retry && retry.startLine <= 50 && retry.endLine >= 50);
+  assert.ok(ec(retry.text).length >= 3 && ec(retry.text).every((c) => ok(c, qc.files)));
+  assert.match(qc.files.find((f) => f.path === 'orders/checkout.ts').content.split('\n')[49], /UpstreamTimeoutError && attempt < MAX_PAYMENT_ATTEMPTS/);
+  console.log('saved stage checks ok');
+}

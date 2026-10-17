@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Gavel, Stamp, Volume2, VolumeX } from 'lucide-react';
 import { useCast3D } from './cast/settings';
+import { useStage, type Tenants } from './stage/store';
 import { useTavern } from '@/lib/store';
 import type { ExplainMode, SpiceLevel } from '@/lib/types';
 
@@ -13,6 +14,11 @@ const SPICES: { value: SpiceLevel; label: string }[] = [
   { value: 'nuclear', label: 'Nuclear' },
 ];
 const MODES: ExplainMode[] = ['beginner', 'expert'];
+const TENANTS: { value: Tenants; label: string }[] = [
+  { value: 'stage', label: 'On stage' },
+  { value: 'parked', label: 'Parked' },
+  { value: 'off', label: 'Off' },
+];
 
 function Segmented<T extends string>({ options, value, onChange }: { options: { value: T; label: string }[]; value: T; onChange: (v: T) => void }) {
   return (
@@ -37,6 +43,8 @@ export default function TopBar() {
   const { repo, spice, mode, muted, tribunal, setSpice, setMode, toggleMute, setTribunal, setRoastOpen } = useTavern();
   const before = useRef<SpiceLevel>('unhinged');
   const cast3D = useCast3D((s) => s.on);
+  const tenants = useStage((s) => s.tenants);
+  const setTenants = useStage((s) => s.setTenants);
   const setCast3D = useCast3D((s) => s.setOn);
 
   // Hidden clean mode: Ctrl+Shift+C toggles it, restoring whatever level was active before.
@@ -70,6 +78,10 @@ export default function TopBar() {
         )}
         <Segmented options={SPICES} value={spice} onChange={setSpice} />
         <Segmented options={MODES.map((m) => ({ value: m, label: m === 'beginner' ? 'Beginner' : 'Expert' }))} value={mode} onChange={setMode} />
+        <div className="flex items-center gap-1.5" role="group" aria-label="Tenants">
+          <span className="text-xs text-muted">Tenants</span>
+          <Segmented options={TENANTS} value={tenants} onChange={setTenants} />
+        </div>
         <button
           type="button"
           onClick={toggleMute}

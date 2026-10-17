@@ -22,6 +22,8 @@ import dynamic from 'next/dynamic';
 
 // html-to-image and the QR code only load when someone opens the roast.
 const RoastPanel = dynamic(() => import('@/components/RoastPanel'), { ssr: false });
+// The characters over the panels (three.js and the scenes load with it).
+const Stage = dynamic(() => import('@/components/stage/Stage'), { ssr: false });
 
 const handle = 'w-px bg-edge transition-colors hover:bg-amber data-[separator=active]:bg-amber';
 const never = () => () => {};
@@ -128,6 +130,7 @@ export default function TavernPage() {
           {tribunal ? <TribunalPanel /> : whatIf ? <WhatIfPanel key={whatIf.id} /> : <ChatPanel />}
         </Panel>
       </Group>
+      <Stage />
       {roastOpen && <RoastPanel />}
     </div>
   );

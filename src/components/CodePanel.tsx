@@ -8,8 +8,10 @@ import { declaredIn, deleteDiff, renameDiff, retryOrCheck } from '@/lib/whatif';
 import type { RepoFile } from '@/lib/types';
 import LandlordFace from './LandlordFace';
 import { languageFor } from '@/lib/lang';
-import Gossip from './Gossip';
 import { sendChat } from './ChatPanel';
+import { bus } from './stage/bus';
+import { useStage } from './stage/store';
+import { stageDo } from './stage/api';
 
 type Ed = Parameters<OnMount>[0];
 
@@ -22,6 +24,14 @@ const DiagramView = dynamic(() => import('./DiagramView'), {
   ssr: false,
   loading: () => <div className="grid h-full place-items-center bg-panel text-muted">Drawing the floor plan…</div>,
 });
+
+// Monaco cancels its own work when the model is swapped mid-operation (a citation tour opens files quickly) and rejects
+// with "Canceled": expected, not an error.
+if (typeof window !== 'undefined')
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason as { name?: string; message?: string } | undefined;
+    if (r?.name === 'Canceled' || r?.message === 'Canceled') e.preventDefault();
+  });
 
 const defineTheme: BeforeMount = (monaco) =>
   monaco.editor.defineTheme('tavern', {
@@ -47,9 +57,36 @@ export default function CodePanel() {
   const file = repo?.files.find((f) => f.path === openFilePath);
   const editorRef = useRef<Ed | null>(null);
   const [ready, setReady] = useState(false);
+  const dim = useStage((s) => s.dim);
+  const staged = useStage((s) => s.tenants !== 'off');
+  const whatIfFor = useStage((s) => s.whatIfFor);
+  // The stage reads which file the editor shows (after the editor's own effect has swapped the model).
+  useEffect(() => {
+    bus.path = file?.path ?? null;
+  }, [file?.path]);
 
   const onMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    bus.ed = editor;
+    // The stage reacts (no AI): the owner peeks over a selection, fast scrolling makes it dizzy, hovering an import
+    // brings the imported module in to wave.
+    let peekT: ReturnType<typeof setTimeout> | undefined;
+    let hoverAt = 0;
+    editor.onDidChangeCursorSelection((e) => {
+      clearTimeout(peekT);
+      const r = e.selection;
+      if (r.isEmpty() || !bus.path) return;
+      const path = bus.path;
+      peekT = setTimeout(() => void stageDo('peek', path, r.startLineNumber, r.endLineNumber), 700);
+    });
+    editor.onDidScrollChange((e) => e.scrollTopChanged && void stageDo('scrolled', bus.path, e.scrollTop));
+    editor.onMouseMove((e) => {
+      const line = e.target.position?.lineNumber;
+      if (!line || !bus.path || performance.now() - hoverAt < 250) return;
+      hoverAt = performance.now();
+      void stageDo('hoverLine', bus.path, line, e.event.posy);
+    });
+    editor.onDidDispose(() => bus.ed === editor && (bus.ed = null));
     // next/font hashes the family name; read the real one so Monaco measures the right font.
     const mono = getComputedStyle(document.documentElement).getPropertyValue('--font-jetbrains');
     if (mono) editor.updateOptions({ fontFamily: mono });
@@ -70,6 +107,24 @@ export default function CodePanel() {
     editor.onDidScrollChange(place);
     setReady(true);
   };
+
+  // Opening a file over 400 lines: its owner groans on stage.
+  useEffect(() => {
+    if (file && file.lineCount > 400) void stageDo('bigFile', file.path, file.lineCount);
+  }, [file]);
+
+  // "What if I change you?" from a character's menu: select its first declaration and open the presets.
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ready || !ed || !whatIfFor || whatIfFor.path !== file?.path) return;
+    const t = setTimeout(() => {
+      ed.setSelection({ startLineNumber: whatIfFor.start, startColumn: 1, endLineNumber: whatIfFor.end, endColumn: ed.getModel()?.getLineMaxColumn(whatIfFor.end) ?? 1 });
+      ed.revealLineInCenter(whatIfFor.start);
+      setTimeout(() => setMenu(true), 80);
+      useStage.setState({ whatIfFor: null });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [whatIfFor, file?.path, ready]);
 
   // Citation → reveal + glowing decoration that fades (CSS) and is removed after 4s.
   // Editor's own effect swaps the model first (child effects run before parent), so the lines exist here.
@@ -119,7 +174,9 @@ export default function CodePanel() {
           ))}
         </div>
       </div>
-      <div className="relative flex-1">
+      <div className="relative flex-1" data-stage="code">
+        {/* The Tribunal is in session over the code: dim it a little, keep it readable. */}
+        {dim && view === 'code' && <div className="pointer-events-none absolute inset-0 z-20 bg-white/45 transition-opacity" />}
         {file ? (
           <Editor
             path={file.path}
@@ -222,9 +279,8 @@ export default function CodePanel() {
             )}
           </div>
         )}
-        <Gossip />
         {landlordSays && view !== 'diff' && (
-          <div className="pointer-events-none absolute bottom-10 left-3 z-30 flex items-end gap-2">
+          <div className={`pointer-events-none absolute left-3 z-30 flex items-end gap-2 ${staged ? 'top-3' : 'bottom-10'}`}>
             <LandlordFace size={72} keys={repo?.modules.length} talking />
             <div className="mb-8 max-w-xs rounded-2xl rounded-bl-sm border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-cream shadow-md">
               <div className="text-xs font-medium">The Landlord</div>

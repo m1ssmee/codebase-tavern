@@ -12,6 +12,8 @@ import type { Mood } from '@/lib/types';
 import demoWhatIf from '@/data/demoWhatIf.json';
 import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
+import { useStage } from './stage/store';
+import { stageDo } from './stage/api';
 import Rich from './Rich';
 
 type Verdict = 'breaks' | 'at risk' | 'fine' | 'relieved';
@@ -35,6 +37,7 @@ const BADGE: Record<Verdict, string> = {
   relieved: 'bg-green-100 text-green-800',
 };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const POTATO_MS = 1000; // one pass of the hot potato on stage
 
 export default function WhatIfPanel() {
   const { repo, graph, characters, moods, whatIf, closeWhatIf, setView, landlordSays } = useTavern();
@@ -54,6 +57,9 @@ export default function WhatIfPanel() {
   const landed = useRef(new Map<string, Result>());
   const spoken = useRef(new Set<string>()); // modules whose reaction bubble has played this step
   const ctrl = useRef<AbortController | null>(null);
+
+  // Closing What-if ends the hot potato scene on stage.
+  useEffect(() => () => void stageDo('potatoEnd'), []);
 
   const later = (ms: number, f: () => void) => {
     const g = gen.current;
@@ -105,11 +111,18 @@ export default function WhatIfPanel() {
     const steps: RippleStep[] = from.items
       .filter((i) => i.role !== 'changed' && i.via)
       .map((i) => ({ id: i.moduleId, hops: i.hops, via: i.via!, dir: i.role === 'downstream' ? 'down' : 'up' }));
-    s.ripple(changed, { steps, label: `What if: ${label}` });
+    // On stage (unless the tenants are off): the change is a glowing hot potato passed along the ripple order over
+    // the code, and each module reacts when it lands. Otherwise the ripple plays on the map, as before.
+    const staged = useStage.getState().tenants !== 'off' && s.view !== 'map';
+    const order = [...new Set([...changed, ...[...steps].sort((a, b) => a.hops - b.hops).map((x) => x.id)])];
+    if (staged) void stageDo('potato', order, POTATO_MS);
+    else s.ripple(changed, { steps, label: `What if: ${label}` });
     for (const i of imp.items) {
       const arrive = () => (reached.current.add(i.moduleId), react(i.moduleId));
       const hops = from.items.find((x) => x.moduleId === i.moduleId)?.hops ?? 0;
-      if (hops === 0) arrive();
+      const k = order.indexOf(i.moduleId);
+      if (staged) later(k < 0 ? 0 : 700 + (k ? (k + 0.7) * POTATO_MS : 0), arrive);
+      else if (hops === 0) arrive();
       else later(hops * RIPPLE_HOP_MS, arrive);
     }
     setShown(true);
@@ -146,6 +159,7 @@ export default function WhatIfPanel() {
   };
 
   const undo = () => {
+    void stageDo('undo'); // everyone on stage groans
     timers.current.forEach(clearTimeout);
     timers.current = [];
     reached.current = new Set();

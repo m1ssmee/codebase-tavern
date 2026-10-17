@@ -14,6 +14,8 @@ import CitationChip from './CitationChip';
 import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
+import { useStage } from './stage/store';
+import { stageDo } from './stage/api';
 
 // three.js loads only when the 3D cast is on and a hearing starts.
 const TribunalStage = dynamic(() => import('./cast/TribunalStage'), { ssr: false, loading: () => <div className="h-44 border-b border-edge bg-ink/40" /> });
@@ -75,6 +77,10 @@ function courtLines(suspects: { name: string; files: string[] }[], spice: SpiceL
 export default function TribunalPanel() {
   const { repo, characters, moods, spice, setTribunal } = useTavern();
   const cast3D = useCast3D((s) => s.on);
+  // The court sits on the stage over the code panel unless the tenants are off (or the map is open).
+  const tenantsOn = useStage((s) => s.tenants !== 'off');
+  const mapOpen = useTavern((s) => s.view === 'map');
+  const staged = tenantsOn && !mapOpen;
   const [bug, setBug] = useState('');
   const [phase, setPhase] = useState<Phase>('input');
   const [suspects, setSuspects] = useState<string[]>([]);
@@ -100,6 +106,7 @@ export default function TribunalPanel() {
   useEffect(
     () => () => {
       stop.current = true;
+      void stageDo('courtClose');
       const s = useTavern.getState();
       for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
     },
@@ -126,12 +133,14 @@ export default function TribunalPanel() {
     useTavern.getState().setMood(turn.moduleId, 'talking');
     if (turn.accuses) useTavern.getState().setMood(turn.accuses, 'accused');
     const pitch = characters[turn.moduleId]?.voicePitch ?? 1;
+    void stageDo('courtTurn', turn); // on stage: an accusation bonks, then the speaker walks to its evidence
     let seen = 0;
     for (let c = 1; c <= turn.text.length; c++) {
       if (stop.current) return;
       if (skip.current) c = turn.text.length;
       const typed = turn.text.slice(0, c);
       setCurrent({ ...turn, text: typed });
+      void stageDo('courtSay', turn.moduleId, typed);
       if (!skip.current) blipText(turn.text[c - 1], pitch, useTavern.getState().muted);
       const cites = extractCitations(typed).filter((x) => isValidCitation(x, repo.files));
       if (cites.length > seen) {
@@ -142,6 +151,7 @@ export default function TribunalPanel() {
     }
     setDone((d) => [...d, turn]);
     setCurrent(null);
+    void stageDo('courtTurnEnd', turn.moduleId);
     if (!skip.current) await sleep(700);
   };
 
@@ -152,8 +162,10 @@ export default function TribunalPanel() {
       document.body.classList.add('nuclear-shake');
       setTimeout(() => document.body.classList.remove('nuclear-shake'), 650);
     }
+    if (useStage.getState().scene === 'tribunal') useStage.setState({ holdMoods: true }); // the Judge goes first
     mood(ids, 'happy');
     mood(v.culprits, 'guilty');
+    void stageDo('courtVerdict', v.culprits, ids);
     setVerdict(v);
     setPhase('verdict');
     const first = v.evidence.find((c) => isValidCitation(c, repo.files));
@@ -166,6 +178,7 @@ export default function TribunalPanel() {
     setDone([]);
     setCurrent(null);
     setSuspects(r.suspects);
+    void stageDo('courtOpen', r.suspects);
     setPhase('playing');
     for (const turn of r.turns) {
       if (stop.current) return;
@@ -190,6 +203,7 @@ export default function TribunalPanel() {
     if (useTavern.getState().demo && DEMO.turns?.length) {
       await sleep(900);
       setSuspects(DEMO.suspects);
+      void stageDo('courtOpen', DEMO.suspects);
       setPhase('hearing');
       mood(DEMO.suspects, 'accused');
       await sleep(1800);
@@ -215,6 +229,7 @@ export default function TribunalPanel() {
         ctrl.signal,
       ));
       setSuspects(ids);
+      void stageDo('courtOpen', ids);
       setPhase('hearing');
       mood(ids, 'accused'); // nervous while the court reads the code
       const budget = Math.floor(CONTEXT_BUDGET / ids.length);
@@ -331,7 +346,8 @@ export default function TribunalPanel() {
         </button>
       </div>
 
-      {suspects.length > 0 && (cast3D ? (
+      {suspects.length > 0 && staged && <p className="border-b border-edge bg-ink/40 px-3 py-2 text-center text-xs text-muted">The court is in session over the code.</p>}
+      {suspects.length > 0 && !staged && (cast3D ? (
         <TribunalStage
           suspects={suspects}
           modules={repo.modules}

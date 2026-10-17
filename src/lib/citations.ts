@@ -21,8 +21,20 @@ function parseGroup(inner: string): Citation[] | null {
   return out;
 }
 
+// Unreadable single citations the model sometimes writes ([a.ts:1-?], [a.ts:?], [a.ts:abc]): keep the line they start
+// with, else drop them with the space before. Groups with commas are left alone ([a.ts:1, oops] can be prose).
+const BROKEN = /( ?)\[([^\s:,[\]`]+\.[A-Za-z0-9]{1,8}):([^\],\n]*)\]/g;
+export function normaliseCitations(text: string): string {
+  return text.replace(BROKEN, (all, sp: string, path: string, rest: string) => {
+    if (/^\s*\d+\s*(?:-\s*\d+\s*)?$/.test(rest)) return all;
+    const n = rest.match(/^\s*(\d+)/);
+    return n ? `${sp}[${path}:${n[1]}]` : '';
+  });
+}
+
 // Splits text into plain strings and citations, in order. Shared by client (chips) and server (citations[]).
 export function parseCitations(text: string): Segment[] {
+  text = normaliseCitations(text);
   const out: Segment[] = [];
   let last = 0;
   for (const m of text.matchAll(GROUP)) {

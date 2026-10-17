@@ -101,3 +101,25 @@ svg path.flowchart-link.tour-focus { stroke: #f5a524 !important; stroke-width: 3
 svg .msg-active { stroke: #d9381e !important; stroke-width: 3px !important; }
 svg text.msg-active, svg text.msg-active tspan { fill: #d9381e !important; stroke: none !important; font-weight: 600; }
 svg .msg-dim { opacity: 0.35; }
+
+/* Stage speech bubbles: a comic tail on the side facing the speaker (data-tail, set every frame). */
+.stage-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: 18px;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border: 2px solid var(--color-cream, #171717);
+  transform: rotate(45deg);
+}
+.stage-bubble[data-tail='left']::after {
+  left: -9px;
+  border-top: none;
+  border-right: none;
+}
+.stage-bubble[data-tail='right']::after {
+  right: -9px;
+  border-bottom: none;
+  border-left: none;
+}

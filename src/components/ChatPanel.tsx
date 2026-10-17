@@ -7,11 +7,18 @@ import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation } from '@/lib/citations';
 import { PALETTE, statsLine } from '@/lib/characters';
 import { pickContext } from '@/lib/context';
-import { graphFacts } from '@/lib/graph';
+import { graphFacts, type Graph } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
+import { entryFile } from '@/lib/analyze';
+import { parseLineRef, resolveLineRef } from '@/lib/lines';
+import { aiOffLine } from '@/lib/stageLines';
+import type { Citation } from '@/lib/types';
+import demoLines from '@/data/demoLines.json';
 import CharacterFace from './CharacterFace';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
+import { grudgeOf, useStage } from './stage/store';
+import { stageDo } from './stage/api';
 
 // three.js loads only when the 3D cast is on.
 const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.CharacterStage), { ssr: false, loading: () => <div className="h-24 w-24 shrink-0" /> });
@@ -19,12 +26,38 @@ const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.
 const BUSY = 'Gemini is rate-limiting us. Try again in a minute.';
 const UNAVAILABLE = 'The AI is unavailable right now. Try again in a minute.'; // server sends 503 when a key is missing
 
+type Saved = { moduleId: string; path: string; startLine: number; endLine: number; text: string };
+const SAVED_LINES = (demoLines as { items: Saved[] }).items;
+
+/** How the speaker relates to another module's code, from the import graph ("You import it 2 times"). */
+function relation(g: Graph | null, me: string, owner: string): string {
+  const out = (g?.edges ?? []).filter((e) => (e.from === me && e.to === owner) || (e.from === owner && e.to === me));
+  return out
+    .map((e) => (e.from === me ? `you ${e.kind === 'calls' ? 'call it over the network' : 'import it'} ${e.weight === 1 ? 'once' : `${e.weight} times`}` : `it ${e.kind === 'calls' ? 'calls you over the network' : 'imports you'} ${e.weight === 1 ? 'once' : `${e.weight} times`}`))
+    .join('; ');
+}
+
+/** The demo route makes no AI calls: a saved answer for a saved line, else one in-character "live AI is off" line. */
+async function demoReply(modId: string, id: string, focus: Citation | null, pitch: number) {
+  const s = useTavern.getState();
+  const hit = focus && SAVED_LINES.find((x) => x.moduleId === modId && x.path === focus.path && focus.startLine <= x.endLine && focus.endLine >= x.startLine);
+  const text = hit?.text ?? aiOffLine(s.spice, modId);
+  for (let i = 0; i < text.length; i += 4) {
+    s.appendToMessage(modId, id, text.slice(i, i + 4));
+    blipText(text.slice(i, i + 4), pitch, useTavern.getState().muted);
+    await new Promise((r) => setTimeout(r, 30));
+  }
+  s.updateMessage(modId, id, { citations: extractCitations(text).filter((c) => isValidCitation(c, s.repo?.files ?? [])) });
+}
+
 /**
- * Sends one chat turn to the selected character and streams the reply in. Reads everything from the
- * store, so the code panel's "Explain this" button can call it too.
+ * Sends one chat turn to a character (the selected one, or `moduleId`) and streams the reply in. A line the message
+ * names ("line 29", "lines 40-52") opens, lights up and gets pointed at before the reply, and the answer is about
+ * exactly those lines. Reads everything from the store, so the code panel and the stage can call it too.
  */
-export async function sendChat(text: string) {
+export async function sendChat(text: string, o: { moduleId?: string } = {}) {
   text = text.trim();
+  if (o.moduleId && o.moduleId !== useTavern.getState().selectedModuleId) useTavern.getState().selectModule(o.moduleId);
   const s = useTavern.getState();
   const { repo, characters, openFilePath, spice, mode } = s;
   const mod = repo?.modules.find((m) => m.id === s.selectedModuleId);
@@ -32,16 +65,35 @@ export async function sendChat(text: string) {
   const char = characters[mod.id];
   const name = char?.name ?? mod.name;
   unlockAudio();
+  const focus = resolveLineRef(parseLineRef(text), { files: repo.files, openFilePath, ownPaths: mod.filePaths, mainFile: entryFile(mod) });
+  if (focus) s.highlightCitation(focus);
   const history = (s.chats[mod.id] ?? []).filter((m) => m.role !== 'system').slice(-7);
   const id = crypto.randomUUID();
   s.addMessage(mod.id, { id: crypto.randomUUID(), role: 'user', text, citations: [] });
   s.addMessage(mod.id, { id, role: 'character', characterId: mod.id, text: '', citations: [] });
   s.setLoading(true);
   s.setMood(mod.id, 'talking');
+  void stageDo('answer', mod.id, id, focus);
+  if (s.demo) {
+    await demoReply(mod.id, id, focus, char?.voicePitch ?? 1);
+    s.setLoading(false);
+    s.setMood(mod.id, 'idle');
+    return;
+  }
 
-  const ctx = pickContext(mod, repo.files, openFilePath, text);
+  // A question about named lines needs less of the module around them (cheaper, and it stays on those lines).
+  const ctx = pickContext(mod, repo.files, focus?.path ?? openFilePath, text, focus ? 40_000 : undefined);
   const nameOf = (mid: string) => repo.modules.find((m) => m.id === mid)?.name ?? mid;
   const facts = s.graph ? graphFacts(s.graph, mod.id, repo.files, nameOf) : { dependents: [], dependencies: [] };
+  // Someone else's line: the code goes along, and the speaker explains it as an outsider.
+  const owner = focus && repo.modules.find((m) => m.filePaths.includes(focus.path));
+  const outsider = !!owner && owner.id !== mod.id;
+  const focusBody = focus && {
+    ...focus,
+    owner: outsider ? (characters[owner.id]?.name ?? owner.name) : null,
+    content: outsider ? repo.files.find((f) => f.path === focus.path)?.content.slice(0, 20_000) : undefined,
+    relation: outsider ? relation(s.graph, mod.id, owner.id) : '',
+  };
   let full = '';
   let highlighted = false;
   try {
@@ -58,6 +110,8 @@ export async function sendChat(text: string) {
         others: repo.modules.filter((m) => m.id !== mod.id).map((m) => ({ title: characters[m.id]?.name ?? m.name, path: m.path })),
         spice,
         mode,
+        focus: focusBody,
+        grudge: grudgeOf(mod.id),
         messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
       }),
     });
@@ -99,6 +153,7 @@ export default function ChatPanel() {
   const name = char?.name ?? mod?.name ?? '';
   const lastText = messages.at(-1)?.text.length;
   const cast3D = useCast3D((s) => s.on);
+  const tenants = useStage((s) => s.tenants);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' }); // braces: Chrome's scrollIntoView now returns a Promise
@@ -124,19 +179,22 @@ export default function ChatPanel() {
     setInput('');
     void sendChat(text);
   };
+  // "Who depends on you?": the dependents line up on stage and point at their imports first.
+  const who = () => void stageDo('whoNeedsYou', mod.id, (t: string, m: string) => sendChat(t, { moduleId: m }));
 
   const openName = openFilePath?.split('/').pop();
   const QUICK = [
     { label: 'Explain yourself', text: 'Explain yourself. What do you do, and which files matter most?' },
     { label: "What's your worst part?", text: "What's your worst part? Point at the exact lines." },
-    { label: 'Who depends on you?', text: 'Who depends on you? Which other files import or use you?' },
+    { label: 'Who depends on you?', text: 'Who depends on you? Which other files import or use you?', run: who },
     { label: 'Roast this file', text: `Roast ${openFilePath}. Be specific.`, disabled: !openFilePath, title: openName ? `Roast ${openName}` : 'Open a file first' },
   ];
 
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="flex items-center gap-3 border-b border-edge p-4">
-        {cast3D && repo ? (
+        {/* The character itself stands on the stage; the header keeps a 3D one only when the tenants are off. */}
+        {cast3D && repo && tenants === 'off' ? (
           <CharacterStage
             className="h-24 w-24 shrink-0"
             actor={`chat:${mod.id}`}
@@ -170,16 +228,20 @@ export default function ChatPanel() {
           ) : (
             <motion.div
               key={m.id}
+              id={`msg-${m.id}`}
               initial={{ opacity: 0, y: 8, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : ''}`}
             >
-              {m.role === 'character' && <CharacterFace size={28} name={mod.name} stats={mod.stats} color={char?.color} still />}
+              {m.role === 'character' && <Speaker id={m.characterId ?? mod.id} />}
               <div
                 className={`max-w-[85%] rounded-2xl px-3 py-2 leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap' : ''} ${
                   m.role === 'user' ? 'rounded-br-sm bg-amber text-ink' : 'rounded-bl-sm border border-edge bg-wood text-cream'
                 }`}
               >
+                {m.role === 'character' && m.characterId && m.characterId !== mod.id && (
+                  <div className="text-xs font-medium text-muted">{characters[m.characterId]?.name ?? m.characterId}</div>
+                )}
                 {m.role === 'user'
                   ? m.text
                   : m.text
@@ -199,7 +261,7 @@ export default function ChatPanel() {
             type="button"
             disabled={isLoading || q.disabled}
             title={q.title}
-            onClick={() => send(q.text)}
+            onClick={() => ('run' in q && q.run ? q.run() : send(q.text))}
             className="rounded-full border border-edge px-2.5 py-1 text-xs text-cream/80 transition-colors hover:border-amber hover:text-cream disabled:opacity-40"
           >
             {q.label}
@@ -230,4 +292,11 @@ export default function ChatPanel() {
       </form>
     </div>
   );
+}
+
+/** The face next to a transcript line: whoever said it (arguments and line-ups have several speakers). */
+function Speaker({ id }: { id: string }) {
+  const mod = useTavern((s) => s.repo?.modules.find((m) => m.id === id));
+  const color = useTavern((s) => s.characters[id]?.color);
+  return mod ? <CharacterFace size={28} name={mod.name} stats={mod.stats} color={color} still /> : <div className="w-7" />;
 }

@@ -2,7 +2,7 @@
 Hackathon project (GDG Devlympics, theme: "Bridge the Gap"). Bridges new developers and complex codebases.
 Users paste a GitHub repo link or upload a file. Every module/folder becomes a cartoon character with a dry, deadpan voice (see Voice guide). Characters explain their own code, gossip about each other, and argue in an "Incident Tribunal" to find bugs. Every factual claim must cite real code as [path:line] or [path:start-end]; citations highlight lines in the code viewer.
 
-Layout: left = file tree with a character face per module, middle = Monaco code viewer, right = chat with the selected module's character.
+Layout: left = file tree with a character face per module, middle = Monaco code viewer, right = the transcript of the chat with the selected module's character (the characters themselves stand on the stage over the panels).
 Controls: spice level (unhinged | feral | nuclear, plus hidden clean via Ctrl+Shift+C) controls language AND animations. Explain mode (beginner | expert).
 Stack: Next.js App Router + TypeScript + Tailwind, Zustand for state, @google/genai (Gemini, server-side only), @monaco-editor/react, react-resizable-panels, framer-motion, jszip, three with @react-three/fiber and drei (3D cast, map), d3-force (map layout), mermaid (diagrams). Deployed on Vercel.
 Rules: no database; repo data lives in client state and the relevant files are sent with each API request. All API routes use `export const runtime = 'nodejs'` and `export const maxDuration = 60`. GEMINI_API_KEY is never exposed to the client. Keep everything demo-reliable.
@@ -65,6 +65,14 @@ Phases: 1 foundation, 2 repo ingestion, 3 characters + faces, 4 chat + highlight
 - 3D only ever renders inside CastCanvas with CastLights; the 2D face is always the fallback. The "3D characters" setting and the automatic switch to 2D (fps under 30 for 5 seconds) apply everywhere 3D appears.
 - Gags follow the comedy rules in src/components/cast/anim: deadpan faces, cartoon only (no realistic weapons, blood or injury), crude but never sexual, one crude gag on screen at a time, a 30-second cooldown per character per gag, spice-gated with a clean fallback; prefers-reduced-motion gets still poses and no screen shake.
 - /lab and /lab?board=1 are review pages, not linked from the app.
+
+## The stage
+- The cast stands over the three panels (src/components/stage): one transparent full-window CastCanvas (orthographic, lite, shared lights) under a DOM layer that takes the pointer only on the characters (real buttons, keyboard accessible). On stage: the speaker and up to 2 others; scenes bring up to 5. Hidden on the Map tab and during the Landlord's tour. "Tenants: on stage / parked / off" in the top bar; 3D off shows the 2D faces in the same places; reduced motion and parked: no walking, an arrow points at the line.
+- A line named in a message ("line 29", "lines 40-52", [path:a-b]) opens, lights up and gets pointed at before the reply; /api/chat gets it as `focus` and answers about exactly those lines (as an outsider, "Not mine.", when the code belongs to another module). The answer hops to every line it cites (1.2 s or more per stop), opening files as needed.
+- No spontaneous gossip: it comes from a character's click menu (Explain yourself, Who needs you?, Roast me, What if I change you?, Gossip, Pick a fight with...). Drag a character onto a code line (it explains it) or onto another character (/api/argue: 4 turns grounded in their real imports and calls; "We've never even met." from stats when nothing connects them, no AI). Flinging, pestering, peeks, groans, dizziness, waves and boredom are deterministic.
+- The Tribunal sits on the stage over the dimmed code panel; What-if passes the change as a hot potato along the ripple order. Grudges (roasts and pesterings in the last 10 minutes) make a character sulky, never rude to the user.
+- Demo route (?demo=1, zero AI calls): saved argument (src/data/demoArgue.json, orders vs payments) and saved line explanation (src/data/demoLines.json, the retry at orders/checkout.ts:50); anything else that needs AI answers with one in-character "live AI is off" line.
+- Citations the model writes unreadably ([path:1-?], [path:?], [path:abc]) are normalised or dropped in parseCitations, everywhere.
 
 ## Commits
 - No Co-Authored-By or any other trailer lines in commit messages in this repo.

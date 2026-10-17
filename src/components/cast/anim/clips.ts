@@ -81,6 +81,38 @@ export const SHARED: Record<string, ClipFn> = {
     },
     cues: [[0.3, snd('thud')], [0.3, fx((s, a) => FX.dust(s, a.world('root')))], [0.3, call((a) => spice() >= 1 && a.showFor('bump', 7))], [0.35, fx((s, a) => spice() >= 1 && FX.stars(s, a.part('head')!, 1.4, Math.max(0.18, k.headR * 1.1)))], [0.3, face({ lid: 0.3, kind: 'spiral' })], [1.3, face({ kind: 'dot' })]],
   }),
+  // ---------- the stage (characters over the code panel) ----------
+  /** Picked up by the cursor: hangs from the top, legs kicking, arms flailing (loops until put down). */
+  dangle: () => ({
+    dur: 0.6, loop: true,
+    tracks: {
+      'hipL.r': osc(10 / 3, [42, 0, 0], 0, 1e9, 0), 'hipR.r': osc(10 / 3, [-42, 0, 0], 0, 1e9, 0),
+      'kneeL.r': plus([[0, [30, 0, 0]]], osc(10 / 3, [26, 0, 0], 0, 1e9, 0, 1.2)), 'kneeR.r': plus([[0, [30, 0, 0]]], osc(10 / 3, [-26, 0, 0], 0, 1e9, 0, 1.2)),
+      'root.r': osc(5 / 3, [0, 0, 7], 0, 1e9, 0),
+      'head.r': osc(5 / 3, [0, 0, -5], 0, 1e9, 0, 0.5),
+    },
+    ik: both([[0, [0.42, 0.62, 0.2]]]),
+    cues: [[0, expr('nervous')], [0, hand('L', 'palm')], [0, hand('R', 'palm')]],
+  }),
+  /** Pops in at the screen edge: a hand up, a small wave, a flat face. */
+  wave: () => ({
+    dur: 1.8, beat: 0.6,
+    ik: { R: [[0, null], [0.25, [0.36, 0.72, 0.38], 'back'], [1.45, [0.36, 0.72, 0.38]], [1.8, null]] },
+    tracks: { 'handR.r': osc(3, [0, 0, 28], 0.35, 1.45, 0.15) },
+    cues: [[0.2, hand('R', 'palm')], [1.5, hand('R', 'mitten')], [0.2, face({ lid: 0.55, smirk: 0.4 })], [0.25, snd('pop', 0.5)]],
+  }),
+  /** Somebody scrolled too fast: spiral eyes, stars, a wobble. Clean-safe; once per 30 s. */
+  dizzy: (k) => ({
+    dur: 1.8, beat: 0.4, cool: true,
+    tracks: { 'root.r': osc(2.2, [0, 0, 6], 0, 1.7, 0.2), 'head.r': osc(2.2, [0, 10, 0], 0, 1.7, 0.2, 1) },
+    cues: [[0, face({ kind: 'spiral', lid: 0.7 })], [1.6, face({ kind: 'dot' })], [0.02, fx((s, a) => FX.stars(s, a.part('head')!, 1.6, Math.max(0.18, k.headR * 1.1)))]],
+  }),
+  /** Holding a grudge: shoulders forward, head down and turned away, heavy lids (held while idle). */
+  sulk: () => ({
+    dur: 0.8, beat: 0.6, hold: true,
+    tracks: { 'torso.r': [[0, z], [0.6, [7, 0, 0]]], 'head.r': [[0, z], [0.6, [12, -14, 0]]] },
+    cues: [[0.1, face({ lid: 0.55, brow: [-0.25, 0.2], look: [-0.35, -0.25], frown: 0.5 })]],
+  }),
   /** Faint sideways and stay down until released. */
   faint: (k) => ({
     dur: 1.35, beat: 0.5, hold: true,
@@ -328,7 +360,7 @@ export const ALIASES: Partial<Record<Archetype, Record<string, string[]>>> = {
 
 /** Every clip name the board offers, in order. */
 export const GAG_NAMES = ['idle', 'accused', 'guilty', 'happy', 'points', 'floats', 'bonks', 'middle', 'twerk'] as const;
-export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode'] as const;
+export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode', 'dangle', 'wave', 'dizzy', 'sulk'] as const;
 
 export function clipFor(arch: Archetype, name: string): ClipFn | undefined {
   return GAGS[arch]?.[name] ?? SHARED[name];

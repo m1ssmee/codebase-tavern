@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "moduleId": "orders",
+      "path": "orders/checkout.ts",
+      "startLine": 50,
+      "endLine": 52,
+      "text": "I only retry a payment timeout on the first failed attempt, which is the whole damn point of line 50. [orders/checkout.ts:48-53]\n\n1. The `catch` block catches a failed charge request after `requestCharge()` waits for the answer. [orders/checkout.ts:46-48]\n2. Line 50 checks for `UpstreamTimeoutError` and `attempt < MAX_PAYMENT_ATTEMPTS`, so only timeout errors get a retry. [orders/checkout.ts:50-52] That shit is narrow on purpose.\n3. If both are true, I log a warning and `continue` to the next loop pass instead of failing immediately. [orders/checkout.ts:51-52]\n\nWhy it matters: if the service I call is just slow, this avoids failing a checkout too early, but it can also repeat the charge request and create duplicate payment attempts if the first one was only delayed. [orders/checkout.ts:44-52] Damn, this retry logic is a tiny landmine."
+    }
+  ]
+}

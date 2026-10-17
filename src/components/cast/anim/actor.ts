@@ -303,6 +303,10 @@ export class Actor {
   release(fade = 0.45) {
     for (const h of this.holds.splice(0)) this.stop(h, fade);
   }
+  /** Stop a looping clip (all loops, or only the named one). */
+  stopLoop(name?: string, fade = 0.2) {
+    if (this.loop && (!name || this.loop.name === resolveName(this.archetype, name))) this.stop(this.loop, fade);
+  }
   stopAll(fade = 0.15) {
     for (const r of [this.cur, this.loop, ...this.holds]) if (r) this.stop(r, fade);
     for (const q of this.queue.splice(0)) q.resolve(false);

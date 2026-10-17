@@ -10,6 +10,7 @@ export const maxDuration = 60;
 
 const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : '');
 const arr = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? v.slice(0, n) : []);
+const int = (v: unknown, max: number) => (Number.isInteger(v) && (v as number) >= 0 ? Math.min(v as number, max) : 0);
 const numbered = (code: string) =>
   code
     .replace(/\n$/, '')
@@ -39,6 +40,13 @@ export async function POST(req: Request) {
   const truncated = new Set(files.filter((f) => f.truncated).map((f) => f.path));
   const allPaths = arr<string>(b.allPaths, 500).map((p) => str(p, 300));
   const title = str(b.character?.title, 100) || str(b.moduleId, 100);
+  // The lines the user pointed at (named, dropped on, or selected). Someone else's code comes along with its text.
+  const fp = str(b.focus?.path, 300);
+  const fs = int(b.focus?.startLine, 100_000), fe = Math.max(fs, int(b.focus?.endLine, 100_000));
+  const foreign = fp && !shown.has(fp) ? str(b.focus?.content, 20_000) : '';
+  if (foreign) files.push({ path: fp, content: foreign, truncated: foreign.length >= 20_000 });
+  const focus = fp && fs && (shown.has(fp) || foreign) ? { path: fp, start: fs, end: fe, owner: str(b.focus?.owner, 100), relation: str(b.focus?.relation, 300) } : null;
+  const roasted = int(b.grudge?.roasted, 20), pestered = int(b.grudge?.pestered, 20);
   const others = arr<{ title: string; path: string }>(b.others, 12)
     .map((o) => `- ${str(o?.title, 100)} (owns ${str(o?.path, 200) || 'the repo root files'})`)
     .join('\n');
@@ -58,7 +66,7 @@ Rules:
 - Simple markdown only: numbered lists, **bold**, \`inline code\`. No headings, no code blocks. Don't repeat your catchphrase.
 - Every factual claim about code cites [path:line] or [path:start-end] in square brackets, using the exact paths and the line numbers shown before "|". Never put citations in backticks. Cite the narrowest range that supports the claim, usually under 15 lines; never a whole file.
 - Never invent code, files or behaviour. Only use the code below.
-- If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below.
+- If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below${focus?.owner ? ', unless the user points at a line (see below)' : ''}.
 - If the answer is in a file marked [left out] or [truncated], say that file was left out of what you can see.
 
 Other modules:
@@ -74,8 +82,20 @@ Modules you import:
 ${arr<string>(b.dependencies, 13).map((d) => '- ' + str(d, 1500)).join('\n') || '- none'}
 
 Your code:
-${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
-
+${files.filter((f) => f.path !== (foreign && fp)).map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
+${foreign ? `\nCode the user pointed at (owned by ${focus?.owner || 'another module'}, not you):\n=== ${fp} ===\n${numbered(foreign)}\n` : ''}${
+  focus
+    ? `\nThe user is pointing at ${focus.path}:${focus.start}${focus.end > focus.start ? `-${focus.end}` : ''}. Answer about exactly those lines first: what they do and why they matter, citing them.${
+        focus.owner
+          ? ` That code is not yours: it belongs to ${focus.owner}. Start with "Not mine." and still explain it fully, as an outsider${focus.relation ? `, saying how you relate to it (from the import graph: ${focus.relation})` : ''}. Don't send the user elsewhere.`
+          : ''
+      }\n`
+    : ''
+}${
+  roasted || pestered
+    ? `\nMood: in the last 10 minutes you were roasted ${roasted} ${roasted === 1 ? 'time' : 'times'} and poked ${pestered} ${pestered === 1 ? 'time' : 'times'}. Stay fully helpful and accurate, but let one short sulky remark slip, about the code or your situation. Never insult the user.\n`
+    : ''
+}
 ${levelReminder(b.spice)}
 ${modeReminder(b.mode)}`;
 
