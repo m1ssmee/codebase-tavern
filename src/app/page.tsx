@@ -1,69 +1,84 @@
-import Image from "next/image";
+'use client';
+import { useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
+import { Upload } from 'lucide-react';
+import CharacterFace from '@/components/CharacterFace';
 
-export default function Home() {
+// TODO: real demo repo URL
+const DEMO_REPO_URL = 'https://github.com/your-org/demo-repo';
+
+export default function Landing() {
+  const router = useRouter();
+  const [url, setUrl] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+  // ponytail: Phase 2 ingests the URL / file; for now everything opens the mock repo.
+  const summon = () => router.push('/tavern?mock=1');
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <main className="flex flex-1 flex-col items-center justify-center gap-10 px-6 py-16 text-center">
+      <div className="flex gap-3">
+        {(['#f5a524', '#ff5a3c', '#3dd6b5', '#c38bff'] as const).map((c, i) => (
+          <motion.div
+            key={c}
+            animate={{ y: [0, -14, 0], rotate: [0, i % 2 ? 6 : -6, 0] }}
+            transition={{ duration: 1.6, repeat: Infinity, delay: i * 0.2, ease: 'easeInOut' }}
+          >
+            <CharacterFace size={64} color={c} mood={(['happy', 'talking', 'accused', 'guilty'] as const)[i]} />
+          </motion.div>
+        ))}
+      </div>
+
+      <div>
+        <h1 className="font-display text-6xl leading-none tracking-wide text-amber drop-shadow-[0_6px_0_#000] sm:text-8xl">
+          Codebase Tavern
+        </h1>
+        <p className="mt-5 text-xl text-cream/90 sm:text-2xl">Your code, but it talks back. And it&apos;s rude.</p>
+      </div>
+
+      <form
+        className="flex w-full max-w-2xl flex-col gap-3 sm:flex-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          summon();
+        }}
+      >
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          type="url"
+          placeholder="https://github.com/owner/repo"
+          className="min-w-0 flex-1 rounded-full border-4 border-edge bg-panel px-6 py-4 font-mono text-lg text-cream placeholder:text-muted/60 focus:border-amber focus:outline-none"
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        <button
+          type="submit"
+          className="bounce-hover rounded-full bg-tomato px-8 py-4 font-display text-xl tracking-wide text-cream shadow-[0_6px_0_#7a2414]"
+        >
+          Summon the Codebase
+        </button>
+      </form>
+
+      <div className="flex flex-wrap items-center justify-center gap-4 text-muted">
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          className="bounce-hover flex items-center gap-2 rounded-full border-2 border-edge bg-panel px-5 py-2 font-bold text-cream"
+        >
+          <Upload size={18} /> Upload a file
+        </button>
+        <input ref={fileRef} type="file" hidden onChange={(e) => e.target.files?.length && summon()} />
+        <span>or</span>
+        <button
+          type="button"
+          onClick={() => {
+            setUrl(DEMO_REPO_URL);
+            summon();
+          }}
+          className="font-bold text-amber underline decoration-wavy underline-offset-4 hover:text-cream"
+        >
+          Try the demo repo
+        </button>
+      </div>
+    </main>
   );
 }

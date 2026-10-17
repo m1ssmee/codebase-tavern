@@ -1,26 +1,56 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-ink: #17110e;
+  --color-panel: #211712;
+  --color-wood: #2e2119;
+  --color-edge: #4a3527;
+  --color-amber: #f5a524;
+  --color-tomato: #ff5a3c;
+  --color-cream: #f6e7cf;
+  --color-muted: #b49a80;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-luckiest);
+  --font-sans: var(--font-nunito), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgb(245 165 36 / 0.10), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgb(255 90 60 / 0.10), transparent 60%),
+    var(--color-ink);
+  color: var(--color-cream);
+  font-family: var(--font-sans);
+}
+
+/* Playful bounce for buttons */
+@utility bounce-hover {
+  transition: transform 180ms cubic-bezier(0.34, 1.8, 0.64, 1), filter 150ms;
+  &:hover:not(:disabled) { transform: translateY(-2px) scale(1.04); filter: brightness(1.1); }
+  &:active:not(:disabled) { transform: translateY(1px) scale(0.97); }
+}
+
+/* Monaco citation highlight: amber line + glowing gutter bar, fades over ~4s */
+.tavern-hl-line {
+  background: rgb(245 165 36 / 0.30);
+  animation: tavern-fade 4s ease-out forwards;
+}
+.tavern-hl-gutter {
+  background: var(--color-amber);
+  box-shadow: 0 0 12px 2px var(--color-amber);
+  width: 5px !important;
+  margin-left: 4px;
+  animation: tavern-fade 4s ease-out forwards;
+}
+@keyframes tavern-fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes tavern-talk {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1.2); }
 }

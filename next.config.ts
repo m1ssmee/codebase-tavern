@@ -1,9 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // cacheComponents off: it rejects `export const runtime` in routes, and all our data is client-side anyway.
   turbopack: {
     rules: {
       "*.css": {
