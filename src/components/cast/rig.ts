@@ -168,6 +168,8 @@ export type FaceSpec = {
   browY?: number;
   /** Lid colour (the skin around the eyes). */
   skin: THREE.Material;
+  /** Iris ring colour; defaults to near-black. */
+  iris?: string;
 };
 
 let spiral: THREE.BufferGeometry | undefined;
@@ -177,7 +179,7 @@ const mouthGeos = new Map<number, THREE.BufferGeometry>();
 function mouthGeo(w: number) {
   if (!mouthGeos.has(w)) {
     const hw = w / 2;
-    const make = (f: (u: number) => number) => tube((t) => [(t * 2 - 1) * hw, f(t * 2 - 1) * hw, 0], w * 0.065, 16, 4);
+    const make = (f: (u: number) => number) => tube((t) => [(t * 2 - 1) * hw, f(t * 2 - 1) * hw, 0], w * 0.075, 24, 8);
     const base = make(() => 0);
     const shapes: Record<string, (u: number) => number> = {
       smile: (u) => 0.45 * u * u - 0.12,
@@ -204,20 +206,28 @@ export function face(rig: CharacterRig, f: FaceSpec) {
   const turn = (x: number, y: number) => (f.flat !== undefined ? 0 : Math.atan2((x - cx) / rx ** 2, (surf(x, y) - cz) / rz ** 2) * 0.8);
   const a = f.eyeW, b = f.eyeH;
   rig.unit = b;
-  const browR = f.browR ?? b * 0.24, browLen = f.browLen ?? a * 1.5;
+  const browR = (f.browR ?? b * 0.24) * 1.3, browLen = (f.browLen ?? a * 1.5) * 1.1;
+  const iris = flat(f.iris ?? '#3a2c26');
   for (const s of ['L', 'R'] as const) {
     const x = s === 'L' ? f.eyeX : -f.eyeX, y = f.eyeY;
     const eye = rig[`eye${s}`];
     eye.position.set(x, y, surf(x, y) - b * 0.42);
     eye.rotation.y = turn(x, y);
     eye.scale.set(a, b, b);
-    mesh(eye, G.sphere(14, 10), toon(C.white));
+    mesh(eye, G.sphere(32, 24), toon(C.white), { outline: true });
     const pupil = rig[`pupil${s}`];
     const cross = new THREE.Group();
     for (const r of [Math.PI / 4, -Math.PI / 4]) mesh(cross, G.box(), flat(INK), { r: [0, 0, r], s: [1.05, 0.22, 0.1], outline: false });
     pupil.add(cross);
+    // Pupil: a subtle iris ring, the dark core, and a catchlight up and to the left.
+    const dot = new THREE.Group();
+    mesh(dot, G.sphere(20, 10), iris, { s: [0.48, 0.48, 0.14], outline: false });
+    mesh(dot, G.sphere(16, 8), flat(INK), { p: [0, 0, 0.03], s: [0.31, 0.31, 0.13], outline: false });
+    mesh(dot, G.sphere(12, 6), flat('#ffffff'), { p: [-0.15, 0.17, 0.08], s: [0.12, 0.12, 0.06], outline: false });
+    mesh(dot, G.sphere(8, 4), flat('#ffffff'), { p: [0.13, -0.12, 0.08], s: [0.05, 0.05, 0.04], outline: false });
+    pupil.add(dot);
     rig.pupils[s] = {
-      dot: mesh(pupil, G.sphere(10, 5), flat(INK), { s: [0.46, 0.46, 0.16], outline: false }),
+      dot,
       x: cross,
       spiral: mesh(pupil, spiralGeo(), flat(INK), { outline: false }),
     };
@@ -225,20 +235,22 @@ export function face(rig: CharacterRig, f: FaceSpec) {
     lid.position.copy(eye.position);
     lid.rotation.y = eye.rotation.y;
     lid.scale.set(a * 1.1, b * 1.1, b * 1.1);
-    mesh(lid, G.lid(), f.skin);
+    mesh(lid, G.lid(), f.skin, { outline: true });
     const brow = rig[`brow${s}`];
     const by = y + b * 1.32 + (f.browY ?? 0);
     brow.position.set(x * 1.04, by, surf(x * 1.04, by) + browR * 0.3);
     brow.rotation.y = turn(x, by);
-    mesh(brow, G.capsule(browR, browLen, 2, 6), flat(INK), { r: [0, 0, Math.PI / 2], outline: false });
+    mesh(brow, G.brow(browLen, browR), flat(INK), { s: [s === 'L' ? 1 : -1, 1, 1], outline: false });
   }
   rig.jaw.position.set(cx, f.mouthY, surf(cx, f.mouthY) - 0.002);
   const w = f.mouthW;
-  rig.mouthLine = mesh(rig.mouth, mouthGeo(+w.toFixed(3)), flat(INK), { outline: false });
+  rig.mouthLine = mesh(rig.mouth, mouthGeo(+w.toFixed(3)), flat(INK, true), { outline: false });
   rig.mouthLine.name = 'mouthLine';
   rig.mouthLine.updateMorphTargets();
-  mesh(rig.mouthOpen, G.sphere(12, 6), flat(C.cavity), { p: [0, 0, -0.004], s: [w * 0.62, w * 0.55, w * 0.18] });
-  mesh(rig.teeth, G.box(), toon(C.white), { p: [0, w * 0.3, w * 0.11], s: [w * 0.8, w * 0.24, w * 0.08], outline: false });
+  // Open mouth: dark cavity with a hint of tongue at the bottom, teeth along the top.
+  mesh(rig.mouthOpen, G.sphere(24, 14), flat(C.cavity), { p: [0, 0, -0.004], s: [w * 0.62, w * 0.55, w * 0.18], outline: true });
+  mesh(rig.mouthOpen, G.sphere(16, 10), toon('#c75a63'), { p: [0, -w * 0.3, w * 0.07], s: [w * 0.38, w * 0.2, w * 0.1], outline: false });
+  mesh(rig.teeth, G.rbox(w * 0.8, w * 0.24, w * 0.08, w * 0.03), toon(C.white), { p: [0, w * 0.3, w * 0.11], outline: false });
 }
 
 // ---------- expressions ----------

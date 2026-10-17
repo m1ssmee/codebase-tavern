@@ -2,7 +2,8 @@
 // 3D cast members for any React Three Fiber scene. Load this module with next/dynamic (ssr: false):
 // it pulls in three.js.
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, type Ref } from 'react';
-import { Canvas, type ThreeEvent } from '@react-three/fiber';
+import * as THREE from 'three';
+import { Canvas, type CanvasProps, type ThreeEvent } from '@react-three/fiber';
 import type { Module, ModuleStats } from '@/lib/types';
 import { assignCast, type Archetype, type Variant } from '@/lib/cast';
 import { faceTraits, hash, PALETTE } from '@/lib/characters';
@@ -26,6 +27,8 @@ export type Character3DProps = {
   cast?: Module[];
   /** Solid black, no light effects or shadow. */
   silhouette?: boolean;
+  /** Landlord only: keys on its ring, one per module. */
+  keys?: number;
   position?: [number, number, number];
   scale?: number;
   onClick?: (e: ThreeEvent<MouseEvent>) => void;
@@ -35,7 +38,7 @@ export type Character3DProps = {
   ref?: Ref<CharacterRig | null>;
 };
 
-export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, position, scale, onClick, onBuilt, ref }: Character3DProps) {
+export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, position, scale, onClick, onBuilt, ref }: Character3DProps) {
   const s = stats ?? module?.stats ?? DEFAULT_STATS;
   const auto = useMemo(() => {
     if (archetype || !module) return null;
@@ -45,7 +48,7 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
   const a = archetype ?? auto?.archetype ?? 'clerk';
   const v = variant ?? auto?.variant ?? 0;
   const col = color ?? PALETTE[hash(module?.name ?? a) % PALETTE.length];
-  const built = useMemo(() => buildCharacter({ archetype: a, variant: v, color: col, stats: s, silhouette }), [a, v, col, s, silhouette]);
+  const built = useMemo(() => buildCharacter({ archetype: a, variant: v, color: col, stats: s, silhouette, keys }), [a, v, col, s, silhouette, keys]);
   useEffect(() => () => built.dispose(), [built]);
   useLayoutEffect(() => {
     applyExpression(built.rig, expression === 'deadpan' ? built.neutral : PRESETS[expression], faceTraits(s));
@@ -59,21 +62,34 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
   );
 }
 
-/** Lighting the toon ramp expects: lit faces show the exact palette colour. */
+/** Shared lighting preset for every scene with cast members: soft hemisphere, key, fill and rim. */
 export function CastLights() {
   return (
     <>
-      <ambientLight intensity={Math.PI * 0.5} />
-      <directionalLight position={[3, 6, 5]} intensity={Math.PI * 0.5} />
+      <hemisphereLight args={['#fff3e0', '#3d3029', 0.65]} />
+      <directionalLight position={[3.5, 6, 5]} intensity={2.3} color="#fff4e2" />
+      <directionalLight position={[-5, 2.5, 3]} intensity={0.35} color="#dfe7ff" />
+      <directionalLight position={[-2.5, 4, -6]} intensity={1.1} color="#ffffff" />
     </>
   );
 }
+
+/** Shared canvas settings: anti-aliasing, DPR capped at 1.5, ACES tone mapping, sRGB output. */
+export const castCanvasProps: Partial<CanvasProps> = {
+  dpr: [1, 1.5],
+  gl: { antialias: true },
+  onCreated: ({ gl }) => {
+    gl.toneMapping = THREE.ACESFilmicToneMapping;
+    gl.toneMappingExposure = 1.0;
+    gl.outputColorSpace = THREE.SRGBColorSpace;
+  },
+};
 
 /** One character on its own canvas, with lighting and a ground disc. */
 export function CharacterStage({ className, ...props }: Character3DProps & { className?: string }) {
   return (
     <div className={className}>
-      <Canvas flat dpr={[1, 1.5]} camera={{ position: [0, 1.0, 5.2], fov: 30, rotation: [0, 0, 0] }}>
+      <Canvas {...castCanvasProps} camera={{ position: [0, 1.0, 5.2], fov: 30, rotation: [0, 0, 0] }}>
         <CastLights />
         <mesh rotation-x={-Math.PI / 2}>
           <circleGeometry args={[1.4, 48]} />

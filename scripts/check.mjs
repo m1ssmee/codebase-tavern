@@ -140,15 +140,16 @@ assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+  
 console.log('fix-quality checks ok');
 
 // 3D cast assignment: folder name, then main file names, then the fallbacks; repeats get the alternate variant
-const { assignCast, keywordArchetype, tokens } = await import('../src/lib/cast.ts');
+const { assignCast, keywordArchetype, tokens, isDocsModule, ARCHETYPES } = await import('../src/lib/cast.ts');
 const { readFileSync } = await import('node:fs');
 const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, `${c.archetype}${c.variant ? '*' : ''}`]));
 const demo = JSON.parse(readFileSync(new URL('../src/data/demoRepo.json', import.meta.url), 'utf8'));
 assert.deepEqual(castOf(detectModules(demo.files)), {
-  utils: 'junkDrawer', orders: 'clerk', gateway: 'doorman', auth: 'bouncer', payments: 'accountant', inventory: 'hoarder', '(misc)': 'junkDrawer*',
+  utils: 'junkDrawer', orders: 'clerk', gateway: 'doorman', auth: 'bouncer', payments: 'accountant', inventory: 'hoarder', '(misc)': 'librarian', // misc is 3/4 config and docs
 });
 const express = JSON.parse(readFileSync(new URL('../src/data/expressModules.json', import.meta.url), 'utf8'));
-assert.deepEqual(castOf(express.modules), { test: 'inspector', '(root)': 'librarian', lib: 'junkDrawer', examples: 'hoarder', '(misc)': 'junkDrawer*' });
+// express misc (.github workflows) wants Librarian, then Junk Drawer: both taken, so it reuses Librarian as the alternate
+assert.deepEqual(castOf(express.modules), { test: 'inspector', '(root)': 'librarian', lib: 'junkDrawer', examples: 'hoarder', '(misc)': 'librarian*' });
 assert.deepEqual(tokens('userModels.test.ts'), ['user', 'models', 'test', 'ts']);
 assert.equal(keywordArchetype('__tests__'), 'inspector');
 assert.equal(keywordArchetype('auth-api'), 'clerk'); // head noun wins
@@ -158,4 +159,12 @@ const M = (id, filePaths, s = {}) => ({ id, name: id, path: id, filePaths, stats
 assert.deepEqual(castOf([M('core', ['core/server.ts', 'core/README.md']), M('x', ['x/a.ts']), M('y', ['y/b.ts'], { todoCount: 5 }), M('z', ['z/z.test.ts'])]), {
   core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'clerk', // tests aren't main files
 });
+// a repeat tries its next-best match before the alternate variant
+assert.deepEqual(castOf([M('api', ['api/routes.ts']), M('handlers', ['handlers/db.ts'])]), { api: 'clerk', handlers: 'plumber' });
+assert.deepEqual(castOf([M('api', ['api/a.ts']), M('routes', ['routes/b.ts'])]), { api: 'clerk', routes: 'clerk*' });
+assert.ok(isDocsModule({ filePaths: ['.github/ci.yml', 'docs/a.md', 'LICENSE', 'tsconfig.json', 'src/x.ts'] }));
+assert.ok(!isDocsModule({ filePaths: ['data/fixtures.json', 'data/b.json', 'README.md'] })); // data .json is not config
+// the Landlord narrates; it is never a module's character
+assert.ok(ARCHETYPES.includes('landlord'));
+assert.ok(![demo.files, express.modules].some((x) => Object.values(castOf(Array.isArray(x) && x[0]?.stats ? x : detectModules(x))).includes('landlord')));
 console.log('cast checks ok');

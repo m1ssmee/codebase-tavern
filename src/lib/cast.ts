@@ -2,7 +2,8 @@
 // `node scripts/check.mjs` can run it directly.
 import type { Module } from './types';
 
-export const ARCHETYPES = ['bouncer', 'accountant', 'clerk', 'doorman', 'hoarder', 'inspector', 'junkDrawer', 'plumber', 'star', 'librarian'] as const;
+/** The ten module archetypes, then the Landlord: the narrator, present for every repo, never assigned to a module. */
+export const ARCHETYPES = ['bouncer', 'accountant', 'clerk', 'doorman', 'hoarder', 'inspector', 'junkDrawer', 'plumber', 'star', 'librarian', 'landlord'] as const;
 export type Archetype = (typeof ARCHETYPES)[number];
 export type Variant = 0 | 1;
 
@@ -17,6 +18,7 @@ export const CAST: Record<Archetype, { name: string; joke: string; keywords: str
   plumber: { name: 'The Plumber', joke: "Everything flows through it, and it's held together with tape.", keywords: ['db', 'database', 'models', 'data', 'repository', 'migrations', 'store', 'schema'] },
   star: { name: 'The Star', joke: 'Flawless from the front, held together with clamps from behind.', keywords: ['ui', 'components', 'views', 'pages', 'styles', 'frontend', 'client'] },
   librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: ['docs', 'readme', 'root', 'config', 'settings', '.github'] },
+  landlord: { name: 'The Landlord', joke: 'Owns the building, fixes nothing, and is tired of every tenant.', keywords: [] },
 };
 
 // ponytail: plural folding is "drop a trailing s", enough for this keyword list (tests, utils, orders...).
@@ -27,11 +29,12 @@ export const tokens = (s: string) =>
 
 const BY_KEYWORD = new Map(ARCHETYPES.flatMap((a) => CAST[a].keywords.flatMap((k) => tokens(k).map((t) => [fold(t), a] as const))));
 
-/** Last matching token wins: the head noun of "auth-api" is api, of "test-utils" is utils. */
-export function keywordArchetype(name: string): Archetype | null {
+/** Every archetype a name matches, best first: the head noun ("api" in "auth-api") before earlier words. */
+export function keywordArchetypes(name: string): Archetype[] {
   const hits = tokens(name).map((t) => BY_KEYWORD.get(fold(t))).filter((a): a is Archetype => !!a);
-  return hits.at(-1) ?? null;
+  return [...new Set(hits.reverse())];
 }
+export const keywordArchetype = (name: string): Archetype | null => keywordArchetypes(name)[0] ?? null;
 
 const dir = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
@@ -41,20 +44,33 @@ export const mainFiles = (m: Pick<Module, 'path' | 'filePaths'>) =>
     (p) => dir(p) === (m.path === '(root)' ? '' : m.path) && !/\.(md|mdx|txt|rst|adoc)$/i.test(p) && !/[._-](test|spec)\.[a-z]+$/i.test(p),
   );
 
+const CONFIG_JSON = /^(\.|package|tsconfig|jsconfig|composer|vercel|netlify|turbo|lerna|nx|renovate|app\.json$)|(config|settings|rc)\.json$/i;
+const isDocOrConfig = (p: string) =>
+  /(^|\/)\.github\//.test(p) || /\.(md|mdx|txt|rst|adoc|ya?ml)$/i.test(p) || /^licen[cs]e(\.[a-z]+)?$/i.test(base(p)) || (/\.json$/i.test(p) && CONFIG_JSON.test(base(p)));
+/** At least 60% of its files are docs or config: the Librarian's territory, like root. */
+export const isDocsModule = (m: Pick<Module, 'filePaths'>) => m.filePaths.length > 0 && m.filePaths.filter(isDocOrConfig).length / m.filePaths.length >= 0.6;
+
+/** Every archetype a module could be, best first: root or docs/config, then its folder name, then its main file names. */
+export function candidates(m: Module): Archetype[] {
+  const fileHits = mainFiles(m).flatMap((p) => keywordArchetypes(base(p).replace(/\.[^.]+$/, '')));
+  return [...new Set<Archetype>([...(m.id === '(root)' || isDocsModule(m) ? ['librarian' as const] : []), ...keywordArchetypes(m.name), ...fileHits])];
+}
+
 /**
- * Folder name first, then main file names. No match: the largest unmatched module is the Hoarder,
- * else 5+ TODOs and no tests is the Junk Drawer, else the Clerk. Repeats alternate the variant.
+ * Each module takes its best archetype nobody has yet; if all its matches are taken, it reuses its
+ * best one as the alternate variant. No match at all: the largest unmatched module is the Hoarder,
+ * else 5+ TODOs and no tests is the Junk Drawer, else the Clerk. Modules are taken in the given order
+ * (largest first from detectModules), so bigger modules get first pick.
  */
 export function assignCast(modules: Module[]): { archetype: Archetype; variant: Variant }[] {
-  const matched = modules.map(
-    (m) => (m.id === '(root)' ? 'librarian' : null) ?? keywordArchetype(m.name) ?? mainFiles(m).map((p) => keywordArchetype(base(p).replace(/\.[^.]+$/, ''))).find(Boolean) ?? null,
-  );
-  const unmatched = modules.filter((_, i) => !matched[i]);
+  const options = modules.map(candidates);
+  const unmatched = modules.filter((_, i) => !options[i].length);
   const hoard = unmatched.reduce<Module | null>((a, m) => (!a || m.stats.totalLines > a.stats.totalLines ? m : a), null);
   const seen: Partial<Record<Archetype, number>> = {};
   return modules.map((m, i) => {
-    const archetype =
-      matched[i] ?? (m === hoard ? 'hoarder' : m.stats.todoCount >= 5 && !m.stats.hasTests ? 'junkDrawer' : 'clerk');
+    const fallback: Archetype = m === hoard ? 'hoarder' : m.stats.todoCount >= 5 && !m.stats.hasTests ? 'junkDrawer' : 'clerk';
+    const list = options[i].length ? options[i] : [fallback];
+    const archetype = list.find((a) => !seen[a]) ?? list[0];
     const n = (seen[archetype] = (seen[archetype] ?? 0) + 1);
     return { archetype, variant: ((n - 1) % 2) as Variant };
   });
