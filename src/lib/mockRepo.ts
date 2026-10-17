@@ -1,30 +1,7 @@
-import type { Character, Module, ModuleStats, Repo, RepoFile } from './types';
+import type { Character, Repo, RepoFile } from './types';
+import { buildRepo } from './analyze';
 
 const file = (path: string, content: string): RepoFile => ({ path, content, lineCount: content.split('\n').length });
-
-export function computeStats(files: RepoFile[]): ModuleStats {
-  let todoCount = 0;
-  let maxNesting = 0;
-  let biggestFile = { path: '', lines: 0 };
-  for (const f of files) {
-    todoCount += (f.content.match(/\b(TODO|FIXME|HACK)\b/g) ?? []).length;
-    if (f.lineCount > biggestFile.lines) biggestFile = { path: f.path, lines: f.lineCount };
-    // ponytail: brace depth only, misses Python indentation; switch to indent-based if Phase 2 needs it
-    let depth = 0;
-    for (const ch of f.content) {
-      if (ch === '{') maxNesting = Math.max(maxNesting, ++depth);
-      else if (ch === '}') depth = Math.max(0, depth - 1);
-    }
-  }
-  return {
-    fileCount: files.length,
-    totalLines: files.reduce((n, f) => n + f.lineCount, 0),
-    biggestFile,
-    todoCount,
-    maxNesting,
-    hasTests: files.some((f) => /(\.|\/|_)(test|spec)s?\b/i.test(f.path)),
-  };
-}
 
 const files: RepoFile[] = [
   file(
@@ -177,17 +154,7 @@ export function log(level: Level, message: string, extra?: unknown) {
   ),
 ];
 
-const moduleOf = (dir: string, name: string): Module => {
-  const own = files.filter((f) => f.path.startsWith(dir + '/'));
-  return { id: dir, name, path: dir, filePaths: own.map((f) => f.path), stats: computeStats(own) };
-};
-
-export const mockRepo: Repo = {
-  name: 'chai-commerce',
-  url: 'https://github.com/example/chai-commerce',
-  files,
-  modules: [moduleOf('orders', 'Orders'), moduleOf('payments', 'Payments'), moduleOf('utils', 'Utils')],
-};
+export const mockRepo: Repo = buildRepo('chai-commerce', files, 'https://github.com/example/chai-commerce');
 
 export const mockCharacters: Character[] = [
   {

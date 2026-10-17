@@ -36,4 +36,11 @@ export type ChatMessage = {
 export type SpiceLevel = 'clean' | 'spicy' | 'unhinged';
 export type ExplainMode = 'beginner' | 'expert';
 
-export type Repo = { name: string; url?: string; files: RepoFile[]; modules: Module[] };
+export type Repo = {
+  name: string;
+  url?: string;
+  branch?: string;
+  files: RepoFile[];
+  modules: Module[];
+  skipped?: { count: number; reasons: Record<string, number> };
+};
