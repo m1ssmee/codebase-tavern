@@ -79,8 +79,9 @@ const hasTerm = (line: string, t: string) => (/^\d/.test(t) ? numbersIn(line).in
 const lastClause = (text: string) => text.split(/[;:,]\s+|\s+[—–]\s+|\s+(?:which|while|but|because|whereas|so)\s+/).filter((p) => /[\w`]/.test(p)).at(-1) ?? '';
 const IMPORT = /^\s*(import\b|export\s*\{[^}]*\}\s*from\b|.*\brequire\()/;
 // A function, method or class definition line, and its name.
+// Identifier groups are bounded ({0,63}) so a long run of letters can't make the match backtrack quadratically.
 const DEF =
-  /\bfunction\s*\*?\s+([A-Za-z_$][\w$]*)|([A-Za-z_$][\w$]*)\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)|\bdef\s+([A-Za-z_]\w*)|\bclass\s+([A-Za-z_$][\w$]*)|^\s*(?:(?:public|private|protected|static|async)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{=]+)?\{\s*$/;
+  /\bfunction\s*\*?\s+([A-Za-z_$][\w$]{0,63})|\b([A-Za-z_$][\w$]{0,63})\s*[:=]\s*(?:async\s+)?(?:function\b|\([^)]{0,200}\)\s*=>|[A-Za-z_$][\w$]{0,63}\s*=>)|\bdef\s+([A-Za-z_]\w{0,63})|\bclass\s+([A-Za-z_$][\w$]{0,63})|^\s*(?:(?:public|private|protected|static|async)\s+)*([A-Za-z_$][\w$]{0,63})\s*\([^)]{0,200}\)\s*(?::\s*[^{=]{1,200})?\{\s*$/;
 /** The functions a line sits in: definitions above it, innermost first, up to the first top-level one (within 150 lines). */
 function enclosing(lines: string[], line: number): string[] {
   const out: string[] = [];
@@ -107,9 +108,14 @@ export class CiteChecker {
   private since = '';
   private sentenceAt = -1;
   private cited: string[] = []; // files already cited in the current sentence
-  /** `files`: path → its lines, exactly as numbered for the model. */
+  private readonly aliasCache = new Map<string, string[]>();
+  private checked = 0;
+  /**
+   * `files`: path → its lines, exactly as numbered for the model. The code comes from the client: lines are cut to
+   * 400 characters before any matching (a minified line has nothing to cite), and one request checks at most 80 citations.
+   */
   constructor(files: Map<string, string[]>) {
-    this.files = files;
+    this.files = new Map([...files].map(([p, ls]) => [p, ls.map((l) => (l.length > 400 ? l.slice(0, 400) : l))]));
   }
 
   private has(path: string, t: string): boolean {
@@ -120,12 +126,15 @@ export class CiteChecker {
 
   /** A value often reaches the code through a constant (UPSTREAM_TIMEOUT_MS = 2000): its name counts as the value. */
   private aliases(n: string): string[] {
-    if (!/^\d+$/.test(n) || Number(n) < 100) return [];
-    const re = new RegExp(`\\b([A-Z][A-Z0-9]*_[A-Z0-9_]+|[a-z]+[A-Z]\\w*)\\s*[:=]\\s*${n.replace(/\B(?=(\d{3})+$)/g, '_?')}(?![\\d.])`);
-    const out = new Set<string>();
-    for (const lines of this.files.values()) for (const l of lines) out.add(l.match(re)?.[1] ?? '');
-    out.delete('');
-    return [...out].slice(0, 3);
+    if (!/^\d{3,12}$/.test(n)) return [];
+    if (!this.aliasCache.has(n)) {
+      const re = new RegExp(`\\b([A-Z][A-Z0-9]{0,40}_[A-Z0-9_]{1,40}|[a-z]{1,40}[A-Z]\\w{0,40})\\s*[:=]\\s*${n.replace(/\B(?=(\d{3})+$)/g, '_?')}(?![\\d.])`);
+      const out = new Set<string>();
+      for (const lines of this.files.values()) for (const l of lines) out.add(l.match(re)?.[1] ?? '');
+      out.delete('');
+      this.aliasCache.set(n, [...out].slice(0, 3));
+    }
+    return this.aliasCache.get(n)!;
   }
 
   /**
@@ -138,6 +147,7 @@ export class CiteChecker {
   one(segment: string, c: Citation, earlier: string[] = []): Citation | null {
     const lines = this.files.get(c.path);
     if (!lines) return c; // not a file we were shown: the caller's own checks decide
+    if (++this.checked > 80) return this.counts.unchecked++, c;
     const paths = [...this.files.keys()];
     const fact = (t: string) => this.has(c.path, t) || (paths.some((p) => this.has(p, t)) && !earlier.some((p) => p !== c.path && this.has(p, t)));
     const raw = claimTerms(segment);

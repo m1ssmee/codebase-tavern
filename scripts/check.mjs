@@ -502,3 +502,15 @@ console.log('judge template checks ok');
   assert.deepEqual([cc.counts.verified, js.counts.verified], [1, 1]);
   console.log('enclosing-function checks ok');
 }
+{
+  // Client-sent code can't make the checker crawl: one 120KB line of letters, many citations.
+  const { CiteChecker } = await import('../src/lib/citations.ts');
+  const long = 'a'.repeat(120_000);
+  const cc = new CiteChecker(new Map([['x.js', [long, 'const MAX_TRIES = 2000;', long + ' = 2000']]]));
+  const t0 = Date.now();
+  const text = Array.from({ length: 100 }, (_, i) => `\`fooBar${i}\` waits 2000ms [x.js:${(i % 3) + 1}].`).join(' ');
+  cc.text(text);
+  assert.ok(Date.now() - t0 < 1500, `took ${Date.now() - t0}ms`);
+  assert.equal(cc.counts.verified + cc.counts.repaired + cc.counts.dropped + cc.counts.unchecked, 100);
+  console.log('citation cost checks ok');
+}
