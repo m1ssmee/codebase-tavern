@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useTavern } from '@/lib/store';
 import { blipText } from '@/lib/blips';
+import { graphGossip } from '@/lib/graph';
 import CharacterFace from './CharacterFace';
 
 /** Every 15-25s one character floats up from the bottom-left of the code panel and says a gossip line for 5s. */
@@ -23,7 +24,9 @@ export default function Gossip() {
       // Paused during the Tribunal, while typing, while a reply streams, and in background tabs.
       if (!s.tribunal && !typing && !s.isLoading && cast.length && document.visibilityState === 'visible') {
         const c = cast[Math.floor(Math.random() * cast.length)];
-        const line = c.gossip[Math.floor(Math.random() * c.gossip.length)];
+        const nameOf = (id: string) => s.repo?.modules.find((m) => m.id === id)?.name ?? id;
+        const lines = [...c.gossip, ...(s.graph ? [graphGossip(s.graph, c.moduleId, nameOf)] : [])].filter((l): l is string => !!l);
+        const line = lines[Math.floor(Math.random() * lines.length)];
         setShown({ id: c.moduleId, line, key: Date.now() });
         blipText(line, c.voicePitch, s.muted);
         hide.current = setTimeout(() => setShown(null), 5000);

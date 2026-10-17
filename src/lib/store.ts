@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
 import { buildRepo, entryFile, nesting } from './analyze';
+import { affectedBy, buildGraph, type Graph } from './graph';
 import { toCharacters, toRaw, type RawCharacter } from './characters';
 import demoCharacters from '@/data/demoCharacters.json';
 
 type TavernState = {
   repo: Repo | null;
+  graph: Graph | null; // import graph, rebuilt on every loadRepo
   characters: Record<string, Character>;
   moods: Record<string, Mood>;
   selectedModuleId: string | null;
@@ -20,6 +22,8 @@ type TavernState = {
   demo: boolean; // /tavern?demo=1: saved quickcart, saved cast, saved Tribunal, zero AI calls for those
   // Code-smell reaction for the module whose file was just opened (not in clean).
   smell: { moduleId: string; cloud: boolean; green: boolean; at: number } | null;
+  view: 'code' | 'map'; // middle panel
+  rippleFrom: { id: string; at: number } | null; // set while a ripple plays on the map
 
   loadRepo: (repo: Repo) => void;
   setCharacters: (characters: Character[]) => void;
@@ -35,6 +39,9 @@ type TavernState = {
   toggleMute: () => void;
   setLoading: (isLoading: boolean) => void;
   setTribunal: (on: boolean) => void;
+  setView: (view: 'code' | 'map') => void;
+  /** Pulse from a module to everything that imports it, hop by hop, on the map (switches to it). */
+  ripple: (fromModuleId: string) => void;
 };
 
 export const useTavern = create<TavernState>()((set, get) => {
@@ -50,6 +57,7 @@ export const useTavern = create<TavernState>()((set, get) => {
 
   return {
     repo: null,
+    graph: null,
     characters: {},
     moods: {},
     selectedModuleId: null,
@@ -63,11 +71,15 @@ export const useTavern = create<TavernState>()((set, get) => {
     tribunal: false,
     demo: false,
     smell: null,
+    view: 'code',
+    rippleFrom: null,
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
     loadRepo: (repo) =>
       set({
         repo,
+        graph: buildGraph(repo.files, repo.modules),
+        rippleFrom: null,
         characters: {},
         moods: {},
         chats: {},
@@ -92,7 +104,7 @@ export const useTavern = create<TavernState>()((set, get) => {
       const cloud = !!f && f.lineCount > 400;
       const green = !!f && nesting(f) >= 6;
       const smelly = s.spice !== 'clean' && mod && (cloud || green);
-      set({ openFilePath, smell: smelly ? { moduleId: mod.id, cloud, green, at: Date.now() } : null });
+      set({ openFilePath, view: 'code', smell: smelly ? { moduleId: mod.id, cloud, green, at: Date.now() } : null });
     },
     // New object every call, so clicking the same chip twice re-triggers the glow.
     highlightCitation: (c) => set({ openFilePath: c.path, highlight: { ...c } }),
@@ -115,8 +127,18 @@ export const useTavern = create<TavernState>()((set, get) => {
     toggleMute: () => set((s) => ({ muted: !s.muted })),
     setLoading: (isLoading) => set({ isLoading }),
     setTribunal: (tribunal) => set({ tribunal }),
+    setView: (view) => set({ view }),
+    ripple: (id) => {
+      const at = Date.now();
+      const g = get().graph;
+      const hops = g ? Math.max(0, ...affectedBy(g, id).map((a) => a.hops)) : 0;
+      set({ view: 'map', rippleFrom: { id, at } });
+      setTimeout(() => get().rippleFrom?.at === at && set({ rippleFrom: null }), RIPPLE_HOP_MS * hops + 3000);
+    },
   };
 });
+
+export const RIPPLE_HOP_MS = 400;
 
 type IngestResponse = { name: string; url: string; branch: string; files: RepoFile[]; skipped: Repo['skipped']; error?: string };
 

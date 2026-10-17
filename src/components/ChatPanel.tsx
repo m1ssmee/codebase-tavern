@@ -6,6 +6,7 @@ import { useTavern } from '@/lib/store';
 import { extractCitations, isValidCitation } from '@/lib/citations';
 import { PALETTE, statsLine } from '@/lib/characters';
 import { pickContext } from '@/lib/context';
+import { graphFacts } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
 import CharacterFace from './CharacterFace';
 import Rich from './Rich';
@@ -34,6 +35,8 @@ export async function sendChat(text: string) {
   s.setMood(mod.id, 'talking');
 
   const ctx = pickContext(mod, repo.files, openFilePath, text);
+  const nameOf = (mid: string) => repo.modules.find((m) => m.id === mid)?.name ?? mid;
+  const facts = s.graph ? graphFacts(s.graph, mod.id, repo.files, nameOf) : { dependents: [], dependencies: [] };
   let full = '';
   let highlighted = false;
   try {
@@ -46,6 +49,7 @@ export async function sendChat(text: string) {
         character: { title: name, personality: char?.personality, catchphrase: char?.catchphrase },
         openFilePath,
         ...ctx,
+        ...facts,
         others: repo.modules.filter((m) => m.id !== mod.id).map((m) => ({ title: characters[m.id]?.name ?? m.name, path: m.path })),
         spice,
         mode,

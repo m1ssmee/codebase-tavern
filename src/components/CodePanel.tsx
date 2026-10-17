@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
 import { ChevronRight } from 'lucide-react';
 import { useTavern } from '@/lib/store';
@@ -8,6 +9,12 @@ import Gossip from './Gossip';
 import { sendChat } from './ChatPanel';
 
 type Ed = Parameters<OnMount>[0];
+
+// three.js + R3F only download when someone opens the map.
+const MapView = dynamic(() => import('./map/MapView'), {
+  ssr: false,
+  loading: () => <div className="grid h-full place-items-center bg-[#fbfaf8] text-muted">Drawing the map…</div>,
+});
 
 const defineTheme: BeforeMount = (monaco) =>
   monaco.editor.defineTheme('tavern', {
@@ -24,7 +31,7 @@ const defineTheme: BeforeMount = (monaco) =>
   });
 
 export default function CodePanel() {
-  const { repo, openFilePath, highlight, tribunal } = useTavern();
+  const { repo, openFilePath, highlight, tribunal, view, setView } = useTavern();
   // Floating "Explain this" button for a non-empty selection, positioned at the selection's end.
   const [sel, setSel] = useState<{ start: number; end: number; top: number; left: number } | null>(null);
   const file = repo?.files.find((f) => f.path === openFilePath);
@@ -81,6 +88,18 @@ export default function CodePanel() {
         ) : (
           <span>no file open</span>
         )}
+        <div className="ml-auto flex shrink-0 rounded-full border border-edge p-0.5 font-sans">
+          {(['code', 'map'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`rounded-full px-3 py-0.5 text-xs transition-colors ${view === v ? 'bg-amber text-ink' : 'text-muted hover:text-cream'}`}
+            >
+              {v === 'code' ? 'Code' : 'Map'}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="relative flex-1">
         {file ? (
@@ -107,7 +126,12 @@ export default function CodePanel() {
         ) : (
           <div className="grid h-full place-items-center text-muted">Pick a file from the tree.</div>
         )}
-        {sel && file && !tribunal && (
+        {view === 'map' && (
+          <div className="absolute inset-0 z-10">
+            <MapView />
+          </div>
+        )}
+        {sel && file && !tribunal && view === 'code' && (
           <button
             type="button"
             style={{ top: sel.top, left: Math.max(8, sel.left - 40) }}

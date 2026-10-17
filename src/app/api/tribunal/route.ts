@@ -171,6 +171,7 @@ ${levelReminder(b.spice)}`;
         let full = '';
         let sent = 0;
         let firstTurnMs: number | undefined;
+        let regenerated = false;
         try {
           const reader = llm.getReader();
           const dec = new TextDecoder();
@@ -212,6 +213,7 @@ ${levelReminder(b.spice)}`;
                 if (again?.verdict) {
                   v = again.verdict;
                   fixCheck = 'regenerated';
+                  regenerated = true;
                   problem = fixProblem({ path: str(v.fix?.path, 300), diff: str(v.fix?.diff, 4000) }, culpritFiles(v), hearing);
                 }
               } catch (err) {
@@ -240,7 +242,7 @@ ${levelReminder(b.spice)}`;
           console.error('[tribunal] trial failed mid-stream:', err);
           send({ type: 'error' });
         }
-        const summary = { firstTurnMs, totalMs: Date.now() - started, calls: timings };
+        const summary = { firstTurnMs, totalMs: Date.now() - started, regenerated, calls: timings };
         console.info('[tribunal] trial timings', JSON.stringify({ suspects: ids, ...summary }));
         send({ type: 'timings', ...summary, calls: publicTimings(timings) });
         controller.close();

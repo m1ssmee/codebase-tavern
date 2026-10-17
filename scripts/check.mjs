@@ -138,3 +138,61 @@ const mixed = hdr('orders/checkout.test.ts') + "+test('one charge', () => {});\n
 assert.equal(fixProblem(F('orders/checkout.test.ts', mixed), culprits, 'retry'), null);
 assert.match(fixProblem(F('orders/checkout.ts', hdr('orders/checkout.ts') + '+  // TODO\n' + hdr('orders/checkout.test.ts') + "+test('x', () => {});"), culprits, 'retry'), /test files/);
 console.log('fix-quality checks ok');
+
+// Import graph: real quickcart edges (nothing imports payments: orders reaches it over HTTP via SERVICES.payments)
+const { buildGraph, dependenciesOf, dependentsOf, affectedBy, graphFacts, graphGossip } = await import('../src/lib/graph.ts');
+const { buildRepo } = await import('../src/lib/analyze.ts');
+const { default: qc } = await import('../src/data/demoRepo.json', { with: { type: 'json' } });
+const qr = buildRepo(qc.name, qc.files, qc.url);
+const qg = buildGraph(qr.files, qr.modules);
+const edgeList = (g) => g.edges.map((e) => `${e.from}>${e.to}:${e.weight}`);
+assert.deepEqual(edgeList(qg), ['gateway>auth:1', 'gateway>utils:2', 'orders>gateway:2', 'orders>inventory:1', 'orders>utils:2', 'payments>utils:1']);
+assert.deepEqual(dependentsOf(qg, 'payments'), []);
+assert.deepEqual(dependenciesOf(qg, 'orders').map((e) => e.to), ['gateway', 'inventory', 'utils']);
+assert.deepEqual(affectedBy(qg, 'auth'), [{ id: 'gateway', hops: 1, via: 'auth' }, { id: 'orders', hops: 2, via: 'gateway' }]);
+assert.deepEqual(affectedBy(qg, 'utils').map((a) => `${a.id}@${a.hops}`), ['gateway@1', 'orders@1', 'payments@1']);
+assert.deepEqual(qg.external.auth, ['node:assert/strict', 'node:crypto', 'node:test']);
+assert.ok(qg.imports.some((r) => r.file === 'auth/middleware.ts' && r.target === 'auth/tokens.ts')); // file level keeps intra-module imports
+const facts = graphFacts(qg, 'gateway', qr.files, (id) => id);
+assert.equal(facts.dependents[0], "orders, 2 imports:\n    [orders/checkout.ts:1] import { SERVICES } from '../gateway/config';\n    [orders/checkout.ts:2] import { forward, UpstreamTimeoutError } from '../gateway/proxy';");
+assert.equal(graphGossip(qg, 'gateway', (id) => id), 'orders imports me 2 times and has never once said thanks.');
+assert.equal(graphGossip(qg, 'payments', (id) => id), null);
+
+// express-shaped: require('../'), require('./router') → router/index.js, packages counted
+const G = (entries) => {
+  const fs = entries.map(([path, content]) => ({ path, content, lineCount: content.split('\n').length }));
+  return buildGraph(fs, buildRepo('x', fs).modules);
+};
+const ex = G([
+  ['lib/express.js', "var Router = require('./router');\nvar app = require('./application');\n" + 'x\n'.repeat(80)],
+  ['lib/application.js', "var debug = require('debug')('express:app');\nvar View = require('./view.js');\nimport('./view');"],
+  ['lib/view.js', 'module.exports = 1;'],
+  ['lib/router/index.js', "const { x } = require(\n  '../view'\n);"],
+  ['index.js', "module.exports = require('./lib/express');"],
+  ['test/app.js', "var express = require('../');\nvar after = require('after');\nvar missing = require('./fixtures/nope');"],
+  ['examples/x/index.js', "var express = require('../..');\nimport {\n  a,\n  b,\n} from '../../lib/view'"],
+]);
+assert.deepEqual(edgeList(ex), ['(root)>lib:1', 'examples>(root):1', 'examples>lib:1', 'lib>lib/router:1', 'lib/router>lib:1', 'test>(root):1']);
+assert.deepEqual([ex.external.lib, ex.external.test], [['debug'], ['after']]);
+assert.deepEqual(ex.imports.filter((r) => r.file === 'examples/x/index.js').map((r) => [r.line, r.endLine]), [[2, 5], [1, 1]]);
+
+// flask-shaped: relative imports, src/ layout, `import json` stays stdlib even though flask/json/ exists
+const fl = G([
+  ['src/flask/__init__.py', 'from .app import Flask\nfrom . import json as json\n' + 'x\n'.repeat(80)],
+  ['src/flask/app.py', 'import os\nfrom .globals import g\nfrom .json.provider import DefaultJSONProvider\nfrom werkzeug import Response'],
+  ['src/flask/globals.py', 'import typing as t'],
+  ['src/flask/json/__init__.py', 'import json\nfrom ..globals import current_app'],
+  ['src/flask/json/provider.py', 'import json'],
+  ['tests/test_basic.py', 'import flask\nfrom flask.json import dumps\nimport pytest'],
+]);
+assert.deepEqual(edgeList(fl), ['tests>src/flask:2']);
+const tgt = (file) => fl.imports.filter((r) => r.file === file).map((r) => r.target);
+assert.deepEqual(tgt('src/flask/__init__.py'), ['src/flask/app.py', 'src/flask/json/__init__.py']);
+assert.deepEqual(tgt('src/flask/app.py'), ['src/flask/globals.py', 'src/flask/json/provider.py']);
+assert.deepEqual(tgt('src/flask/json/__init__.py'), ['src/flask/globals.py']);
+assert.deepEqual(fl.external['src/flask'], ['json', 'os', 'typing', 'werkzeug']);
+
+// other languages: import-like line naming another module's folder (Go import block)
+const go = G([['api/server.go', 'package api\nimport (\n  "fmt"\n  "example.com/app/store"\n)\n// store is great'], ['store/db.go', 'package store']]);
+assert.deepEqual(edgeList(go), ['api>store:1']);
+console.log('graph checks ok');

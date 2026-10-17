@@ -66,8 +66,11 @@ ${others || '- none'}
 Your files (${allPaths.length}):
 ${allPaths.map((p) => `- ${p}${!shown.has(p) ? ' [left out]' : truncated.has(p) ? ' [truncated]' : ''}`).join('\n')}
 
-Lines elsewhere in the repo that import or mention you:
-${arr<string>(b.dependents, 30).map((d) => '- ' + str(d, 300)).join('\n') || '- none found'}
+Modules that import you, from the repo's import graph (cite these lines when asked who depends on you):
+${arr<string>(b.dependents, 12).map((d) => '- ' + str(d, 1500)).join('\n') || '- none. No module imports you.'}
+
+Modules you import:
+${arr<string>(b.dependencies, 13).map((d) => '- ' + str(d, 1500)).join('\n') || '- none'}
 
 Your code:
 ${files.map((f) => `=== ${f.path}${f.truncated ? ' [truncated]' : ''} ===\n${numbered(f.content)}`).join('\n\n')}
