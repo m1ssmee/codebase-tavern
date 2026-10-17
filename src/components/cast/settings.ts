@@ -37,3 +37,15 @@ export const useCast3D = create<Cast3D>((set, get) => ({
     if (get().on && !get().userChose) set({ on: false, auto: true });
   },
 }));
+
+/**
+ * Animation settings. Reduced motion follows the OS unless overridden (the /lab toggle); cooldown bypass and
+ * ambient idles are review switches for /lab.
+ */
+type CastAnim = { reduced: boolean | null; ignoreCooldowns: boolean; ambient: boolean; /** Slow motion for review (1 = normal). */ speed: number; set: (p: Partial<Omit<CastAnim, 'set'>>) => void };
+export const useCastAnim = create<CastAnim>((set) => ({ reduced: null, ignoreCooldowns: false, ambient: true, speed: 1, set: (p) => set(p) }));
+export const reducedMotion = () => {
+  const o = useCastAnim.getState().reduced;
+  if (o !== null) return o;
+  return typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+};

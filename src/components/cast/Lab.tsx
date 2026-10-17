@@ -15,6 +15,7 @@ import CharacterFace from '@/components/CharacterFace';
 import { CastCanvas, CastFallbackNote, CastLights, Character3D, useCast3D } from './Character3D';
 import { EXPRESSIONS, type Expression } from './rig';
 import type { Built, Detail } from './archetypes';
+import AnimBoard, { PerfMeter } from './AnimBoard';
 
 type Scene = 'all' | 'quickcart' | 'express' | 'overlay' | 'map' | 'header';
 type Slot = { key: string; label: string; sub: string; archetype: Archetype; variant: Variant; color: string; stats: ModuleStats; keys?: number };
@@ -63,27 +64,6 @@ function LabelTracker({ xs, refs }: { xs: number[]; refs: React.RefObject<(HTMLD
   return null;
 }
 
-/** Frame rate, draw calls and drawn triangles (outlines included), written straight to the DOM once a second. */
-function PerfMeter({ out }: { out: React.RefObject<HTMLSpanElement | null> }) {
-  const gl = useThree((s) => s.gl);
-  useEffect(() => {
-    let frames = 0, t0 = performance.now(), raf = 0;
-    const tick = (now: number) => {
-      frames++;
-      if (now - t0 >= 1000 && out.current) {
-        const { calls, triangles } = gl.info.render;
-        out.current.textContent = `${Math.round((frames * 1000) / (now - t0))} fps · ${calls} draw calls · ${triangles.toLocaleString('en')} triangles · DPR ${gl.getPixelRatio().toFixed(2)} · frame ${gl.info.render.frame}`;
-        frames = 0;
-        t0 = now;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [gl, out]);
-  return null;
-}
-
 /** Frames the whole lineup, or one character when focused. */
 function Framing({ focusX, width }: { focusX: number | null; width: number }) {
   const camera = useThree((s) => s.camera);
@@ -119,7 +99,13 @@ function Slider({ label, value, min, max, step = 1, onChange, fmt = String }: { 
   );
 }
 
-export default function Lab() {
+/** /lab shows the cast lab; /lab?board=1 the animation board. */
+export default function LabRoot() {
+  const [board] = useState(() => new URLSearchParams(window.location.search).has('board'));
+  return board ? <AnimBoard /> : <Lab />;
+}
+
+function Lab() {
   // Deep links for review and measurement: /lab?scene=map (all, quickcart, express, overlay, map, header).
   const [scene, setScene] = useState<Scene>(() => {
     const q = new URLSearchParams(window.location.search).get('scene');
@@ -179,6 +165,7 @@ export default function Lab() {
       <aside className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-edge p-4 text-sm">
         <div>
           <h1 className="font-display text-2xl">Cast lab</h1>
+          <a href="/lab?board=1" className="text-xs text-muted underline">Animation board →</a>
           <p className="text-xs text-muted">Review page for the 3D characters. Click a character to focus, drag to orbit.</p>
         </div>
         <section className="flex flex-wrap gap-1.5" aria-label="Scene">

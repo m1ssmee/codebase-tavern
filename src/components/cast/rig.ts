@@ -58,7 +58,16 @@ export interface CharacterRig {
   props: Record<string, THREE.Group>;
   /** Face unit (eye half-height): expression offsets are multiples of it. */
   unit: number;
+  /** Finger sets per hand, hidden until a gesture shows one. Separate toggled meshes at both detail levels. */
+  hands: Record<'L' | 'R', Partial<Record<FingerPose, THREE.Group>>>;
+  /** Parts that appear or disappear (bump, bandage, soot, wig, blunderbuss, BANG flag...), hidden until shown. */
+  toggles: Record<string, THREE.Group>;
 }
+
+/** Hand shapes for gestures; 'mitten' is the plain hand with no finger set shown. */
+export type HandPose = 'mitten' | FingerPose;
+export const FINGER_POSES = ['fist', 'point', 'middle', 'thumbs', 'palm', 'posh'] as const;
+export type FingerPose = (typeof FINGER_POSES)[number];
 
 export const JOINTS = [
   'root', 'hips', 'torso', 'neck', 'head', 'eyeL', 'eyeR', 'pupilL', 'pupilR', 'lidL', 'lidR', 'browL', 'browR', 'jaw', 'mouth',
@@ -93,7 +102,7 @@ export function createRig(): CharacterRig {
     jaw, mouth, armL, shoulderL, elbowL, handL, armR, shoulderR, elbowR, handR, legL, hipL, kneeL, footL, legR, hipR, kneeR, footR,
     mouthLine: new THREE.Mesh(), mouthOpen, teeth: g('teeth', mouthOpen),
     pupils: { L: {} as Record<PupilKind, THREE.Object3D>, R: {} as Record<PupilKind, THREE.Object3D> },
-    props: {}, unit: 0.05,
+    props: {}, unit: 0.05, hands: { L: {}, R: {} }, toggles: {},
   };
 }
 
@@ -326,8 +335,13 @@ export function applyExpression(rig: CharacterRig, f: Face, t: Traits) {
 
 /** Record every joint's rest transform (after the build pose) in userData.rest. */
 export function snapshotRest(rig: CharacterRig) {
-  for (const j of JOINTS) {
-    const o = rig[j];
-    o.userData.rest = { p: o.position.clone(), r: o.rotation.clone(), s: o.scale.clone() };
-  }
+  for (const o of animatable(rig)) o.userData.rest = { p: o.position.clone(), r: o.rotation.clone(), s: o.scale.clone() };
 }
+
+/** Everything animation can move: the joints, then prop groups, toggled parts and finger sets (all uniquely named). */
+export const animatable = (rig: CharacterRig): THREE.Object3D[] => [
+  ...JOINTS.map((j) => rig[j]),
+  ...Object.values(rig.props),
+  ...Object.values(rig.toggles),
+  ...(['L', 'R'] as const).flatMap((s) => Object.values(rig.hands[s]) as THREE.Group[]),
+];

@@ -3,7 +3,7 @@
 // it pulls in three.js.
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type Ref, type RefObject } from 'react';
 import * as THREE from 'three';
-import { Canvas, useThree, type CanvasProps, type ThreeEvent } from '@react-three/fiber';
+import { Canvas, useFrame, useThree, type CanvasProps, type ThreeEvent } from '@react-three/fiber';
 import { AdaptiveDpr, PerformanceMonitor } from '@react-three/drei';
 import type { Module, ModuleStats } from '@/lib/types';
 import { assignCast, type Archetype, type Variant } from '@/lib/cast';
@@ -13,6 +13,9 @@ import { buildCharacter, type Built, type Detail } from './archetypes';
 import { setCastLook } from './kit';
 import { applyExpression, PRESETS, type CharacterRig, type Expression } from './rig';
 import { useCast3D } from './settings';
+import { bindActor, getActor, unbindActor } from './anim/actor';
+import { click } from './anim/director';
+import { CastFX } from './anim/fx';
 
 export type { CharacterRig, Detail, Expression };
 export { useCast3D };
@@ -39,6 +42,8 @@ export type Character3DProps = {
   position?: [number, number, number];
   scale?: number;
   onClick?: (e: ThreeEvent<MouseEvent>) => void;
+  /** Animate it as the actor registered under this id: useActor(id), the director's events, clicks boing. */
+  actor?: string;
   /** Called with each new build (triangle and draw-call counts, rig). */
   onBuilt?: (b: Built) => void;
   /** Resolves to the rig, for animation. Same joints at both detail levels. */
@@ -68,7 +73,7 @@ function DetailProbe({ target, level, onChange }: { target: RefObject<THREE.Grou
   return null;
 }
 
-export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, ref }: Character3DProps) {
+export function Character3D({ module, stats, archetype, variant, expression = 'deadpan', color, cast, silhouette = false, keys, detail, position, scale, onClick, onBuilt, actor, ref }: Character3DProps) {
   const s = stats ?? module?.stats ?? DEFAULT_STATS;
   const auto = useMemo(() => {
     if (archetype || !module) return null;
@@ -83,13 +88,32 @@ export function Character3D({ module, stats, archetype, variant, expression = 'd
   const group = useRef<THREE.Group>(null);
   const built = useMemo(() => buildCharacter({ archetype: a, variant: v, color: col, stats: s, silhouette, keys, detail: level }), [a, v, col, s, silhouette, keys, level]);
   useEffect(() => () => built.dispose(), [built]);
+  const get = useThree((st) => st.get);
+  // An actor keeps its state (mood, cooldowns, where it floated to) across rebuilds, e.g. a detail swap.
   useLayoutEffect(() => {
-    applyExpression(built.rig, expression === 'deadpan' ? built.neutral : PRESETS[expression], faceTraits(s));
-  }, [built, expression, s]);
+    if (!actor) return;
+    bindActor(actor, built, a, v, get);
+    return () => unbindActor(actor, built);
+  }, [actor, built, a, v, get]);
+  useLayoutEffect(() => {
+    if (actor) getActor(actor)?.setExpression(expression);
+    else applyExpression(built.rig, expression === 'deadpan' ? built.neutral : PRESETS[expression], faceTraits(s));
+  }, [actor, built, expression, s]);
+  useFrame((_, dt) => {
+    if (actor) getActor(actor)?.update(dt);
+  });
   useImperativeHandle(ref, () => built.rig, [built]);
   useEffect(() => onBuilt?.(built), [built, onBuilt]);
   return (
-    <group ref={group} position={position} scale={scale} onClick={onClick}>
+    <group
+      ref={group}
+      position={position}
+      scale={scale}
+      onClick={(e) => {
+        if (actor) click(actor);
+        onClick?.(e);
+      }}
+    >
       <primitive object={built.root} />
       {detail === undefined && <DetailProbe target={group} level={autoDetail} onChange={setAutoDetail} />}
     </group>
@@ -189,6 +213,7 @@ export function CastCanvas({ children, fallback = null, autoFallback = true, loo
   return (
     <Canvas {...castCanvasProps} {...props} frameloop={hidden ? 'never' : (frameloop ?? 'always')}>
       <CastPerformance onSlow={autoFallback ? tooSlow : undefined} />
+      <CastFX />
       {children}
     </Canvas>
   );

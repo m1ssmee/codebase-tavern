@@ -225,6 +225,23 @@ export const pagesMat = () =>
     map.wrapS = map.wrapT = THREE.RepeatWrapping;
     return new THREE.MeshToonMaterial({ map, gradientMap: ramp() });
   });
+/** A flag or sign with a word painted on it (the Tribunal's BANG flag). */
+export const labelMat = (text: string) =>
+  memo(`lbl${text}`, () => {
+    const map = canvasTexture(256, 128, (g) => {
+      g.fillStyle = '#fff6d6';
+      g.fillRect(0, 0, 256, 128);
+      g.strokeStyle = '#d9473a';
+      g.lineWidth = 10;
+      g.strokeRect(5, 5, 246, 118);
+      g.fillStyle = '#d9473a';
+      g.font = '900 80px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(text, 128, 70);
+    });
+    return new THREE.MeshToonMaterial({ map, gradientMap: ramp(), side: THREE.DoubleSide });
+  });
 let grain: THREE.CanvasTexture | undefined;
 /** Faint wood grain (multiplies the colour), for drawers, plywood and handles. */
 function grainTexture() {

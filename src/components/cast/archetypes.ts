@@ -6,8 +6,8 @@ import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometr
 import type { ModuleStats } from '@/lib/types';
 import type { Archetype, Variant } from '@/lib/cast';
 import { faceTraits, sizeOf } from '@/lib/characters';
-import { C, G, INK, bake, dropInLite, flat, flatVertex, glow, hull, mesh, outlineColor, outlineFor, outlineSkinned, pagesMat, receiptMat, ribbon, seg, setDetail, shade, shadowMat, tinted, toon, tris, tube, wantsOutline, type Part, type V3 } from './kit';
-import { JOINTS, aim, applyExpression, at, bones, createRig, face, limb, prop, snapshotRest, up, type CharacterRig, type Face } from './rig';
+import { C, G, INK, bake, dropInLite, flat, flatVertex, glow, hull, labelMat, mesh, outlineColor, outlineFor, outlineSkinned, pagesMat, receiptMat, ribbon, seg, setDetail, shade, shadowMat, tinted, toon, tris, tube, wantsOutline, type Part, type V3 } from './kit';
+import { JOINTS, aim, applyExpression, at, bones, createRig, face, limb, prop, snapshotRest, up, type CharacterRig, type Face, type FingerPose } from './rig';
 
 export type BuildParams = {
   archetype: Archetype;
@@ -23,7 +23,7 @@ export type BuildParams = {
 export type Detail = 'full' | 'lite';
 /** Triangles (body, outline hulls) and draw calls for one character at its build pose. */
 export type CastStats = { base: number; outline: number; calls: number };
-export type Built = { root: THREE.Group; rig: CharacterRig; neutral: Face; tris: CastStats; dispose: () => void };
+export type Built = { root: THREE.Group; rig: CharacterRig; neutral: Face; traits: { shifty: boolean; dizzy: boolean }; tris: CastStats; dispose: () => void; /** Contact shadow (a child of the root, kept on the floor while animating). */ shadow?: THREE.Mesh };
 /** Segment scale for lite builds. */
 const LITE = 0.4;
 
@@ -95,8 +95,65 @@ function arm(c: Ctx, s: Side, S: V3, E: V3, H: V3, r: V3, o: ArmOpts = {}) {
     mesh(o, G.torus(0.09, PI * 2, 32, 8), sleeve, { p: [0, -L[0] * 0.18, 0], r: [PI / 2, 0, 0], s: r[0] * 1.32 });
   }
   if (o.cuff) mesh(chain[2], G.torus(0.32, PI * 2, 24, 8), o.cuff, { p: [0, -L[1] + r[1] * 0.25, 0], r: [PI / 2, 0, 0], s: r[1] * 1.05 });
-  if (r[2]) mesh(chain[3], G.sphere(), o.hand ?? c.skin, { s: [r[2], r[2] * 1.1, r[2] * 0.9] });
+  if (r[2]) {
+    mesh(chain[3], G.sphere(), o.hand ?? c.skin, { s: [r[2], r[2] * 1.1, r[2] * 0.9] });
+    handPoses(c, s, chain[3], r[2], o.hand ?? c.skin);
+  }
   return L;
+}
+
+/**
+ * Finger sets for one hand, each a hidden group (fist, point, middle, thumbs, palm, posh = middle + pinky).
+ * Fingers run along the hand's -y, on from the forearm, so raising the forearm raises the finger.
+ */
+function handPoses(c: Ctx, s: Side, hand: THREE.Object3D, hr: number, m: THREE.Material) {
+  const fr = hr * 0.27, y0 = -hr * 0.72;
+  const set = (pose: FingerPose, build: (g: THREE.Group) => void) => {
+    const g = new THREE.Group();
+    g.name = `hand${s}_${pose}`;
+    g.visible = false;
+    hand.add(g);
+    build(g);
+    g.traverse((o) => (o.userData.keep = true));
+    c.rig.hands[s][pose] = g;
+  };
+  const finger = (g: THREE.Group, x: number, len: number, tilt = 0, r = fr) => mesh(piece(g, [x, y0, 0], [0, 0, tilt]), G.capsule(r, len, 3, 10), m, { p: [0, -len / 2, 0] });
+  const knuckles = (g: THREE.Group, xs: number[]) => xs.forEach((x) => mesh(g, G.sphere(12, 8), m, { p: [x, y0 + fr * 0.3, fr * 0.45], s: fr * 1.05 }));
+  set('fist', (g) => knuckles(g, [-1.5, -0.5, 0.5, 1.5].map((k) => k * fr * 1.7)));
+  set('point', (g) => {
+    finger(g, -fr * 1.1, hr * 1.25);
+    knuckles(g, [fr * 0.7, fr * 2.3]);
+  });
+  set('middle', (g) => {
+    finger(g, 0, hr * 1.45);
+    knuckles(g, [-fr * 1.75, fr * 1.75]);
+  });
+  set('thumbs', (g) => {
+    finger(g, 0, hr * 0.75, 0, fr * 1.3);
+    knuckles(g, [-1.5, -0.5, 0.5, 1.5].map((k) => k * fr * 1.5));
+  });
+  set('palm', (g) => {
+    [-1.5, -0.5, 0.5, 1.5].forEach((k) => finger(g, k * fr * 1.9, hr * (0.95 - 0.12 * Math.abs(k)), k * 0.14));
+    finger(g, fr * 3.3, hr * 0.7, -0.9, fr * 1.15);
+  });
+  set('posh', (g) => {
+    finger(g, 0, hr * 1.45);
+    finger(g, fr * 2.4, hr * 0.85, -0.55, fr * 0.85);
+    knuckles(g, [-fr * 1.75]);
+  });
+}
+
+/** A part that appears or disappears: a hidden, uniquely named group (tog_<name>) registered on the rig. */
+function tog(c: Ctx, name: string, parent: THREE.Object3D, p: V3, build: (g: THREE.Group) => void, r: V3 = [0, 0, 0]) {
+  const g = new THREE.Group();
+  g.name = `tog_${name}`;
+  g.position.set(...p);
+  g.rotation.set(r[0], r[1], r[2], 'YXZ');
+  g.visible = false;
+  parent.add(g);
+  build(g);
+  g.traverse((o) => (o.userData.keep = true));
+  return (c.rig.toggles[name] = g);
 }
 
 /** Ring around a neck or waist (parent space), axis vertical. */
@@ -328,6 +385,22 @@ function accountant(c: Ctx): Result {
     pts.push(new THREE.Vector3(-0.42 * w - 0.14 * d - 0.12 * Math.sin(d * 2.2), 0.006 + r * (1 - Math.cos(a)), 0.12 - 0.55 * d - r * Math.sin(a)));
   }
   mesh(prop(rig, 'receipt', rig.root), c.own(ribbon(pts, 0.1)), receiptMat(), { outline: false });
+  // Gag parts: the receipt spooling out wildly, the mummy wrap when it faints, a neatly torn strip.
+  tog(c, 'spool', rig.torso, [0, 0, 0], (g) => {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 120; i++) {
+      const t = i / 120, a = t * PI * 7, r = 0.42 + 0.25 * t;
+      pts.push(new THREE.Vector3(Math.sin(a) * r * w, 0.1 + t * 1.0 + 0.08 * Math.sin(a * 3), Math.cos(a) * r * 0.85));
+    }
+    mesh(g, c.own(ribbon(pts, 0.09)), receiptMat(), { outline: false });
+  });
+  tog(c, 'mummy', rig.torso, [0, 0, 0], (g) => {
+    for (let i = 0; i < 6; i++) {
+      const y = 0.05 + i * 0.14, r = profileR(PEAR, y) + 0.02;
+      mesh(g, G.torus(0.09, PI * 2, 40, 6), toon('#f4efe2'), { p: [0, y, 0], r: [PI / 2 + (i % 2 ? 0.12 : -0.12), 0, 0], s: [r * w, r * 0.85, r] });
+    }
+  });
+  tog(c, 'tornStrip', rig.handR, [0, -0.08, 0.02], (g) => sheet(g, [0, 0, 0], [0, 0, 0], 0.06, 0.16, 6));
   sweat(c, rig.head, [[0.23, 0.08, 0.1], [0.22, 0.0, 0.13]]);
   return { neutral: { brow: [0.18, -0.22], lid: 0.9, mouthW: 0.62, frown: 0.12, look: [0, -0.04] }, shadow: [0, 0.1, 0.45 * w, 0.42] };
 }
@@ -394,6 +467,11 @@ function clerk(c: Ctx): Result {
     for (let d = 0.03; d <= drop; d += 0.03) pts.push(new THREE.Vector3(0.235 + 0.01 * Math.sin(d * 8), 0.12 - d, 0.02 + 0.02 * Math.sin(d * 5)));
     mesh(disp, c.own(ribbon(pts, 0.065)), receiptMat(), { outline: false });
   }
+  // Gag parts: a ticket that falls off the tray, and the paper pile it collapses into.
+  at(tog(c, 'ticket', rig.root, [0, 0, 0], (g) => sheet(g, [0, 0, 0], [-PI / 2, 0, 0], 0.14, 0.1, 3)), [0.06, 1.66, 0.08]);
+  tog(c, 'paperPile', rig.root, [0, 0, 0.05], (g) => {
+    for (let i = 0; i < 14; i++) sheet(g, [(rnd(i) - 0.5) * 0.5, 0.01 + i * 0.012, (rnd(i + 3) - 0.5) * 0.3], [-PI / 2 + (rnd(i + 5) - 0.5) * 0.3, rnd(i + 7) * PI, 0], 0.27, 0.2, 3);
+  });
   sweat(c, rig.head, [[0.16, 0.07, 0.12]]);
   return { neutral: { lid: 0.32, brow: [-0.15, 0.02], pupil: 0.8, frown: 0.15, mouthW: 0.9 }, shadow: [0, 0.03, 0.3 * w, 0.25] };
 }
@@ -595,6 +673,33 @@ function hoarder(c: Ctx): Result {
   }
   tubeIn(c, rig.torso, [[0.24, 1.7, -0.28], [0.15, 1.5, 0.2], [0.02, 1.43, 0.37], [-0.17, 1.42, 0.31], [-0.27, 1.32, 0.12]], 0.028, strapM, { segs: 40, radial: 8 });
   for (const s of SIDES) arm(c, s, [X(s, 0.24 * w), 0.98, 0.1], [X(s, 0.34 * w), 0.78, 0.22], [X(s, 0.16 * w), 0.86, 0.33], [0.06, 0.055, 0.06]);
+  // Gag parts: the heap it gets buried under, things it points with or adds, a duck that keeps falling out.
+  tog(c, 'pile', rig.root, [0, 0, 0.1], (g) => {
+    const cols = [cardboard, '#ff7a1a', '#b98e5e', C.paper, '#4b5560', '#f4c430', '#7f8f6a', C.canvas];
+    for (let i = 0; i < 16; i++) {
+      const a = rnd(i) * PI * 2, r = 0.15 + rnd(i + 1) * 0.35;
+      mesh(g, G.rbox(0.18 + rnd(i + 2) * 0.16, 0.14 + rnd(i + 3) * 0.12, 0.16 + rnd(i + 4) * 0.12, 0.02, 1), toon(cols[i % cols.length]), { p: [Math.cos(a) * r, 0.08 + i * 0.045, Math.sin(a) * r * 0.7], r: [rnd(i + 6) - 0.5, rnd(i + 7) * 3, rnd(i + 8) - 0.5] });
+    }
+    mesh(piece(g, [0.05, 0.98, 0.05], [0.2, 0, -0.3]), G.cyl(0.12), toon('#ff7a1a'), { s: [0.12, 0.42, 0.12] });
+  });
+  tog(c, 'heldCone', rig.handR, [0, -0.1, 0], (g) => {
+    mesh(g, G.cyl(0.12), toon('#ff7a1a'), { p: [0, -0.15, 0], r: [PI, 0, 0], s: [0.08, 0.3, 0.08] });
+    mesh(g, G.cyl(0.6), toon(C.white), { p: [0, -0.12, 0], r: [PI, 0, 0], s: [0.058, 0.05, 0.058], outline: false });
+  });
+  tog(c, 'heldLamp', rig.handR, [0, -0.04, 0], (g) => {
+    mesh(g, G.cyl(1, 12), metal(), { p: [0, -0.18, 0], s: [0.012, 0.36, 0.012] });
+    mesh(g, G.cyl(0.55, 24), toon(C.paper), { p: [0, -0.38, 0], r: [PI, 0, 0], s: [0.12, 0.13, 0.12] });
+  });
+  tog(c, 'newItem', rig.handL, [0, -0.1, 0.02], (g) => {
+    mesh(g, G.cyl(0.75, 16), toon('#c96f45'), { s: [0.07, 0.09, 0.07] });
+    for (let i = 0; i < 3; i++) mesh(g, G.sphere(), toon('#5aa14a'), { p: [(i - 1) * 0.04, -0.09, 0], s: 0.045 });
+  });
+  const duck = tog(c, 'fallingDuck', rig.root, [0, 0, 0], (g) => {
+    mesh(g, G.sphere(), toon('#f4c430', { gloss: true }), { s: [0.1, 0.075, 0.085] });
+    mesh(g, G.sphere(), toon('#f4c430', { gloss: true }), { p: [0, 0.08, 0.05], s: 0.055 });
+    mesh(g, G.rbox(0.04, 0.016, 0.032, 0.006, 1), toon('#ff7a1a'), { p: [0, 0.075, 0.108], outline: false });
+  });
+  at(duck, [0.32 * bs, 0.38 + Hp, -0.2]);
   sweat(c, rig.head, [[0.19, 0.08, 0.1]]);
   return { neutral: { lid: 0.5, brow: [0.12, -0.06], smile: 0.6, mouthW: 0.85 }, shadow: [0, -0.3, 0.75 * bs, 0.75] };
 }
@@ -634,7 +739,8 @@ function inspector(c: Ctx): Result {
   at(rig.neck, B);
   up(rig.neck, [Hc[0] - B[0], Hc[1] - B[1], Hc[2] - B[2]]);
   const nl = Math.hypot(Hc[0] - B[0], Hc[1] - B[1], Hc[2] - B[2]) - 0.1;
-  mesh(rig.neck, G.capsule(0.06, nl, 6, 20), c.body, { p: [0, nl / 2, 0] });
+  // The tube is its own prop so the neck can stretch (scale y) while the head just moves along it.
+  mesh(prop(rig, 'neckTube', rig.neck), G.capsule(0.06, nl, 6, 20), c.body, { p: [0, nl / 2, 0] });
   ring(rig.neck, [0, 0.03, 0], 0.085, 0.085, c.trim, 0.3);
   at(rig.head, Hc);
   aim(rig.head, [-0.05, 0.28, 0.16]);
@@ -675,6 +781,16 @@ function inspector(c: Ctx): Result {
     sheet(g, [0, -0.01, 0.008], [0, 0, 0], 0.17, 0.22, 6);
     for (let i = 0; i < 6; i++) mesh(g, G.box(), flat(i % 3 === 1 ? '#3a8a4a' : '#7d7a73'), { p: [0.065, 0.06 - i * 0.028, 0.012], s: [0.012, 0.012, 0.002], outline: false });
     mesh(g, G.rbox(0.07, 0.03, 0.02, 0.006, 2), metal(), { p: [0, 0.125, 0.012] });
+  });
+  // Magnifier held over its own eye while the neck goes the distance.
+  tog(c, 'headLens', rig.head, [-0.075, 0.0, 0.26], (g) => {
+    mesh(g, G.torus(0.14, PI * 2, 48, 10), metal(), { s: 0.11 });
+    mesh(g, G.disc(), glow('#dff2ff', 0.3), { s: 0.1, fx: true });
+    mesh(g, G.cyl(0.9, 16), wood(), { p: [0.0, -0.17, -0.02], s: [0.022, 0.13, 0.022] });
+  });
+  tog(c, 'tick', rig.props.clipboard, [0.03, 0.02, 0.016], (g) => {
+    mesh(g, G.box(), flat('#2f8a3e'), { p: [-0.018, -0.008, 0], r: [0, 0, 0.8], s: [0.035, 0.012, 0.003] });
+    mesh(g, G.box(), flat('#2f8a3e'), { p: [0.012, 0.012, 0], r: [0, 0, -0.9], s: [0.07, 0.012, 0.003] });
   });
   sweat(c, rig.head, [[0.17, 0.08, 0.09]]);
   return { neutral: { browL: [-0.32, 0.42], browR: [0.12, 0.3], lidL: 0.28, lidR: 1.02, pupil: 0.72, mouthW: 0.7, frown: 0.2 }, shadow: [0, 0.12, 0.38 * w, 0.42] };
@@ -791,6 +907,16 @@ function junkDrawer(c: Ctx): Result {
   const n = Math.min(7, Math.max(2, c.s.fileCount));
   c.bake(prop(rig, 'drawerItems', rig.head), (g) => (c.v ? utensils : main).slice(0, n).forEach((f) => f(g)));
   for (const s of SIDES) arm(c, s, [X(s, W / 2 + 0.02), 0.37 + H * 0.55, 0.05], [X(s, W / 2 + 0.13), 0.37 + H * 0.4, 0.1], [X(s, W / 2 + 0.14), 0.37 + H * 0.2, 0.17], [0.035, 0.032, 0.045], { sleeve: null });
+  tog(c, 'thrownKey', rig.head, [-0.27 * w, 0.36, -0.16], (g) => {
+    const brass = toon('#c9a54a', { gloss: true });
+    mesh(g, G.torus(0.28, PI * 2, 24, 8), brass, { p: [0, 0.06, 0], s: 0.05 });
+    mesh(g, G.rbox(0.02, 0.24, 0.008, 0.003, 1), brass, { p: [0, -0.08, 0] });
+    for (const y of [-0.16, -0.19]) mesh(g, G.box(), brass, { p: [0.016, y, 0], s: [0.022, 0.016, 0.008] });
+  });
+  tog(c, 'spring', rig.head, [0.05, -0.1, -0.15], (g) => {
+    mesh(g, c.own(tube((t) => [Math.cos(t * PI * 14) * 0.045, t * 0.42, Math.sin(t * PI * 14) * 0.045], 0.007, 160, 5)), metal());
+    mesh(g, G.sphere(), toon('#d9473a', { gloss: true }), { p: [0, 0.45, 0], s: 0.04 });
+  });
   sweat(c, rig.head, [[0.33, 0.24, 0.05]]);
   return { neutral: { look: [-0.45, -0.32], brow: [0.25, -0.32], lid: 0.72, frown: 0.32, mouthW: 0.8 }, shadow: [0, 0.05, 0.62 * w, 0.5] };
 }
@@ -870,6 +996,7 @@ function plumber(c: Ctx): Result {
       }
     }
   });
+  pipeGroup.userData.leaks = [0.22, 0.5, 0.78].map((u) => curve.getPointAt(u).toArray());
   // Tiny bucket catching the drip.
   const tip: V3 = pipe[pipe.length - 1];
   rig.torso.updateWorldMatrix(true, false);
@@ -907,6 +1034,9 @@ function plumber(c: Ctx): Result {
       mesh(g, G.lathe('plungerCup', [[0.03, 0], [0.09, 0.02], [0.15, 0.08], [0.17, 0.17], [0.155, 0.18]], 32), toon('#4a2f2f', { gloss: true, double: true }), { p: [0, 1.32, 0] });
     }
   });
+  tog(c, 'patch', rig.torso, surf(-0.25, 0.42, 0.012), (g) => {
+    for (const r of [0.6, -0.6]) tape(g, [0, 0, 0], [0, 0, r], 0.12, 0.035, tapeColor);
+  }, [0, -0.25, 0]);
   sweat(c, rig.head, [[0.2, 0.06, 0.1]]);
   return { neutral: { lid: 0.52, brow: [-0.05, 0.06], mouthW: 0.85, smile: 0.1 }, shadow: [0, 0.05, 0.5 * w, 0.45] };
 }
@@ -933,11 +1063,14 @@ function star(c: Ctx): Result {
   mesh(rig.head, G.sphere(), gloss, { p: [-0.15, 0.065, 0.15], s: [0.014, 0.012, 0.01], outline: false });
   face(rig, { r: hr, eyeX: 0.085, eyeY: 0, eyeW: 0.045, eyeH: 0.055, mouthY: -0.1, mouthW: 0.08, skin: shiny, iris: c.iris });
   // Spotlight and sparkles (light effects: no outline, hidden in silhouette mode).
+  // The spotlight hangs from its top (2.8 up), so it can swing onto anything; the cone points down its -y.
   const fx = prop(rig, 'spotlight', rig.root);
-  mesh(fx, G.cyl(0.07, 40, true), glow('#fff3c4', 0.13), { p: [0, 1.4, 0.05], s: [0.62, 2.8, 0.62], fx: true });
-  mesh(fx, G.disc(48), glow('#fff3c4', 0.35), { p: [0, 0.004, 0.05], r: [-PI / 2, 0, 0], s: 0.62, fx: true });
+  fx.position.set(0, 2.8, 0.05);
+  mesh(fx, G.cyl(0.07, 40, true), glow('#fff3c4', 0.13), { p: [0, -1.4, 0], s: [0.62, 2.8, 0.62], fx: true });
+  mesh(fx, G.disc(48), glow('#fff3c4', 0.35), { p: [0, -2.796, 0], r: [-PI / 2, 0, 0], s: 0.62, fx: true });
+  const sparkles = prop(rig, 'sparkles', rig.root);
   for (const [x, y, z, k] of [[0.42, 1.62, 0.25, 1], [-0.38, 1.25, 0.3, 0.8], [0.3, 0.95, 0.35, 0.6], [-0.22, 1.72, 0.2, 0.7], [0.12, 1.85, 0.15, 0.5]]) {
-    for (const s of [[0.012, 0.055, 0.012], [0.055, 0.012, 0.012]] as V3[]) mesh(fx, G.sphere(4, 2), flat(gold), { p: [x * w, y, z], s: s.map((v) => v * k) as V3, fx: true });
+    for (const s of [[0.012, 0.055, 0.012], [0.055, 0.012, 0.012]] as V3[]) mesh(sparkles, G.sphere(4, 2), flat(gold), { p: [x * w, y, z], s: s.map((v) => v * k) as V3, fx: true });
   }
   arm(c, 'R', [-0.29 * w, 1.12, 0.05], [-0.5 * w, 0.92, -0.02], [-0.31 * w, 0.82, 0.1], [0.058, 0.053, 0.058], { m1: shiny }); // hand on hip
   arm(c, 'L', [0.29 * w, 1.12, 0.05], [0.47 * w, 0.98, 0.18], [0.4 * w, 1.24, 0.32], [0.058, 0.053, 0.058], { m1: shiny });
@@ -1005,12 +1138,14 @@ function librarian(c: Ctx): Result {
   // Stack height grows with lines (ModuleStats has no separate doc-line count).
   const n = 5 + Math.round(4 * c.size);
   let y = 0;
+  for (let i = 0; i < n; i++) {
+    const t = 0.15 + 0.045 * rnd(i);
+    const b = prop(rig, `book${i}`, rig.torso);
+    b.position.set((rnd(i + 5) - 0.5) * 0.08, y + t / 2, (rnd(i + 9) - 0.5) * 0.05);
+    c.bake(b, (g) => book(g, [0, 0, 0], (rnd(i + 3) - 0.5) * 0.42, (0.58 + 0.22 * rnd(i + 11)) * w, t, 0.42 + 0.12 * rnd(i + 23), i));
+    y += t;
+  }
   c.bake(rig.torso, (g) => {
-    for (let i = 0; i < n; i++) {
-      const t = 0.15 + 0.045 * rnd(i);
-      book(g, [(rnd(i + 5) - 0.5) * 0.08, y + t / 2, (rnd(i + 9) - 0.5) * 0.05], (rnd(i + 3) - 0.5) * 0.42, (0.58 + 0.22 * rnd(i + 11)) * w, t, 0.42 + 0.12 * rnd(i + 23), i);
-      y += t;
-    }
     for (const s of SIDES) mesh(g, G.puck(0.06, 0.02, 0.008), toon(C.woodDark), { p: [X(s, 0.13 * w), -0.008, 0] });
   });
   const top = 0.3 + y;
@@ -1066,6 +1201,15 @@ function librarian(c: Ctx): Result {
   });
   // No arms: the groups still exist, at the sides of the top of the stack.
   for (const s of SIDES) at(rig[`arm${s}`], [X(s, 0.36 * w), 0.3 + y * 0.8, 0]);
+  // No arms, so little paper-white hands pop out of the stack for gestures (white so they read against the covers).
+  const glove = toon(C.paper);
+  for (const s of SIDES) {
+    tog(c, s === 'R' ? 'popHand' : 'popHandL', rig[`hand${s}`], [0, 0, 0], (g) => mesh(g, G.sphere(), glove, { s: [0.05, 0.055, 0.045] }));
+    handPoses(c, s, rig[`hand${s}`], 0.05, glove);
+  }
+  // Projectiles: its heaviest book (dropped on heads) and a bookmark that tucks into a line.
+  tog(c, 'heavyBook', rig.root, [0, 0, 0], (g) => book(g, [0, 0, 0], 0, 0.5, 0.24, 0.38, 0));
+  tog(c, 'flyBookmark', rig.root, [0, 0, 0], (g) => mesh(g, G.rbox(0.045, 0.24, 0.006, 0.002, 1), toon('#c0392b'), {}));
   sweat(c, rig.head, [[0.28 * w, 0.1, 0.27]]);
   return { neutral: { look: [0, 0.42], brow: [0.42, -0.35], lid: 1.0, smile: 0.22, mouthW: 0.72 }, shadow: [0, 0, 0.45 * w, 0.38] };
 }
@@ -1156,6 +1300,35 @@ function landlord(c: Ctx): Result {
       for (let k = 0; k < 3; k++) mesh(o, G.box(), m, { p: [0.012, -0.13 - k * 0.018, 0], s: [0.012 + 0.008 * rnd(i * 3 + k), 0.01, 0.008], outline: false });
     }
   });
+  // Judge kit: a wig over the reading glasses, a toy blunderbuss with a BANG flag, a cannon; and the rent money.
+  tog(c, 'wig', rig.head, [0, 0.06, -0.01], (g) => {
+    const wig = toon('#f2f0ea'), curl = toon('#d9d5cb');
+    mesh(g, G.lid(), wig, { p: [0, 0.07, 0], s: [0.27, 0.22, 0.27] });
+    for (const sd of SIDES) for (let i = 0; i < 4; i++) mesh(g, G.torus(0.45, PI * 2, 16, 6), i % 2 ? curl : wig, { p: [X(sd, 0.25), 0.02 - i * 0.075, -0.02], r: [0, PI / 2, 0], s: 0.055 });
+    mesh(g, G.capsule(0.06, 0.14), wig, { p: [0, -0.06, -0.22], r: [0.3, 0, 0] });
+  });
+  tog(c, 'blunderbuss', rig.handR, [0, -0.02, 0], (g) => {
+    const brass = toon('#e3b23c', { gloss: true });
+    mesh(g, G.rbox(0.07, 0.24, 0.06, 0.02, 2), toon('#b8432f'), { p: [0, 0.08, -0.03], r: [0.25, 0, 0] });
+    mesh(g, G.cyl(1, 16), brass, { p: [0, -0.2, 0], s: [0.028, 0.42, 0.028] });
+    mesh(g, G.cyl(2.6, 20), toon('#e3b23c', { gloss: true, double: true }), { p: [0, -0.45, 0], r: [PI, 0, 0], s: [0.03, 0.12, 0.03] });
+    mesh(g, G.sphere(), toon('#d9473a'), { p: [0, 0.0, 0.05], s: 0.03 });
+  });
+  // The BANG flag pops up out of the muzzle on a pole; it turns to face the camera (userData.billboard).
+  const flag = tog(c, 'bangFlag', rig.handR, [0, -0.5, 0], (g) => {
+    mesh(g, G.cyl(1, 8), toon(C.wood), { p: [0, 0.16, 0], s: [0.01, 0.32, 0.01] });
+    mesh(g, G.box(), labelMat('BANG'), { p: [0.17, 0.25, 0], s: [0.32, 0.16, 0.006], outline: false });
+  });
+  flag.userData.billboard = true;
+  tog(c, 'cannon', rig.root, [0.85 * w, 0, 0.35], (g) => {
+    mesh(g, G.cyl(0.8, 24), toon('#2b2b2f', { gloss: true }), { p: [0, 0.24, 0], r: [0, 0, -1.2], s: [0.11, 0.55, 0.11] });
+    for (const z of [-0.12, 0.12]) mesh(piece(g, [0.04, 0.11, z], [PI / 2, 0, 0]), G.puck(0.11, 0.04, 0.012), wood());
+    mesh(g, c.own(tube((t) => [-0.2 - 0.06 * t, 0.16 + 0.1 * t, 0.03 * Math.sin(t * 6)], 0.006, 16, 4)), toon(C.black), { outline: false });
+  });
+  tog(c, 'money', rig.handR, [0, -0.08, 0.02], (g) => {
+    for (let i = 0; i < 5; i++) mesh(g, G.rbox(0.16, 0.012, 0.08, 0.003, 1), toon('#5fa865'), { p: [0, -i * 0.012, 0], r: [0, (rnd(i) - 0.5) * 0.2, 0] });
+    mesh(g, G.box(), toon('#f2e6c9'), { p: [0, -0.025, 0], s: [0.03, 0.07, 0.085] });
+  });
   sweat(c, rig.head, [[0.21, 0.07, 0.12]]);
   return { neutral: { lid: 0.36, brow: [-0.02, -0.12], browR: [0.14, -0.06], frown: 0.22, mouthW: 0.85, look: [0.12, 0] }, shadow: [-0.15, 0.1, 0.55 * w, 0.42] };
 }
@@ -1191,6 +1364,94 @@ function mergeSiblings(root: THREE.Object3D, keep: Set<THREE.Object3D>, owned: T
       list.forEach((m) => parent.remove(m));
     }
   }
+}
+
+// ---------- generic toggled parts: bump, bandage, soot, red face, ink ring, cartoon bum ----------
+/** The biggest (by bounding volume) mesh under `root`, skipping the given subtrees: a head or body shell. */
+function largest(root: THREE.Object3D, skip: Set<THREE.Object3D>) {
+  let best: THREE.Mesh | null = null, vol = 0;
+  const box = new THREE.Box3(), size = new THREE.Vector3();
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh) || o.userData.fx || within(o, skip)) return;
+    const v = box.setFromObject(o).getSize(size);
+    if (v.x * v.y * v.z > vol) [best, vol] = [o, v.x * v.y * v.z];
+  });
+  return best as THREE.Mesh | null;
+}
+/** Where a ray (in `space` coordinates) first hits `target`, in `space` coordinates. */
+function hit(target: THREE.Mesh, space: THREE.Object3D, from: V3, dir: V3) {
+  const o = space.localToWorld(new THREE.Vector3(...from)), d = new THREE.Vector3(...dir).transformDirection(space.matrixWorld);
+  const h = new THREE.Raycaster(o, d).intersectObject(target, false)[0];
+  return h ? space.worldToLocal(h.point.clone()) : null;
+}
+/** A copy of `shell` (in `space`), grown about its centre: soot and red-face overlays that fit any head shape. */
+function overlay(g: THREE.Group, shell: THREE.Mesh, space: THREE.Object3D, center: THREE.Vector3, grow: number, m: THREE.Material) {
+  g.position.copy(center);
+  g.scale.setScalar(grow);
+  const o = new THREE.Mesh(shell.geometry, m);
+  o.applyMatrix4(new THREE.Matrix4().makeTranslation(-center.x, -center.y, -center.z).multiply(space.matrixWorld.clone().invert().multiply(shell.matrixWorld)));
+  g.add(o);
+}
+function genericToggles(c: Ctx) {
+  const { rig } = c;
+  rig.root.updateMatrixWorld(true);
+  const parts = [rig.eyeL, rig.eyeR, rig.lidL, rig.lidR, rig.browL, rig.browR, rig.jaw, ...Object.values(rig.props), ...Object.values(rig.toggles)];
+  const head = largest(rig.head, new Set(parts));
+  if (head) {
+    const box = new THREE.Box3().setFromObject(head).applyMatrix4(rig.head.matrixWorld.clone().invert());
+    const ctr = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3()), R = Math.min(sz.x, sz.y);
+    const top = hit(head, rig.head, [ctr.x + sz.x * 0.12, box.max.y + 1, ctr.z + sz.z * 0.05], [0, -1, 0]) ?? new THREE.Vector3(ctr.x, box.max.y, ctr.z);
+    const front = (y: number, x = ctr.x) => hit(head, rig.head, [x, y, box.max.z + 1], [0, 0, -1]) ?? new THREE.Vector3(x, y, box.max.z);
+    tog(c, 'bump', rig.head, top.toArray() as V3, (g) => mesh(g, G.sphere(), c.skin, { s: [R * 0.15, R * 0.12, R * 0.15] }));
+    tog(c, 'plaster', rig.head, top.clone().add(new THREE.Vector3(R * 0.18, -R * 0.06, R * 0.12)).toArray() as V3, (g) => {
+      for (const r of [0.6, -0.6]) mesh(g, G.rbox(R * 0.32, R * 0.1, 0.01, 0.003, 1), toon('#efcfa6'), { r: [-0.5, 0, r] });
+    });
+    tog(c, 'bandage', rig.head, [ctr.x, ctr.y + sz.y * 0.18, ctr.z], (g) => {
+      mesh(g, G.torus(0.12, PI * 2, 40, 8), toon('#f7f4ee'), { r: [PI / 2, 0, 0], s: [sz.x * 0.49, sz.z * 0.49, sz.x * 0.49] });
+      const at2 = front(ctr.y + sz.y * 0.3, ctr.x - sz.x * 0.2).sub(new THREE.Vector3(ctr.x, ctr.y + sz.y * 0.18, ctr.z));
+      for (const r of [0.6, -0.6]) mesh(g, G.rbox(R * 0.3, R * 0.09, 0.008, 0.003, 1), toon('#efcfa6'), { p: [at2.x, at2.y, at2.z + 0.004], r: [0, 0, r] });
+    });
+    tog(c, 'soot', rig.head, [0, 0, 0], (g) => {
+      overlay(g, head, rig.head, ctr, 1.035, toon('#2e2925'));
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * PI * 2;
+        mesh(g, G.cyl(0, 8), toon('#1e1a17'), { p: [(top.x - ctr.x + Math.cos(a) * sz.x * 0.16) / 1.035, (top.y - ctr.y) / 1.035, (top.z - ctr.z + Math.sin(a) * sz.z * 0.16) / 1.035], r: [Math.sin(a) * 0.5, 0, -Math.cos(a) * 0.5], s: [R * 0.035, R * 0.16, R * 0.035] });
+      }
+    });
+    tog(c, 'redFace', rig.head, [0, 0, 0], (g) => overlay(g, head, rig.head, ctr, 1.025, toon('#ff2d20', { opacity: 0.35 })));
+    tog(c, 'ink', rig.head, front(ctr.y + sz.y * 0.26).add(new THREE.Vector3(0, 0, 0.005)).toArray() as V3, (g) => mesh(g, G.torus(0.2, PI * 2, 32, 6), toon('#26357a'), { s: [R * 0.14, R * 0.14, R * 0.05], outline: false }));
+  }
+  // Books are props but they are the Librarian's body.
+  const body = largest(rig.torso, new Set([rig.neck, rig.armL, rig.armR, ...parts.filter((o) => !o.name.startsWith('prop_book'))]));
+  if (body) {
+    const box = new THREE.Box3().setFromObject(body).applyMatrix4(rig.torso.matrixWorld.clone().invert());
+    const ctr = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
+    const r = Math.min(sz.x * 0.2, 0.12), y = box.min.y + sz.y * 0.2;
+    tog(c, 'bum', rig.torso, [0, 0, 0], (g) => {
+      for (const sd of SIDES) {
+        const back = hit(body, rig.torso, [ctr.x + X(sd, r * 0.85), y, box.min.z - 1], [0, 0, 1]) ?? new THREE.Vector3(ctr.x + X(sd, r * 0.85), y, box.min.z);
+        mesh(g, G.sphere(), toon(shade(c.color, 0.04)), { p: [back.x, back.y, back.z - r * 0.3], s: [r, r * 0.95, r * 0.85] });
+      }
+    });
+  }
+}
+
+/** Lite: collapse a toggled group (or finger set) into one mesh; several colours become vertex colours. Textured or see-through parts stay as they are. */
+function mergeGroupLit(group: THREE.Object3D, owned: THREE.BufferGeometry[]) {
+  const meshes: THREE.Mesh[] = [];
+  group.traverse((o) => o instanceof THREE.Mesh && meshes.push(o));
+  if (meshes.length < 2 || meshes.some((m) => (m.material as THREE.MeshBasicMaterial).map || (m.material as THREE.Material).transparent)) return;
+  group.updateMatrixWorld(true);
+  const inv = group.matrixWorld.clone().invert();
+  const same = new Set(meshes.map((m) => m.material)).size === 1;
+  const merged = mergeGeometries(meshes.map((m) => {
+    const g = coloured(m.geometry, inv.clone().multiply(m.matrixWorld), colourOf(m.material));
+    if (same) g.deleteAttribute('color');
+    return g;
+  }));
+  owned.push(merged);
+  meshes.forEach((m) => m.removeFromParent());
+  mesh(group, merged, same ? (meshes[0].material as THREE.Material) : toon('#ffffff', { vertex: true }), { outline: false, keep: true });
 }
 
 // ---------- lite finishing: few draw calls, same rig ----------
@@ -1276,7 +1537,9 @@ function mergeFx(root: THREE.Object3D, owned: THREE.BufferGeometry[]) {
 function skinLite(rig: CharacterRig, owned: THREE.BufferGeometry[], silhouette: boolean) {
   const boneList: THREE.Object3D[] = [...JOINTS.map((j) => rig[j] as THREE.Object3D), ...Object.values(rig.props)];
   const index = new Map(boneList.map((b, i) => [b, i]));
-  const separate = new Set<THREE.Object3D>([rig.mouthLine, rig.mouthOpen, ...SIDES.flatMap((s) => Object.values(rig.pupils[s]))]);
+  const separate = new Set<THREE.Object3D>([
+    rig.mouthLine, rig.mouthOpen, ...SIDES.flatMap((s) => [...Object.values(rig.pupils[s]), ...(Object.values(rig.hands[s]) as THREE.Object3D[])]), ...Object.values(rig.toggles),
+  ]);
   rig.root.updateMatrixWorld(true);
   const meshes: THREE.Mesh[] = [];
   rig.root.traverse((o) => o instanceof THREE.Mesh && meshes.push(o));
@@ -1334,7 +1597,9 @@ function build(p: BuildParams, lite: boolean): Built {
     own: (g) => (owned.push(g), g),
   };
   const { neutral, shadow } = BUILDERS[p.archetype](c);
-  if (!p.silhouette) mesh(rig.root, G.disc(), shadowMat(), { p: [shadow[0], 0.003, shadow[1]], r: [-PI / 2, 0, 0], s: [shadow[2] * 1.3, shadow[3] * 1.3, 1], fx: true });
+  genericToggles(c);
+  const contact = p.silhouette ? undefined : mesh(rig.root, G.disc(), shadowMat(), { p: [shadow[0], 0.003, shadow[1]], r: [-PI / 2, 0, 0], s: [shadow[2] * 1.3, shadow[3] * 1.3, 1], fx: true });
+  if (contact) contact.userData.rest = { p: contact.position.clone(), s: contact.scale.clone() };
 
   rig.root.updateMatrixWorld(true);
   if (lite) {
@@ -1345,6 +1610,7 @@ function build(p: BuildParams, lite: boolean): Built {
     mergeUnlit(rig.mouthOpen, owned);
     mergeFx(rig.root, owned);
     skinLite(rig, owned, !!p.silhouette);
+    for (const g of [...Object.values(rig.toggles), ...SIDES.flatMap((s) => Object.values(rig.hands[s]) as THREE.Object3D[])]) mergeGroupLit(g, owned);
   } else {
     const keep = new Set<THREE.Object3D>([rig.mouthLine, ...SIDES.flatMap((s) => Object.values(rig.pupils[s]))]);
     mergeSiblings(rig.root, keep, owned);
@@ -1377,5 +1643,5 @@ function build(p: BuildParams, lite: boolean): Built {
     count[o.userData.isHull ? 'outline' : 'base'] += tris(o.geometry);
     count.calls++;
   });
-  return { root: rig.root, rig, neutral, tris: count, dispose: () => owned.forEach((g) => g.dispose()) };
+  return { root: rig.root, rig, neutral, traits: { shifty: traits.shifty, dizzy: traits.dizzy }, tris: count, dispose: () => owned.forEach((g) => g.dispose()), shadow: contact };
 }
