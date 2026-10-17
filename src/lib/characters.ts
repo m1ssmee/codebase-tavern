@@ -135,3 +135,12 @@ export function toCharacters(modules: Module[], raw: RawCharacter[]): Character[
   const colors = assignColors(modules);
   return raw.map(({ title, ...r }) => ({ ...r, name: title, color: colors[r.moduleId] ?? PALETTE[0] }));
 }
+
+/**
+ * Module ids in batches of 2 (3 when the count is odd) for parallel persona calls, the big ones spread out (modules
+ * come largest first). Two modules is about 1,000 output tokens: one call finishes in well under 12s.
+ */
+export function personaBatches(ids: string[]): string[][] {
+  const k = Math.max(1, Math.floor(ids.length / 2));
+  return Array.from({ length: k }, (_, b) => ids.filter((_, i) => i % k === b));
+}

@@ -34,8 +34,29 @@ function buildTree(files: RepoFile[]): Node[] {
 }
 
 export default function TreePanel() {
-  const { repo, characters, moods, selectedModuleId, openFilePath, selectModule, openFile, smell } = useTavern();
+  const { repo, characters, moods, selectedModuleId, openFilePath, selectModule, openFile, smell, arrivals, personas } = useTavern();
   const reduced = useReducedMotion();
+  // Settling in: the placeholder's descriptor pulses until the AI persona lands, then the new one fades in.
+  const settle = (id: string, text: ReactNode) =>
+    reduced ? (
+      text
+    ) : arrivals[id] ? (
+      <motion.span key={arrivals[id]} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45 }} className="inline-block">
+        {text}
+      </motion.span>
+    ) : personas === 'pending' ? (
+      <span className="animate-pulse" title="Settling in">
+        {text}
+      </span>
+    ) : (
+      text
+    );
+  const hop = (id: string, face: ReactNode) =>
+    reduced || !arrivals[id] ? face : (
+      <motion.span key={arrivals[id]} className="inline-flex" initial={{ y: 0 }} animate={{ y: [0, -5, 0], scale: [1, 1.12, 1] }} transition={{ duration: 0.5 }}>
+        {face}
+      </motion.span>
+    );
 
   // Code smells on file open: >400 lines puffs a green cloud, nesting >= 6 turns the face green and wobbles it.
   const smelly = (id: string, face: ReactNode) => {
@@ -115,12 +136,12 @@ export default function TreePanel() {
               onClick={(e) => (e.stopPropagation(), toggle(n.path, !open))}
             />
             {mod ? (
-              smelly(mod.id, <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />)
+              smelly(mod.id, hop(mod.id, <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />))
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
             <span className={`truncate ${mod ? 'font-medium text-cream' : 'text-cream/80'}`}>{n.name}</span>
-            {char && <span className="ml-auto truncate text-xs text-muted">{descriptor(char.name)}</span>}
+            {char && <span className="ml-auto truncate text-xs text-muted">{settle(mod.id, descriptor(char.name))}</span>}
           </div>
           {open && (
             <div className="relative">
@@ -146,10 +167,10 @@ export default function TreePanel() {
               selectedModuleId === m.id ? 'bg-wood ring-1 ring-edge' : 'hover:bg-wood'
             }`}
           >
-            {smelly(m.id, <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />)}
+            {smelly(m.id, hop(m.id, <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />))}
             <span className="truncate font-medium text-cream">{m.name}</span>
             <span className="ml-auto truncate text-xs text-muted">
-              {characters[m.id] ? descriptor(characters[m.id].name) : `${m.stats.fileCount} files`}
+              {characters[m.id] ? settle(m.id, descriptor(characters[m.id].name)) : `${m.stats.fileCount} files`}
             </span>
           </button>
         ))}

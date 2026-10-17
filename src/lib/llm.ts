@@ -44,12 +44,12 @@ async function withTemperature<T>(p: Provider, temperature: number | undefined, 
 type Provider = { name: string; kind: 'gemini' | 'openai'; model: string };
 
 /** One line per call with its token counts (and, for OpenAI, its cost and today's total on this instance). */
-function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number, held?: Reservation) {
+function logUsage(label: string, p: Provider, input?: number, cached?: number, output?: number, held?: Reservation, reasoning?: number) {
   if (input === undefined) return;
   const usd = p.kind === 'openai' ? costOf(input, cached ?? 0, output ?? 0) : 0;
   const today = p.kind === 'openai' ? ` usd=${usd.toFixed(5)} today=${(held ? held.settle(usd) : openaiSpend.add(usd)).toFixed(4)}` : '';
   const share = input ? Math.round((100 * (cached ?? 0)) / input) : 0;
-  console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${today} cache=${share}%${p.kind === 'openai' ? ` key=${keys.current() ?? 'none'}` : ''}`);
+  console.info(`[llm] usage ${label} ${p.name} in=${input} cached=${cached ?? 0} out=${output ?? 0}${reasoning ? ` reasoning=${reasoning}` : ''}${today} cache=${share}%${p.kind === 'openai' ? ` key=${keys.current() ?? 'none'}` : ''}`);
 }
 export type Msg = { role: 'user' | 'assistant'; text: string };
 /** One provider attempt: who, how long to the first chunk (streams) and in total. Failed attempts are recorded too. */
@@ -190,7 +190,7 @@ export function llmStream(
       });
       chunks = (async function* () {
         for await (const c of res) {
-          if (c.usage) logUsage(label, p, c.usage.prompt_tokens, c.usage.prompt_tokens_details?.cached_tokens, c.usage.completion_tokens, held);
+          if (c.usage) logUsage(label, p, c.usage.prompt_tokens, c.usage.prompt_tokens_details?.cached_tokens, c.usage.completion_tokens, held, c.usage.completion_tokens_details?.reasoning_tokens);
           const ch = c.choices[0];
           if (ch?.delta?.content) yield ch.delta.content;
           else if (ch?.delta?.refusal || ch?.finish_reason === 'content_filter') throw new Blocked(p.name, ch.finish_reason ?? 'refusal');
@@ -227,7 +227,22 @@ export function llmStream(
  * Unparseable or off-schema output is retried once on the same provider, then falls through to the next one.
  * `temperature` overrides the shared setting (the comedy editor judges, it doesn't invent).
  */
-export function llmJSON<T>(label: string, opts: { system: string; dynamic?: string; prompt: string; schema: object; timeoutMs?: number; timings?: Timing[]; temperature?: number }): Promise<T> {
+export function llmJSON<T>(
+  label: string,
+  opts: {
+    system: string;
+    dynamic?: string;
+    prompt: string;
+    schema: object;
+    timeoutMs?: number;
+    timings?: Timing[];
+    temperature?: number;
+    /** OpenAI rate-limit retries on the same key (default 2): 0 for a hard deadline (no retries of any kind). */
+    retries?: number;
+    /** OpenAI: give up on one attempt after this long and retry once, on the same key (an attempt sometimes hangs). */
+    attemptMs?: number;
+  },
+): Promise<T> {
   const timeout = opts.timeoutMs ?? 40_000;
   const temp = opts.temperature ?? TEMPERATURE;
   return run(label, async (p) => {
@@ -268,13 +283,13 @@ export function llmJSON<T>(label: string, opts: { system: string; dynamic?: stri
             ],
             response_format: { type: 'json_schema', json_schema: { name: label.replace(/\W/g, '_'), strict: true, schema: opts.schema as Record<string, unknown> } },
           },
-          { timeout: Math.max(1000, deadline - Date.now()) },
-        )),
+          { timeout: Math.max(1000, Math.min(opts.attemptMs ?? Infinity, deadline - Date.now())) },
+        ), { label, attemptMs: opts.attemptMs, timeoutRetries: opts.attemptMs && opts.retries !== 0 ? 1 : 0, retries: opts.retries }),
       ).catch((err) => {
         held.refund();
         throw err;
       });
-      logUsage(label, p, res.usage?.prompt_tokens, res.usage?.prompt_tokens_details?.cached_tokens, res.usage?.completion_tokens, held);
+      logUsage(label, p, res.usage?.prompt_tokens, res.usage?.prompt_tokens_details?.cached_tokens, res.usage?.completion_tokens, held, res.usage?.completion_tokens_details?.reasoning_tokens);
       const ch = res.choices[0];
       if (!ch?.message.content || ch.message.refusal || ch.finish_reason === 'content_filter') throw new Blocked(p.name, ch?.finish_reason ?? 'no content');
       return ch.message.content;

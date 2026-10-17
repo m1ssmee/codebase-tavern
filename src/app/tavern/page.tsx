@@ -9,14 +9,14 @@ import { loadSavedDemo, summonRepo, useTavern } from '@/lib/store';
 
 const DEMO_URL = 'https://github.com/m1ssmee/quickcart';
 import { mockCharacters, mockRepo } from '@/lib/mockRepo';
-import { parseGitHubUrl } from '@/lib/analyze';
+import { capNote, CAP_REASON, parseGitHubUrl } from '@/lib/analyze';
 import TopBar from '@/components/TopBar';
 import TreePanel from '@/components/TreePanel';
 import CodePanel from '@/components/CodePanel';
 import ChatPanel from '@/components/ChatPanel';
 import TribunalPanel from '@/components/TribunalPanel';
 import WhatIfPanel from '@/components/WhatIfPanel';
-import SummonLoader from '@/components/SummonLoader';
+import TenantsLoader from '@/components/TenantsLoader';
 import CharacterFace from '@/components/CharacterFace';
 import dynamic from 'next/dynamic';
 
@@ -93,7 +93,7 @@ export default function TavernPage() {
     );
   }
 
-  if (!repo) return slug ? <SummonLoader what={slug} /> : null;
+  if (!repo) return slug ? <TenantsLoader what={slug} /> : null;
 
   const sk = repo.skipped;
   return (
@@ -111,6 +111,7 @@ export default function TavernPage() {
             ) : (
               'Skipped nothing.'
             )}
+            {sk.reasons[CAP_REASON] ? <span className="ml-2 font-display italic">The Landlord: &ldquo;{capNote(repo.files.length)}&rdquo;</span> : null}
           </span>
           <button type="button" onClick={() => setBannerHidden(true)} aria-label="Dismiss" className="ml-auto text-muted hover:text-cream">
             <X size={18} />

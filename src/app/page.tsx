@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, useReducedMotion } from 'framer-motion';
 import CharacterFace from '@/components/CharacterFace';
-import SummonLoader from '@/components/SummonLoader';
+import TenantsLoader from '@/components/TenantsLoader';
 import Stickman from '@/components/Stickman';
 import { loadSavedDemo, loadWithCharacters, summonRepo } from '@/lib/store';
 import { buildRepo, filterFiles, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
@@ -86,7 +86,7 @@ export default function Landing() {
     <main
       className="relative grid min-h-dvh flex-1 place-items-center overflow-hidden bg-white px-4 text-neutral-900 [--r:min(30vh,38vw)]"
     >
-      {loading && <SummonLoader what={loading} />}
+      {loading && <TenantsLoader what={loading} />}
 
       <p className="absolute left-[8%] top-1/2 hidden -translate-y-1/2 text-[15px] tracking-tight xl:block">Every module gets a voice.</p>
       <p className="absolute right-[8%] top-1/2 hidden -translate-y-1/2 font-display text-[17px] xl:block">

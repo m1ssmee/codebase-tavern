@@ -1,11 +1,14 @@
 import { create } from 'zustand';
 import type { Character, ChatMessage, Citation, ExplainMode, Mood, Repo, RepoFile, SpiceLevel } from './types';
 import type { RoastCard } from './roast';
-import { buildRepo, entryFile, nesting } from './analyze';
+import { buildRepo, entryFile, nesting, parseGitHubUrl } from './analyze';
 import { affectedBy, buildGraph, dependenciesOf, dependentsOf, type Graph } from './graph';
 import { buildingFacts, tourOrder } from './landlord';
-import { toCharacters, toRaw, type RawCharacter } from './characters';
+import { fallbackCharacter, personaBatches, toCharacters, toRaw, type RawCharacter } from './characters';
+import { idbGet, idbSet } from './idb';
+import type { Module } from './types';
 import demoCharacters from '@/data/demoCharacters.json';
+import { useStage } from '@/components/stage/store';
 
 /** One hop of a ripple: `up` travels from `via` to a module that imports or calls it, `down` from `via` to a module it calls. */
 export type RippleStep = { id: string; hops: number; via: string; dir: 'up' | 'down' };
@@ -43,9 +46,16 @@ type TavernState = {
   whatIf: { id: number; change: WhatIfChange } | null; // right panel in What-if mode
   whatIfDiff: { path: string; before: string; after: string }[] | null; // the previewed change, for the diff view
   bubbles: Record<string, string>; // speech bubbles over map nodes
+  /** The loading show while a repo downloads: the real steps so far, then the tenants once modules are known. */
+  ingest: { slug: string; steps: string[]; tenants: Module[] | null } | null;
+  /** 'pending' while AI personas are still coming in (the cast shows template placeholders until then). */
+  personas: 'pending' | 'done';
+  arrivals: Record<string, number>; // when each module's AI persona replaced its placeholder (the settling-in animation)
 
   loadRepo: (repo: Repo) => void;
   setCharacters: (characters: Character[]) => void;
+  /** AI personas arriving for some modules: replaces their placeholders, an untouched greeting included. */
+  mergeCharacters: (characters: Character[]) => void;
   selectModule: (moduleId: string | null) => void;
   openFile: (path: string) => void;
   highlightCitation: (c: Citation) => void;
@@ -113,6 +123,9 @@ export const useTavern = create<TavernState>()((set, get) => {
     whatIf: null,
     whatIfDiff: null,
     bubbles: {},
+    ingest: null,
+    personas: 'done',
+    arrivals: {},
 
     // Modules come sorted by size, so [0] is the largest; open its most important file.
     loadRepo: (repo) =>
@@ -131,6 +144,7 @@ export const useTavern = create<TavernState>()((set, get) => {
         characters: {},
         moods: {},
         chats: {},
+        arrivals: {},
         selectedModuleId: repo.modules[0]?.id ?? null,
         highlight: null,
         tribunal: false,
@@ -142,6 +156,31 @@ export const useTavern = create<TavernState>()((set, get) => {
       // First visit to this repo: open the Diagram tab on the Landlord's tour (the chat greeting waits).
       if (!tourSeen(get().repo)) return set({ tourOn: true, view: 'diagram' });
       greet(get().selectedModuleId);
+    },
+    mergeCharacters: (list) => {
+      const now = Date.now();
+      set((s) => {
+        const characters = { ...s.characters };
+        const chats = { ...s.chats };
+        const arrivals = { ...s.arrivals };
+        for (const c of list) {
+          const old = characters[c.moduleId];
+          const thread = chats[c.moduleId];
+          // Nobody answered the placeholder's greeting yet: the new character says its own.
+          if (old && thread?.length === 1 && thread[0].role === 'character' && thread[0].text === old.greeting) chats[c.moduleId] = [{ ...thread[0], text: c.greeting }];
+          characters[c.moduleId] = c;
+          arrivals[c.moduleId] = now;
+        }
+        return { characters, chats, arrivals };
+      });
+      // Settling in: a brief happy beat on every face, 2D or 3D, unless it's busy with something else (talking, or on
+      // stage pointing at a line or in a scene).
+      for (const c of list) {
+        const id = c.moduleId;
+        if ((get().moods[id] ?? 'idle') !== 'idle' || useStage.getState().busy[id]) continue;
+        get().setMood(id, 'happy');
+        setTimeout(() => get().moods[id] === 'happy' && get().setMood(id, 'idle'), 1400);
+      }
     },
     selectModule: (selectedModuleId) => {
       set({ selectedModuleId });
@@ -229,47 +268,101 @@ export function rememberTour(repo: Repo | null) {
   }
 }
 
-type IngestResponse = { name: string; url: string; branch: string; files: RepoFile[]; skipped: Repo['skipped']; error?: string };
+type IngestPayload = { name: string; url: string; branch: string; sha?: string; key?: string; files: RepoFile[]; skipped: Repo['skipped'] };
+type Event = { type: 'step'; step: string } | { type: 'repo'; repo: IngestPayload } | { type: 'same'; key: string } | { type: 'error'; error: string };
+
+const CONNECTION = "Couldn't reach the server. Check your connection and try again.";
+const WALK_IN_MS = 1200; // the tenants walking in, after the download and before the tavern opens
+const mark = (name: string) => {
+  try {
+    performance.mark(name);
+  } catch {
+    // marks are for measuring only
+  }
+};
+
+async function* events(body: ReadableStream<Uint8Array>): AsyncGenerator<Event> {
+  const reader = body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    buf += dec.decode(value, { stream: !done });
+    for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (line.trim()) yield JSON.parse(line) as Event;
+    }
+    if (done) return;
+  }
+}
+
+class Refused extends Error {} // GitHub or the server said no, in character: not worth falling back to a cached copy
 
 const inflight = new Map<string, Promise<Repo>>();
 
-/** Fetch a GitHub repo via /api/ingest, analyse it client-side, load it. Throws Error(in-character message). */
+/**
+ * Fetch a GitHub repo via /api/ingest (streamed progress for the loading show), analyse it here, then open the
+ * tavern at once with template placeholders while the AI personas stream in. A repeat visit in this browser uses
+ * the IndexedDB copy if the repo's commit hasn't changed. Throws Error(in-character message).
+ */
 export function summonRepo(input: string): Promise<Repo> {
   // Dedupe concurrent calls (React StrictMode runs effects twice in dev).
   let p = inflight.get(input);
   if (!p) {
     p = (async () => {
-      const res = await fetch('/api/ingest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: input }),
-      }).catch(() => null);
-      const data: IngestResponse | null = await res?.json().catch(() => null);
-      if (!res?.ok || !data?.files) throw new Error(data?.error ?? "Couldn't reach the server. Check your connection and try again.");
-      const repo = { ...buildRepo(data.name, data.files, data.url), branch: data.branch, skipped: data.skipped };
-      await loadWithCharacters(repo);
+      const slug = parseGitHubUrl(input)?.slug ?? input;
+      mark('tavern:summon');
+      useTavern.setState({ ingest: { slug, steps: [], tenants: null } });
+      const step = (t: string) => useTavern.setState((s) => (s.ingest ? { ingest: { ...s.ingest, steps: [...s.ingest.steps, t] } } : {}));
+      const cached = await idbGet<{ key: string; payload: IngestPayload }>(`repo:${slug}`);
+      let data: IngestPayload | null = null;
+      try {
+        const res = await fetch('/api/ingest', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: input, known: cached?.key }) });
+        if (!res.ok || !res.body) throw new Refused((await res.json().catch(() => null))?.error ?? CONNECTION);
+        for await (const e of events(res.body)) {
+          if (e.type === 'step') step(e.step);
+          else if (e.type === 'repo') data = e.repo;
+          else if (e.type === 'same' && cached) {
+            step('Same building as your last visit');
+            data = cached.payload;
+          } else if (e.type === 'error') throw new Refused(e.error);
+        }
+      } catch (err) {
+        if (err instanceof Refused || !cached) throw new Error(err instanceof Refused ? err.message : CONNECTION);
+        step("Can't reach GitHub. Using your last visit");
+        data = cached.payload;
+      }
+      if (!data?.files) throw new Error(CONNECTION);
+      if (data.key && data !== cached?.payload) void idbSet(slug, `repo:${slug}`, { key: data.key, payload: data });
+      mark('tavern:downloaded');
+      const repo: Repo = { ...buildRepo(data.name, data.files, data.url), branch: data.branch, skipped: data.skipped, key: data.key };
+      useTavern.setState((s) => ({ ingest: s.ingest && { ...s.ingest, tenants: repo.modules, steps: [...s.ingest.steps, `Found ${repo.modules.length} ${repo.modules.length === 1 ? 'tenant' : 'tenants'}`] } }));
+      await new Promise((r) => setTimeout(r, reduced() ? 300 : WALK_IN_MS));
+      loadInstant(repo);
       return repo;
-    })().finally(() => inflight.delete(input));
+    })().finally(() => {
+      inflight.delete(input);
+      useTavern.setState({ ingest: null });
+    });
     inflight.set(input, p);
   }
   return p;
 }
+const reduced = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const savedLandlord = (demoCharacters as { landlord?: Landlord }).landlord ?? null;
 
-/**
- * Characters (and the Landlord's tour lines) for every module in one /api/characters call; any failure falls back
- * to stat templates. Never throws.
- */
-export async function generateCharacters(repo: Repo): Promise<{ characters: Character[]; landlord: Landlord | null }> {
+/** What every /api/characters batch sends: each module with its key files and links, plus the repo-wide facts. */
+function personaRequest(repo: Repo) {
   const byPath = new Map(repo.files.map((f) => [f.path, f.content]));
   const modules = repo.modules.map((m) => ({
     ...m,
-    filePaths: m.filePaths.slice(0, 40),
+    filePaths: m.filePaths.slice(0, 20),
     keyFiles: [...new Set([entryFile(m), m.stats.biggestFile.path])]
       .filter((p): p is string => !!p && byPath.has(p))
       .slice(0, 2)
-      .map((p) => ({ path: p, head: byPath.get(p)!.split('\n', 40).join('\n') })),
+      .map((p) => ({ path: p, head: byPath.get(p)!.split('\n', 24).join('\n') })),
   }));
   // Graph facts for the Landlord's lines: who leans on whom (imports and calls), the tour order, the notable modules.
   const g = buildGraph(repo.files, repo.modules);
@@ -294,38 +387,88 @@ export async function generateCharacters(repo: Repo): Promise<{ characters: Char
       uses: dependenciesOf(g, m.id).map((e) => link(e, e.to)),
     },
   }));
-  let raw: RawCharacter[] = [];
-  let landlord: Landlord | null = null;
-  let live = false;
-  try {
-    const s = useTavern.getState();
-    const res = await fetch('/api/characters', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repoName: repo.name, modules: withLinks, building, spice: s.spice, mode: s.mode }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    const data = await res.json();
-    raw = data.characters ?? [];
-    landlord = data.landlord?.intro && data.landlord?.outro ? { intro: String(data.landlord.intro), outro: String(data.landlord.outro) } : null;
-    live = data.source === 'llm';
-  } catch {
-    // network/timeout: toRaw below fills every module from templates
-  }
-  // Demo safety: on the demo repo, a failed generation uses the saved cast instead of stat templates.
-  if (!live && repo.url?.includes('/quickcart') && demoCharacters.characters.length) {
-    raw = demoCharacters.characters as RawCharacter[];
-    landlord = savedLandlord;
-  }
-  return { characters: toCharacters(repo.modules, toRaw(repo.modules, raw)), landlord };
+  const s = useTavern.getState();
+  return { repoName: repo.name, modules: withLinks, building, spice: s.spice, mode: s.mode };
 }
 
-/** Runs while the loading screen is up: characters first, then load, so the tavern opens fully populated. */
+/**
+ * The AI personas, in parallel batches of 2-3 modules (one also writes the Landlord's intro and outro). Each
+ * batch replaces its placeholders the moment it lands; a failed batch keeps them (on the demo repo, the saved
+ * cast instead). Cached in IndexedDB per commit, spice and mode. Never throws.
+ */
+async function streamPersonas(repo: Repo) {
+  const s0 = useTavern.getState();
+  const alive = () => useTavern.getState().repo === repo;
+  const arrive = (raw: RawCharacter[]) => {
+    const ids = new Set(raw.map((r) => r.moduleId));
+    if (alive() && ids.size) useTavern.getState().mergeCharacters(toCharacters(repo.modules, toRaw(repo.modules, raw).filter((c) => ids.has(c.moduleId))));
+  };
+  const finish = () => {
+    if (!alive()) return;
+    mark('tavern:personas');
+    useTavern.setState({ personas: 'done' });
+  };
+  const cacheKey = repo.key && `personas:${repo.key}|${s0.spice}|${s0.mode}`;
+  const hit = cacheKey ? await idbGet<{ characters: RawCharacter[]; landlord: Landlord | null }>(cacheKey) : undefined;
+  if (hit?.characters?.length) {
+    arrive(hit.characters);
+    if (alive() && hit.landlord) useTavern.getState().setLandlord(hit.landlord);
+    return finish();
+  }
+  const isDemo = !!repo.url?.includes('/quickcart');
+  const body = personaRequest(repo);
+  const got: RawCharacter[] = [];
+  let landlord: Landlord | null = null;
+  let allLive = true;
+  await Promise.all(
+    personaBatches(repo.modules.map((m) => m.id)).map(async (ids, i) => {
+      let raw: RawCharacter[] = [];
+      let live = false;
+      // The first batch warms OpenAI's prompt cache; the rest follow 0.7s later and pay the cached rate for the shared prompt.
+      if (i) await new Promise((r) => setTimeout(r, 700));
+      try {
+        const res = await fetch('/api/characters', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, write: ids, landlord: i === 0 }),
+          signal: AbortSignal.timeout(40_000),
+        });
+        const data = await res.json();
+        raw = (data.characters ?? []).filter((c: RawCharacter) => ids.includes(c?.moduleId));
+        live = data.source === 'llm';
+        if (i === 0 && data.landlord?.intro && data.landlord?.outro) landlord = { intro: String(data.landlord.intro), outro: String(data.landlord.outro) };
+      } catch {
+        // network/timeout: the placeholders stay
+      }
+      // Demo safety: on the demo repo, a failed batch uses the saved cast instead of the stat templates.
+      if (!live && isDemo) {
+        raw = (demoCharacters.characters as RawCharacter[]).filter((c) => ids.includes(c.moduleId));
+        if (i === 0) landlord = savedLandlord;
+      }
+      allLive &&= live;
+      got.push(...raw);
+      if (live || isDemo) arrive(raw);
+      if (i === 0 && landlord && alive()) useTavern.getState().setLandlord(landlord);
+    }),
+  );
+  finish();
+  if (allLive && cacheKey) void idbSet(repo.key!.split('@')[0], cacheKey, { characters: got, landlord });
+}
+
+/** Opens the tavern now: template placeholders from real stats, so the tour, map and chat work at once; the AI personas follow. */
+export function loadInstant(repo: Repo) {
+  const s = useTavern.getState();
+  s.loadRepo(repo);
+  s.setLandlord(null);
+  useTavern.setState({ personas: 'pending' });
+  s.setCharacters(toCharacters(repo.modules, repo.modules.map((m) => fallbackCharacter(m, repo.modules))));
+  mark('tavern:interactive');
+  void streamPersonas(repo);
+}
+
+/** Uploads take the same path: open at once, personas after. */
 export async function loadWithCharacters(repo: Repo) {
-  const { characters, landlord } = await generateCharacters(repo);
-  useTavern.getState().loadRepo(repo);
-  useTavern.getState().setLandlord(landlord);
-  useTavern.getState().setCharacters(characters);
+  loadInstant(repo);
 }
 
 /** quickcart from the bundled snapshot with the saved cast and gossip: no GitHub or AI calls (fast demo load). */
@@ -334,6 +477,7 @@ export async function loadSavedDemo(): Promise<Repo> {
   const repo = { ...buildRepo(d.name, d.files, d.url), branch: d.branch, skipped: d.skipped };
   useTavern.getState().loadRepo(repo);
   useTavern.getState().setLandlord(savedLandlord);
+  useTavern.setState({ personas: 'done' });
   useTavern.getState().setCharacters(toCharacters(repo.modules, toRaw(repo.modules, demoCharacters.characters as RawCharacter[])));
   return repo;
 }

@@ -33,6 +33,9 @@ export function scrub<T>(err: T): T {
   return err;
 }
 
+/** An attempt that ran past its own timeout (the SDK's APIConnectionTimeoutError): not a credit error, no key switch. */
+export const timedOut = (err: unknown) => (err as Error)?.name === 'APIConnectionTimeoutError' || /request timed out/i.test(String((err as Error)?.message ?? ''));
+
 /** How long to wait before retrying a rate-limited request: the server's hint, else 0.5 s, 1 s, 2 s. */
 function backoff(err: unknown, attempt: number): number {
   const h = (err as ErrLike)?.headers;
@@ -59,15 +62,28 @@ export function keyPool<C>(slots: KeySlot[], make: (key: string) => C, o: { retr
     available: () => live().length > 0,
     /** Which key is serving now (for diagnostics; never the key itself). */
     current: () => slots[live()[0]]?.name ?? null,
-    async call<T>(fn: (c: C) => Promise<T>): Promise<T> {
+    /**
+     * One request, bounded: at most `timeoutRetries` (0 or 1) retries of an attempt that timed out, on the same key,
+     * plus at most `retries` rate-limit backoffs; a credit error moves the same request to the next key. Counts are per
+     * call, not per key, so a switch never resets them: no retry storms.
+     */
+    async call<T>(fn: (c: C) => Promise<T>, o: { retries?: number; timeoutRetries?: number; label?: string; attemptMs?: number } = {}): Promise<T> {
+      const limit = o.retries ?? retries;
+      let backoffs = 0;
+      let timeouts = 0;
       for (const i of live()) {
-        for (let attempt = 0; ; attempt++) {
+        for (;;) {
           try {
             return await fn(client(i));
           } catch (err) {
+            if (timedOut(err) && timeouts < (o.timeoutRetries ?? 0)) {
+              timeouts++;
+              log(`${o.label ?? 'call'}: attempt timed out${o.attemptMs ? ` after ${o.attemptMs / 1000}s` : ''} on the ${slots[i].name} key; retrying once on the same key.`);
+              continue;
+            }
             const kind = keyError(err);
-            if (kind === 'retry' && attempt < retries) {
-              await sleep(backoff(err, attempt));
+            if (kind === 'retry' && backoffs < limit) {
+              await sleep(backoff(err, backoffs++));
               continue;
             }
             if (kind !== 'switch') throw scrub(err);
