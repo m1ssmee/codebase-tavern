@@ -22,7 +22,7 @@ assert.equal(slug('github.com/a/b/tree/dev/lib/x/'), 'a/b/tree/dev/lib/x');
 assert.equal(slug('owner/repo'), 'owner/repo');
 assert.equal(slug('foo/foo.github.io'), 'foo/foo.github.io');
 assert.deepEqual([parseGitHubUrl('a/b/tree/main/src').ref, parseGitHubUrl('a/b/tree/main/src').subpath], ['main', 'src']);
-for (const bad of ['', 'hello', 'https://gitlab.com/a/b', 'https://github.com/a', 'https://github.com/a/b/blob/main/x.ts'])
+for (const bad of ['', 'hello', 'https://gitlab.com/a/b', 'https://github.com/a', 'https://github.com/a/b/blob/main/x.ts', '../x', 'a/..', 'a/b/tree/../x'])
   assert.equal(parseGitHubUrl(bad), null, bad);
 
 // filterFiles

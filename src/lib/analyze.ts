@@ -42,6 +42,9 @@ export function skipReason(path: string, size?: number): string | null {
 }
 
 const tier = (p: string) => (isCode(p) ? 0 : DOC_EXT.has(ext(p)) ? 2 : 1);
+/** Code > config > docs, then shallow > deep. */
+export const byPriority = (a: string, b: string) =>
+  tier(a) - tier(b) || a.split('/').length - b.split('/').length || a.localeCompare(b);
 const lineCount = (s: string) => s.split('\n').length;
 
 /** Filters junk, then keeps the best files (code > config > docs, shallow > deep) within the caps. */
@@ -57,7 +60,7 @@ export function filterFiles(entries: Entry[], preSkipped: Record<string, number>
     if (why) skip(why);
     else ok.push({ path: e.path, content: e.content, lineCount: lines });
   }
-  ok.sort((a, b) => tier(a.path) - tier(b.path) || a.path.split('/').length - b.path.split('/').length || a.path.localeCompare(b.path));
+  ok.sort((a, b) => byPriority(a.path, b.path));
   const files: RepoFile[] = [];
   let total = 0;
   for (const f of ok) {
@@ -163,6 +166,8 @@ export function parseGitHubUrl(input: string) {
   const m = s.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:\/tree\/([^/]+)(?:\/(.+?))?)?\/?$/);
   if (!m) return null;
   const [, owner, repo, ref, subpath] = m;
+  // These go into api.github.com paths with our token attached: no "." / ".." traversal.
+  if ([owner, repo, ref].some((s) => s === '.' || s === '..')) return null;
   const slug = `${owner}/${repo}${ref ? `/tree/${ref}${subpath ? `/${subpath}` : ''}` : ''}`;
   return { owner, repo, ref, subpath, slug, url: `https://github.com/${slug}` };
 }

@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { filterFiles, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
+import { byPriority, filterFiles, MAX_FILES, MAX_TOTAL, parseGitHubUrl, skipReason, type Entry } from '@/lib/analyze';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -64,13 +64,17 @@ export async function POST(req: Request) {
     const { owner, repo, subpath } = parsed;
     const signal = AbortSignal.timeout(50_000); // answer before Vercel kills us at 60s
 
-    const info = await check(await gh(`https://api.github.com/repos/${owner}/${repo}`, signal), 'repo info').json();
+    const api = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    const info = await check(await gh(api, signal), 'repo info').json();
+    // GITHUB_TOKEN may be able to read private repos; never hand those to anonymous visitors.
+    if (info.private !== false || info.visibility !== 'public') throw new Oops(404, MSG.notFound);
     const branch: string = parsed.ref ?? info.default_branch;
-    const zipRes = check(await gh(`https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURI(branch)}`, signal), 'zipball');
+    const zipRes = check(await gh(`${api}/zipball/${encodeURIComponent(branch)}`, signal), 'zipball');
     const zip = await JSZip.loadAsync(await readCapped(zipRes, MAX_ZIP));
 
     const pre: Record<string, number> = {};
-    const entries: Entry[] = [];
+    const tally = (why: string) => (pre[why] = (pre[why] ?? 0) + 1);
+    const candidates: { rel: string; f: JSZip.JSZipObject }[] = [];
     const prefix = subpath ? subpath + '/' : '';
     for (const f of Object.values(zip.files)) {
       if (f.dir) continue;
@@ -80,8 +84,23 @@ export async function POST(req: Request) {
       // ponytail: _data is jszip-internal; lets us skip huge files without decoding them
       const size = (f as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize;
       const why = skipReason(rel, size);
-      if (why) pre[why] = (pre[why] ?? 0) + 1;
-      else entries.push({ path: rel, content: await f.async('string') });
+      if (why) tally(why);
+      else candidates.push({ rel, f });
+    }
+
+    // Decompress best-first and stop at ~2x the caps (margin for files filterFiles still rejects),
+    // so a zip bomb of many tiny files can't blow up memory.
+    candidates.sort((a, b) => byPriority(a.rel, b.rel));
+    const entries: Entry[] = [];
+    let decoded = 0;
+    for (const { rel, f } of candidates) {
+      if (decoded > MAX_TOTAL * 2 || entries.length >= MAX_FILES * 2) {
+        tally('over the cap');
+        continue;
+      }
+      const content = await f.async('string');
+      decoded += content.length;
+      entries.push({ path: rel, content });
     }
 
     const { files, skipped } = filterFiles(entries, pre);
