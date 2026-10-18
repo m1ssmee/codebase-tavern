@@ -8,12 +8,11 @@ import { fileChart, moduleChart } from '@/lib/diagram';
 import { aboutFallback, buildingFacts, captions, landlordIntro, landlordLine, landlordOutro, tourOrder, UNREACHABLE, type Facts } from '@/lib/landlord';
 import { blipText, unlockAudio } from '@/lib/blips';
 import Mermaid, { type MermaidHandle } from './Mermaid';
-import CharacterFace from './CharacterFace';
-import LandlordFace from './LandlordFace';
 import { CharacterStage } from './cast/Character3D';
 import { useCast3D } from './cast/settings';
 import { getActor } from './cast/anim/actor';
 import BlueprintCast, { MAX_3D, useBlueprint } from './BlueprintCast';
+import { LandlordPortrait, ModuleFace } from './Portrait';
 
 const NS = 'http://www.w3.org/2000/svg';
 const CARD = 250; // px the tour card covers at the bottom; focus keeps the stop above it
@@ -130,7 +129,7 @@ export default function DiagramView() {
         if (threeD && i < MAX_3D) return null;
         return createPortal(
           <div className="flex h-full items-center justify-center">
-            <CharacterFace size={54} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
+            <ModuleFace id={m.id} size={54} mood={moods[m.id]} />
           </div>,
           s.face,
           `${s.id}-face`,
@@ -259,7 +258,7 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
       </div>
       {m && char && (
         <div className="mt-2 flex items-start gap-2">
-          <CharacterFace size={52} name={m.name} stats={m.stats} color={char.color} mood={moods[m.id]} />
+          <ModuleFace id={m.id} size={52} mood={moods[m.id]} />
           <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-edge bg-wood px-3 py-1.5 text-sm leading-snug text-cream">
             <div className="text-xs font-medium">{char.name}</div>
             {char.greeting}
@@ -278,7 +277,7 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
           ambient={false}
           clicks={false}
           camera={{ position: [0, 1.15, 4.0], fov: 30, rotation: [0, 0, 0] }}
-          fallback={<LandlordFace size={52} keys={repo.modules.length} talking={speaking} />}
+          fallback={<LandlordPortrait size={52} talking={speaking} />}
         />
         <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm leading-snug text-cream">
           <div className="text-xs font-medium">The Landlord</div>

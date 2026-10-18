@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { verifyCard } from '@/lib/roastSign';
 import { qrSvg } from '@/lib/faceSvg';
 import RoastCardView from '@/components/RoastCardView';
+import { cardPortraits } from '@/lib/portraitUris';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -32,8 +33,9 @@ export async function GET(req: Request) {
   const d = url.searchParams.get('d') ?? '';
   const card = verifyCard(d);
   if (!card) return new Response('This notice has been tampered with.', { status: 400 });
+  const { faces, landlord } = await cardPortraits(card);
   return new ImageResponse(
-    <RoastCardView card={card} size="landscape" fonts={{ sans: 'Inter Tight', mono: 'JetBrains Mono', display: 'Newsreader' }} qr={qrSvg(`${url.origin}/roast?d=${d}`)} url={url.host} />,
+    <RoastCardView card={card} size="landscape" fonts={{ sans: 'Inter Tight', mono: 'JetBrains Mono', display: 'Newsreader' }} qr={qrSvg(`${url.origin}/roast?d=${d}`)} url={url.host} faces={faces} landlord={landlord} />,
     { width: 1200, height: 630, fonts: await fonts, headers: { 'Cache-Control': 'public, max-age=86400, immutable' } },
   );
 }

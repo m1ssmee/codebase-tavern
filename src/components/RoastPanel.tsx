@@ -6,6 +6,7 @@ import { useTavern } from '@/lib/store';
 import { inspect } from '@/lib/roast';
 import { qrSvg } from '@/lib/faceSvg';
 import RoastCardView, { CARD_SIZE, type CardSize } from './RoastCardView';
+import { portraitUri } from './Portrait';
 
 // The app's own fonts (next/font variables); html-to-image embeds them in the PNG.
 const FONTS = {
@@ -56,6 +57,7 @@ export default function RoastPanel() {
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [room, setRoom] = useState({ w: 0, h: 0 });
+  const [pics, setPics] = useState<{ faces: Record<string, string>; landlord?: string }>({ faces: {} });
   const frame = useRef<HTMLDivElement>(null);
   const cardEl = useRef<HTMLDivElement>(null);
   const close = () => useTavern.getState().setRoastOpen(false);
@@ -100,6 +102,16 @@ export default function RoastPanel() {
   const card = result && (clean ? result.cards.clean : result.cards.spicy);
   const payload = result?.links && (clean ? result.links.clean : result.links.spicy);
   const share = payload ? `${window.location.origin}/roast?d=${payload}` : '';
+  // Portraits as data URIs, so the downloaded PNG carries them (the SVG faces until they arrive).
+  useEffect(() => {
+    if (!card) return;
+    let live = true;
+    void Promise.all([
+      Promise.all(card.entries.map(async (e) => [e.name, e.arch ? await portraitUri(e.arch, e.face[0], e.name) : null] as const)),
+      portraitUri('landlord', undefined),
+    ]).then(([faces, landlord]) => live && setPics({ faces: Object.fromEntries(faces.filter((f): f is [string, string] => !!f[1])), landlord: landlord ?? undefined }));
+    return () => void (live = false);
+  }, [card]);
 
   const download = async () => {
     if (!cardEl.current) return;
@@ -158,7 +170,7 @@ export default function RoastPanel() {
             <div style={{ width: width * scale, height: height * scale }}>
               <div style={{ width, height, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
                 <div ref={cardEl}>
-                  <RoastCardView card={card} size={size} fonts={FONTS} qr={share ? qrSvg(share) : undefined} url={window.location.host} />
+                  <RoastCardView card={card} size={size} fonts={FONTS} qr={share ? qrSvg(share) : undefined} url={window.location.host} faces={pics.faces} landlord={pics.landlord} />
                 </div>
               </div>
             </div>

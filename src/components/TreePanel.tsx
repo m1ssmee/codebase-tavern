@@ -4,7 +4,7 @@ import { motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 import { useTavern } from '@/lib/store';
 import type { RepoFile } from '@/lib/types';
-import CharacterFace from './CharacterFace';
+import { ModuleFace } from './Portrait';
 
 type Node = { name: string; path: string; children?: Node[] };
 
@@ -136,7 +136,7 @@ export default function TreePanel() {
               onClick={(e) => (e.stopPropagation(), toggle(n.path, !open))}
             />
             {mod ? (
-              smelly(mod.id, hop(mod.id, <CharacterFace size={FACE} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />))
+              smelly(mod.id, hop(mod.id, <ModuleFace id={mod.id} size={FACE} mood={moods[mod.id]} />))
             ) : (
               <Folder size={14} className="shrink-0 text-muted" />
             )}
@@ -169,7 +169,7 @@ export default function TreePanel() {
               selectedModuleId === m.id ? 'bg-wood ring-1 ring-edge' : 'hover:bg-wood'
             }`}
           >
-            {smelly(m.id, hop(m.id, <CharacterFace size={FACE} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />))}
+            {smelly(m.id, hop(m.id, <ModuleFace id={m.id} size={FACE} mood={moods[m.id]} />))}
             <span className="truncate font-medium text-cream">{m.name}</span>
             <span className="ml-auto truncate text-xs text-muted">
               {characters[m.id] ? settle(m.id, descriptor(characters[m.id].name)) : `${m.stats.fileCount} files`}

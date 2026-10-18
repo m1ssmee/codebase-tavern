@@ -5,16 +5,15 @@ import { RIPPLE_HOP_MS, useTavern, type RippleStep, type WhatIfChange } from '@/
 import { computeImpact, QUICKCART_SUGGESTIONS, sameChange, suggestionDiff, type Impact, type ImpactItem } from '@/lib/whatif';
 import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
 import { closingLine } from '@/lib/landlord';
-import LandlordFace from './LandlordFace';
 import { isValidCitation } from '@/lib/citations';
 import { blipText, unlockAudio } from '@/lib/blips';
 import type { Mood } from '@/lib/types';
 import demoWhatIf from '@/data/demoWhatIf.json';
-import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
 import { useStage } from './stage/store';
 import { stageDo } from './stage/api';
 import Rich from './Rich';
+import { LandlordPortrait, ModuleFace } from './Portrait';
 
 type Verdict = 'breaks' | 'at risk' | 'fine' | 'relieved';
 type Result = { moduleId: string; verdict: Verdict; reason: string; reaction: string };
@@ -478,7 +477,7 @@ export default function WhatIfPanel() {
 
         {landlordSays && (
           <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-2.5">
-            <LandlordFace size={48} keys={repo.modules.length} talking />
+            <LandlordPortrait size={48} talking />
             <div className="text-sm leading-snug">
               <div className="text-xs font-medium">The Landlord</div>
               {landlordSays}
@@ -495,7 +494,6 @@ export default function WhatIfPanel() {
               Who feels it ({impact.items.length}), from the import graph{phase === 'assessing' ? '. The modules are reading the diff.' : '.'}
             </div>
             {impact.items.map((i) => {
-              const m = repo.modules.find((x) => x.id === i.moduleId);
               const r = results[i.moduleId];
               const cites = [...i.usages, ...i.lines]
                 .map((c) => ({ path: c.path, startLine: c.line, endLine: c.endLine }))
@@ -504,7 +502,7 @@ export default function WhatIfPanel() {
               return (
                 <div key={i.moduleId} className="rounded-xl border border-edge p-2.5">
                   <div className="flex items-center gap-2">
-                    <CharacterFace size={36} name={m?.name ?? i.moduleId} stats={m?.stats} color={characters[i.moduleId]?.color} mood={moods[i.moduleId]} />
+                    <ModuleFace id={i.moduleId} size={36} mood={moods[i.moduleId]} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{modName(i.moduleId)}</div>
                       <div className="text-xs text-muted">{roleText(i)}</div>

@@ -9,13 +9,13 @@ import { airhorn, blipText, unlockAudio } from '@/lib/blips';
 import type { Citation, SpiceLevel } from '@/lib/types';
 import { isCode } from '@/lib/analyze';
 import demoTribunal from '@/data/demoTribunal.json';
-import CharacterFace from './CharacterFace';
 import CitationChip from './CitationChip';
 import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
 import { useStage } from './stage/store';
 import { stageDo } from './stage/api';
+import { ModuleFace } from './Portrait';
 
 // three.js loads only when the 3D cast is on and a hearing starts.
 const TribunalStage = dynamic(() => import('./cast/TribunalStage'), { ssr: false, loading: () => <div className="h-44 border-b border-edge bg-ink/40" /> });
@@ -306,10 +306,9 @@ export default function TribunalPanel() {
   const faces = (
     <div className="flex justify-center gap-4 border-b border-edge bg-ink/40 px-3 py-3">
       {suspects.map((id) => {
-        const m = repo.modules.find((x) => x.id === id);
         return (
           <div key={id} className="flex w-24 flex-col items-center text-center">
-            <CharacterFace size={64} name={m?.name ?? id} stats={m?.stats} color={characters[id]?.color} mood={moods[id]} />
+            <ModuleFace id={id} size={64} mood={moods[id]} />
             <span className="mt-1 text-xs leading-tight text-cream/80">{title(id)}</span>
           </div>
         );
@@ -319,7 +318,7 @@ export default function TribunalPanel() {
 
   const line = (turn: Turn, key: string | number) => (
     <div key={key} className="flex gap-2">
-      <CharacterFace size={28} name={repo.modules.find((m) => m.id === turn.moduleId)?.name ?? turn.moduleId} color={characters[turn.moduleId]?.color} still />
+      <ModuleFace id={turn.moduleId} size={28} still />
       <div className="min-w-0 flex-1 rounded-2xl rounded-bl-sm border border-edge bg-wood px-3 py-2 text-cream">
         <div className="mb-0.5 text-xs font-medium">
           {title(turn.moduleId)}

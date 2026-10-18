@@ -19,6 +19,7 @@ import Rich from './Rich';
 import { useCast3D } from './cast/settings';
 import { grudgeOf, useStage } from './stage/store';
 import { stageDo } from './stage/api';
+import { ModuleFace } from './Portrait';
 
 // three.js loads only when the 3D cast is on.
 const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.CharacterStage), { ssr: false, loading: () => <div className="h-24 w-24 shrink-0" /> });
@@ -208,10 +209,10 @@ export default function ChatPanel() {
             mood={moods[mod.id] ?? 'idle'}
             ambient={false}
             clicks={false}
-            fallback={<CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />}
+            fallback={<ModuleFace id={mod.id} size={96} mood={moods[mod.id]} />}
           />
         ) : (
-          <CharacterFace size={96} name={mod.name} stats={mod.stats} color={char?.color} mood={moods[mod.id]} />
+          <ModuleFace id={mod.id} size={96} mood={moods[mod.id]} />
         )}
         <div className="min-w-0">
           <div className="font-display text-xl leading-tight">
@@ -300,7 +301,6 @@ export default function ChatPanel() {
 
 /** The face next to a transcript line: whoever said it (arguments and line-ups have several speakers). */
 function Speaker({ id }: { id: string }) {
-  const mod = useTavern((s) => s.repo?.modules.find((m) => m.id === id));
-  const color = useTavern((s) => s.characters[id]?.color);
-  return mod ? <CharacterFace size={28} name={mod.name} stats={mod.stats} color={color} still /> : <div className="w-7" />;
+  const mod = useTavern((s) => s.repo?.modules.some((m) => m.id === id));
+  return mod || id === 'judge' || id === 'landlord' ? <ModuleFace id={id} size={28} still /> : <div className="w-7" />;
 }

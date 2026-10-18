@@ -4,10 +4,7 @@
 // they work from the keyboard), and holds the speech bubbles, the radial menu, arrows and the hot potato.
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import dynamic from 'next/dynamic';
-import { Gavel } from 'lucide-react';
 import { useTavern } from '@/lib/store';
-import CharacterFace from '../CharacterFace';
-import LandlordFace from '../LandlordFace';
 import Rich from '../Rich';
 import { sendChat } from '../ChatPanel';
 import { useCast3D } from '../cast/settings';
@@ -18,6 +15,7 @@ import { bus, lineAt, lineBox } from './bus';
 import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
 import { perchNear, tickPerches, typed } from './perches';
 import * as scenes from './scenes';
+import { JudgePortrait, LandlordPortrait, ModuleFace } from '../Portrait';
 
 const Stage3D = dynamic(() => import('./Stage3D'), { ssr: false });
 
@@ -332,7 +330,6 @@ function Tenant({ m, threeD }: { m: Member; threeD: boolean }) {
   const mod = useTavern((s) => s.repo?.modules.find((x) => x.id === m.id));
   const char = useTavern((s) => s.characters[m.id]);
   const mood = useTavern((s) => s.moods[m.id]);
-  const keys = useTavern((s) => s.repo?.modules.length);
   const menu = useStage((s) => s.menu);
   const label = m.kind === 'judge' ? 'The Judge' : m.kind === 'landlord' ? 'The Landlord' : (char?.name ?? mod?.name ?? m.id);
   const size = sizeOf(m.id, threeD);
@@ -414,13 +411,11 @@ function Tenant({ m, threeD }: { m: Member; threeD: boolean }) {
         // Scaled down by the frame loop while perched.
         <span className="block h-full w-full origin-top-left">
           {m.kind === 'landlord' ? (
-            <LandlordFace size={size.w} keys={keys} />
+            <LandlordPortrait size={size.w} />
           ) : m.kind === 'judge' ? (
-            <span className="grid h-full w-full place-items-center rounded-full bg-[#7a4a2a] text-white" aria-hidden>
-              <Gavel size={30} />
-            </span>
+            <JudgePortrait size={size.w} />
           ) : (
-            mod && <CharacterFace size={size.w} name={mod.name} stats={mod.stats} color={char?.color} mood={mood} />
+            mod && <ModuleFace id={mod.id} size={size.w} mood={mood} />
           )}
         </span>
       )}

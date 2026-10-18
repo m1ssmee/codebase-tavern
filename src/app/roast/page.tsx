@@ -5,6 +5,7 @@ import { verifyCard } from '@/lib/roastSign';
 import { qrSvg } from '@/lib/faceSvg';
 import RoastCardView from '@/components/RoastCardView';
 import FitCard from './FitCard';
+import { cardPortraits } from '@/lib/portraitUris';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -54,11 +55,12 @@ export default async function RoastPage(props: Props) {
     );
   }
   const o = await origin();
+  const { faces, landlord } = await cardPortraits(card);
   return (
     <main className="min-h-screen bg-[#efe9dd] px-4 py-8">
       <div className="mx-auto max-w-[1200px]">
         <FitCard width={1200} height={630}>
-          <RoastCardView card={card} size="landscape" fonts={FONTS} qr={qrSvg(`${o}/roast?d=${d}`)} url={new URL(o).host} />
+          <RoastCardView card={card} size="landscape" fonts={FONTS} qr={qrSvg(`${o}/roast?d=${d}`)} url={new URL(o).host} faces={faces} landlord={landlord} />
         </FitCard>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
           {card.repo.includes('/') && (

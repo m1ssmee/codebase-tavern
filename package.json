@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "portraits": "node scripts/portraits.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.30.0",
@@ -26,6 +27,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-resizable-panels": "^4.14.5",
+    "sharp": "0.35.5",
     "three": "^0.186.1",
     "zustand": "^5.0.15"
   },
@@ -38,6 +40,7 @@
     "@types/three": "^0.186.0",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
+    "playwright-core": "1.63.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

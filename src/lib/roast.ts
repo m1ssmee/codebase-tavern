@@ -5,6 +5,7 @@ import { isCode, nesting } from './analyze.ts';
 import { dependentsOf, type Graph } from './graph.ts';
 import { buildingFacts } from './landlord.ts';
 import { hash } from './characters.ts';
+import { ARCHETYPES, assignCast, type Archetype } from './cast.ts';
 
 export type Grade = 'A' | 'B' | 'C' | 'D' | 'F';
 /** What the inspector found in one module. Only the numbers and names the card shows. */
@@ -18,7 +19,8 @@ export type Facts = {
 };
 /** Face parameters (CharacterFace traits): colour, total lines, TODOs, biggest file, nesting, has tests. */
 export type FaceSpec = [string, number, number, number, number, 0 | 1];
-export type RoastEntry = { id: string; name: string; title: string; stat: string; line: string; face: FaceSpec; facts: Facts };
+/** `arch`: its 3D archetype, for its portrait (public/portraits); cards without one draw the old SVG face. */
+export type RoastEntry = { id: string; name: string; title: string; stat: string; line: string; face: FaceSpec; facts: Facts; arch?: Archetype };
 export type RoastCard = {
   repo: string; // owner/repo
   date: string; // YYYY-MM-DD
@@ -67,6 +69,7 @@ const count = (f: Facts) => Object.keys(f).length;
  */
 export function inspect(files: RepoFile[], modules: Module[], g: Graph, title: (id: string) => string, color: (id: string) => string): Inspection {
   const facts = buildingFacts(g, modules);
+  const cast = assignCast(modules);
   const code = (m: Module) => files.filter((f) => m.filePaths.includes(f.path) && isCode(f.path));
   const inspected = modules.filter((m) => code(m).length && !DOCS.test(m.name) && !m.name.startsWith('.')); // .github, .devcontainer: tooling
   const testModules = new Set(modules.filter((m) => TEST_MODULE.test(m.name) || (code(m).length && code(m).every((f) => TEST_FILE.test(f.path)))).map((m) => m.id));
@@ -113,6 +116,7 @@ export function inspect(files: RepoFile[], modules: Module[], g: Graph, title: (
       stat: statText(m.name, f),
       face: [color(m.id), s.totalLines, s.todoCount, s.biggestFile.lines, s.maxNesting, s.hasTests ? 1 : 0] as FaceSpec,
       facts: f,
+      arch: cast[modules.indexOf(m)]?.archetype,
     };
   });
   return { grade: gradeFor(violations, inspected.length), violations, modules: inspected.length, entries };
@@ -215,7 +219,7 @@ export { SWEARING } from './guards.ts'; // clean lines must have none
 // stays scannable: titles without the repeated module name, violation facts instead of the stat sentence.
 
 type FactsC = [[string, number] | 0, 0 | 1, number, number, string, 0 | 1];
-type EntryC = [string, string, FactsC, string, FaceSpec];
+type EntryC = [string, string, FactsC, string, FaceSpec, number?]; // the last: the archetype's index in ARCHETYPES
 type Compact = [2, string, string, Grade, number, number, string, number, 0 | 1, EntryC[]];
 const packFacts = (f: Facts): FactsC => [f.bigFile ? [f.bigFile.name, f.bigFile.lines] : 0, f.noTests ? 1 : 0, f.nesting ?? 0, f.todos ?? 0, f.codependentWith ?? '', f.orphan ? 1 : 0];
 function unpackFacts(x: unknown): Facts {
@@ -231,7 +235,11 @@ function unpackFacts(x: unknown): Facts {
 }
 export const toCompact = (c: RoastCard): Compact => [
   2, c.repo, c.date, c.grade, c.violations, c.modules, c.headline, c.keys, c.clean ? 1 : 0,
-  c.entries.map((e) => [e.name, e.title.startsWith(`${e.name}, `) ? e.title.slice(e.name.length + 2) : `=${e.title}`, packFacts(e.facts), e.line, e.face]),
+  c.entries.map((e): EntryC => {
+    const x: EntryC = [e.name, e.title.startsWith(`${e.name}, `) ? e.title.slice(e.name.length + 2) : `=${e.title}`, packFacts(e.facts), e.line, e.face];
+    if (e.arch) x[5] = ARCHETYPES.indexOf(e.arch);
+    return x;
+  }),
 ];
 export function fromCompact(x: unknown): RoastCard | null {
   if (!Array.isArray(x) || x[0] !== 2 || x.length !== 10 || !Array.isArray(x[9])) return null;
@@ -246,10 +254,11 @@ export function fromCompact(x: unknown): RoastCard | null {
     headline: String(headline),
     keys: Number(keys) || 1,
     clean: clean === 1,
-    entries: entries.slice(0, 4).map(([name, t, f, line, face]) => {
+    entries: entries.slice(0, 4).map(([name, t, f, line, face, a]) => {
       const facts = unpackFacts(f);
       const title = String(t).startsWith('=') ? String(t).slice(1) : t ? `${name}, ${t}` : String(name);
-      return { id: String(name), name: String(name), title, stat: statText(String(name), facts), line: String(line), face, facts };
+      const arch = Number.isInteger(a) ? ARCHETYPES[a as number] : undefined;
+      return { id: String(name), name: String(name), title, stat: statText(String(name), facts), line: String(line), face, facts, ...(arch ? { arch } : {}) };
     }),
   };
 }

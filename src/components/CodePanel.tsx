@@ -6,12 +6,12 @@ import { ChevronRight, Sparkles } from 'lucide-react';
 import { useTavern, type WhatIfChange } from '@/lib/store';
 import { declaredIn, deleteDiff, renameDiff, retryOrCheck } from '@/lib/whatif';
 import type { RepoFile } from '@/lib/types';
-import LandlordFace from './LandlordFace';
 import { languageFor } from '@/lib/lang';
 import { sendChat } from './ChatPanel';
 import { bus } from './stage/bus';
 import { useStage } from './stage/store';
 import { stageDo } from './stage/api';
+import { LandlordPortrait } from './Portrait';
 
 type Ed = Parameters<OnMount>[0];
 
@@ -317,7 +317,7 @@ export default function CodePanel() {
         )}
         {landlordSays && view !== 'diff' && (
           <div className={`pointer-events-none absolute left-3 z-30 flex items-end gap-2 ${staged ? 'top-3' : 'bottom-10'}`}>
-            <LandlordFace size={72} keys={repo?.modules.length} talking />
+            <LandlordPortrait size={72} talking />
             <div className="mb-8 max-w-xs rounded-2xl rounded-bl-sm border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-cream shadow-md">
               <div className="text-xs font-medium">The Landlord</div>
               {landlordSays}

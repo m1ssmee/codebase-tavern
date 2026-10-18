@@ -71,6 +71,19 @@ body {
   .smell-green { animation: none; }
 }
 
+/* Portraits (2D faces rendered from the 3D models): moods as small CSS motions. */
+@keyframes portrait-talk { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6%); } }
+@keyframes portrait-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4%) rotate(-3deg); } 75% { transform: translateX(4%) rotate(3deg); } }
+@keyframes portrait-hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-14%); } }
+.portrait-talking { animation: portrait-talk 0.45s ease-in-out infinite; }
+.portrait-accused, .portrait-nervous { animation: portrait-shake 0.35s ease-in-out infinite; }
+.portrait-happy { animation: portrait-hop 1s ease-out infinite; }
+.portrait-horrified { transform: scale(1.08); filter: saturate(1.4) brightness(1.05); }
+.portrait-guilty, .portrait-fainted { transform: rotate(18deg); filter: grayscale(0.75); opacity: 0.8; }
+@media (prefers-reduced-motion: reduce) {
+  .portrait-talking, .portrait-accused, .portrait-nervous, .portrait-happy { animation: none; }
+}
+
 /* nuclear: short screen shake on the Tribunal verdict */
 @keyframes nuclear-shake {
   0%, 100% { transform: translate(0, 0); }

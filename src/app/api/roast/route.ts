@@ -13,6 +13,7 @@ import type { SpiceLevel } from '@/lib/types';
 import savedRoast from '@/data/demoRoast.json';
 import demoRepo from '@/data/demoRepo.json';
 import demoCast from '@/data/demoCharacters.json';
+import { ARCHETYPES } from '@/lib/cast';
 
 type Twice = { spicy: string; clean: string };
 const demoRoast = savedRoast as { repo: string; headline: Twice; entries: (Twice & { moduleId: string })[] };
@@ -113,7 +114,8 @@ export async function POST(req: Request) {
     if (!name) return [];
     const facts = cleanFacts(e?.facts as Record<string, unknown>);
     const face: FaceSpec = [/^#[0-9a-f]{6}$/i.test(String(f[0])) ? String(f[0]) : '#f5a524', num(f[1]), num(f[2]), num(f[3]), num(f[4], 99), f[5] ? 1 : 0];
-    return [{ id, name, title: word(e?.title, TITLE, 80) || name, stat: statText(name, facts), line: '', face, facts } satisfies RoastEntry];
+    const arch = ARCHETYPES.find((a) => a === e?.arch); // its portrait; anything else, the SVG face
+    return [{ id, name, title: word(e?.title, TITLE, 80) || name, stat: statText(name, facts), line: '', face, facts, ...(arch ? { arch } : {}) } satisfies RoastEntry];
   }) as RoastEntry[];
   }
   if (!repo || !entries.length) return Response.json({ error: 'bad request' }, { status: 400 });

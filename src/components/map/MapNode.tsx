@@ -3,12 +3,12 @@ import { useEffect } from 'react';
 import type { ThreeEvent } from '@react-three/fiber';
 import { Euler } from 'three';
 import { motion, useReducedMotion } from 'framer-motion';
-import CharacterFace from '../CharacterFace';
 import { Character3D } from '../cast/Character3D';
 import { useCast3D } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
 import type { Module, ModuleStats, Mood } from '@/lib/types';
 import { Dom } from './Dom';
+import { ModuleFace } from '../Portrait';
 
 export type MapNodeProps = {
   module: Module;
@@ -74,7 +74,7 @@ function Node3D({ module, stats, cast, mood = 'idle', talking, position = [0, 0,
   );
 }
 
-function Node2D({ module, stats, mood = 'idle', talking, position = [0, 0, 0], scale = 1, color, flinch, dimmed, onClick }: MapNodeProps) {
+function Node2D({ module, mood = 'idle', talking, position = [0, 0, 0], scale = 1, flinch, dimmed, onClick }: MapNodeProps) {
   const reduced = useReducedMotion();
   return (
     <group position={position}>
@@ -93,7 +93,7 @@ function Node2D({ module, stats, mood = 'idle', talking, position = [0, 0, 0], s
           transition={{ duration: 0.45 }}
           style={{ opacity: dimmed ? 0.25 : 1, transition: 'opacity 200ms' }}
         >
-          <CharacterFace name={module.name} stats={stats} color={color} mood={talking ? 'talking' : mood} size={PX} />
+          <ModuleFace id={module.id} mood={talking ? 'talking' : mood} size={PX} />
         </motion.div>
       </Dom>
     </group>

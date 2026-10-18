@@ -8,7 +8,6 @@ import { AdaptiveDpr, PerformanceMonitor } from '@react-three/drei';
 import type { Module, ModuleStats, Mood } from '@/lib/types';
 import { assignCast, type Archetype, type Variant } from '@/lib/cast';
 import { faceTraits, hash, PALETTE } from '@/lib/characters';
-import CharacterFace from '@/components/CharacterFace';
 import { buildCharacter, type Built, type Detail } from './archetypes';
 import { setCastLook } from './kit';
 import { applyExpression, PRESETS, type CharacterRig, type Expression } from './rig';
@@ -16,6 +15,7 @@ import { useCast3D } from './settings';
 import { bindActor, getActor, unbindActor } from './anim/actor';
 import { click } from './anim/director';
 import { CastFX } from './anim/fx';
+import { ModuleFace, Portrait } from '../Portrait';
 
 export type { CharacterRig, Detail, Expression };
 export { useCast3D };
@@ -309,7 +309,7 @@ export function CharacterStage({ className, camera, fallback, ...props }: Charac
         fallback={
           fallback ?? (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2">
-              <CharacterFace name={name} stats={props.stats ?? props.module?.stats} color={props.color} size={120} />
+              {props.module ? <ModuleFace id={props.module.id} size={120} /> : <Portrait arch={props.archetype ?? 'clerk'} name={name} color={props.color} size={120} />}
               <CastFallbackNote />
             </div>
           )

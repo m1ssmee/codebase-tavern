@@ -14,12 +14,14 @@ const MUTED = '#6f6a62';
 const RULE = '#d8d0c2';
 const STAMP_COLOR: Record<string, string> = { PASSED: '#2e7d32', 'PASSED WITH CONCERNS': '#b26a00', FAILED: '#c62828' };
 
-export default function RoastCardView({ card, size, fonts, qr, url }: { card: RoastCard; size: CardSize; fonts: CardFonts; qr?: Qr; url: string }) {
+/** `faces` (by entry name) and `landlord`: portraits as data URIs; without them, the SVG faces. */
+export default function RoastCardView({ card, size, fonts, qr, url, faces, landlord }: { card: RoastCard; size: CardSize; fonts: CardFonts; qr?: Qr; url: string; faces?: Record<string, string>; landlord?: string }) {
   const { width, height } = CARD_SIZE[size];
   const sq = size === 'square';
   const stamp = STAMP[card.grade];
   const tone = STAMP_COLOR[stamp];
   const row = { display: 'flex', flexDirection: 'row' } as const;
+  const round = { borderRadius: 9999, background: '#f3efe8', border: `1px solid ${RULE}` } as const;
   const col = { display: 'flex', flexDirection: 'column' } as const;
 
   const qrPx = qr ? qr.modules * 2 : 0; // two whole pixels per module: scannable from the PNG
@@ -56,7 +58,7 @@ export default function RoastCardView({ card, size, fonts, qr, url }: { card: Ro
   const headline = (
     <div style={{ ...row, alignItems: 'flex-start', marginTop: sq ? 14 : 16 }}>
       {/* eslint-disable-next-line @next/next/no-img-element -- data URI, rendered by Satori too */}
-      <img src={landlordSvg(card.keys)} width={sq ? 76 : 58} height={sq ? 76 : 58} alt="" />
+      <img src={landlord ?? landlordSvg(card.keys)} width={sq ? 76 : 58} height={sq ? 76 : 58} alt="" style={landlord ? round : undefined} />
       {/* Attribution first: the quote is the one block whose length varies, so it goes last and has room to grow. */}
       <div style={{ ...col, flex: 1, marginLeft: 12 }}>
         <div style={{ ...row, marginBottom: 4, fontFamily: fonts.mono, fontSize: sq ? 15 : 13, color: MUTED }}>{sq ? 'the Landlord, owner of the building:' : 'the Landlord:'}</div>
@@ -69,7 +71,7 @@ export default function RoastCardView({ card, size, fonts, qr, url }: { card: Ro
       {card.entries.map((e) => (
         <div key={e.name} style={{ ...row, alignItems: 'flex-start', marginBottom: sq ? 14 : 6 }}>
           {/* eslint-disable-next-line @next/next/no-img-element -- data URI, rendered by Satori too */}
-          <img src={faceSvg(e.name, e.face)} width={sq ? 76 : 58} height={sq ? 84 : 64} alt="" />
+          {faces?.[e.name] ? <img src={faces[e.name]} width={sq ? 78 : 60} height={sq ? 78 : 60} alt="" style={round} /> : <img src={faceSvg(e.name, e.face)} width={sq ? 76 : 58} height={sq ? 84 : 64} alt="" />}
           <div style={{ ...col, flex: 1, marginLeft: 12 }}>
             <div style={{ ...row, fontFamily: fonts.sans, fontWeight: 600, fontSize: sq ? 23 : 18, color: INK }}>{e.title}</div>
             <div style={{ ...row, fontFamily: fonts.mono, fontSize: sq ? 17 : 14, color: '#8a4a1c', marginTop: 2 }}>{e.stat}</div>
