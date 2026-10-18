@@ -148,7 +148,7 @@ export default function Landing() {
       {show3D && <LandingCast heroes={HEROES} spots={spots} onReady={() => setReady3D(true)} />}
 
       <div className="relative z-10 flex w-60 max-w-[52vw] flex-col items-center gap-4 text-center">
-        <h1 className="text-xl font-bold tracking-tight">Codebase Tavern</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Codebase Tavern</h1>
 
         <form
           className="flex w-full items-center border-b border-neutral-300 transition-colors focus-within:border-neutral-900"
