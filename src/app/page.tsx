@@ -1,8 +1,13 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { motion, useReducedMotion } from 'framer-motion';
 import CharacterFace from '@/components/CharacterFace';
+import { Portrait } from '@/components/Portrait';
+import { useCast3D } from '@/components/cast/settings';
+import { getActor } from '@/components/cast/anim/actor';
+import { assignCast } from '@/lib/cast';
 import TenantsLoader from '@/components/TenantsLoader';
 import Stickman from '@/components/Stickman';
 import { loadSavedDemo, loadWithCharacters, summonRepo } from '@/lib/store';
@@ -28,6 +33,13 @@ const HERO_COLORS = assignColors(HERO.map((f) => ({ id: f.name, name: f.name }))
 // Uneven sizes so the ring looks hand-placed, not gridded.
 const SIZES = [52, 64, 48];
 const ORBIT_SECONDS = 60;
+// Their 3D archetypes, as the cast would assign them; portraits paint at once, the 3D characters replace them later.
+const HERO_ARCH = assignCast(HERO.map((f) => ({ id: f.name, name: f.name, path: f.name, filePaths: [], stats: f.stats })));
+const HEROES = HERO.map((f, i) => ({ name: f.name, arch: HERO_ARCH[i].archetype, variant: HERO_ARCH[i].variant, color: HERO_COLORS[f.name], size: SIZES[i % SIZES.length] }));
+const LandingCast = dynamic(() => import('@/components/LandingCast'), { ssr: false });
+/** 3D only on a desktop-class device: no touch-first screens, small windows, or low core or memory counts. */
+const capable = () =>
+  !matchMedia('(pointer: coarse)').matches && innerWidth >= 900 && (navigator.hardwareConcurrency ?? 8) >= 4 && ((navigator as { deviceMemory?: number }).deviceMemory ?? 8) >= 4;
 
 const DEMO_REPO_URL = 'https://github.com/m1ssmee/quickcart';
 
@@ -38,6 +50,21 @@ export default function Landing() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const spots = useRef<(HTMLElement | null)[]>([]);
+  const cast3D = useCast3D((s) => s.on);
+  const [want3D, setWant3D] = useState(false); // after first paint, on capable devices
+  const [ready3D, setReady3D] = useState(false); // every 3D character built: the portraits step aside
+  useEffect(() => {
+    if (reduce) return;
+    const t = setTimeout(() => capable() && setWant3D(true), 400);
+    return () => clearTimeout(t);
+  }, [reduce]);
+  const show3D = want3D && cast3D;
+  /** A click: a small bounce, nothing else. */
+  const bounce = (name: string, el: HTMLElement) => {
+    if (show3D && ready3D) return getActor(`hero:${name}`)?.poke();
+    el.animate([{ transform: 'translateY(0)' }, { transform: 'translateY(-8px)' }, { transform: 'translateY(0)' }], { duration: 260, easing: 'ease-out' });
+  };
 
   const summon = async (input: string) => {
     setError(null);
@@ -93,10 +120,11 @@ export default function Landing() {
         Most of them have complaints.
       </p>
 
-      {/* The regulars orbit the title; each face counter-rotates so it stays upright. */}
+      {/* The regulars orbit the title; each face counter-rotates so it stays upright. Portraits first; on capable
+          devices the 3D characters take over the same spots once they're built. */}
       <motion.div aria-hidden className="absolute left-1/2 top-1/2" {...spin(360)}>
-        {HERO.map((f, i) => {
-          const a = (i / HERO.length) * 360;
+        {HEROES.map((f, i) => {
+          const a = (i / HEROES.length) * 360;
           return (
             <div
               key={f.name}
@@ -104,12 +132,20 @@ export default function Landing() {
               style={{ transform: `rotate(${a}deg) translateY(calc(-1 * var(--r))) rotate(${-a}deg)` }}
             >
               <motion.div className="flex" {...spin(-360)}>
-                <CharacterFace name={f.name} stats={f.stats} color={HERO_COLORS[f.name]} mood={f.mood} size={SIZES[i % SIZES.length]} />
+                <div
+                  ref={(el) => void (spots.current[i] = el)}
+                  onClick={(e) => bounce(f.name, e.currentTarget)}
+                  className="cursor-pointer transition-opacity duration-500"
+                  style={{ opacity: show3D && ready3D ? 0 : 1 }}
+                >
+                  <Portrait arch={f.arch} color={f.color} name={f.name} size={f.size} mood={HERO[i].mood} eager className="border-0 bg-transparent" />
+                </div>
               </motion.div>
             </div>
           );
         })}
       </motion.div>
+      {show3D && <LandingCast heroes={HEROES} spots={spots} onReady={() => setReady3D(true)} />}
 
       <div className="relative z-10 flex w-60 max-w-[52vw] flex-col items-center gap-4 text-center">
         <h1 className="text-xl font-bold tracking-tight">Codebase Tavern</h1>

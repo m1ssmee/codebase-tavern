@@ -31,8 +31,8 @@ export function archetypeOf(mods: Module[], id: string): Archetype {
   return m.get(id) ?? 'clerk';
 }
 
-type Props = { arch: Archetype; color?: string; name?: string; size: number; mood?: Mood | 'talking'; className?: string; alt?: string };
-export function Portrait({ arch, color, name = arch, size, mood, className = '', alt = '' }: Props) {
+type Props = { arch: Archetype; color?: string; name?: string; size: number; mood?: Mood | 'talking'; className?: string; alt?: string; eager?: boolean };
+export function Portrait({ arch, color, name = arch, size, mood, className = '', alt = '', eager = false }: Props) {
   return (
     // eslint-disable-next-line @next/next/no-img-element -- 4 KB static WebP, sized exactly; next/image adds nothing here
     <img
@@ -41,7 +41,8 @@ export function Portrait({ arch, color, name = arch, size, mood, className = '',
       height={size}
       alt={alt}
       draggable={false}
-      className={`portrait shrink-0 rounded-full border border-edge bg-[#f3efe8] select-none ${mood && mood !== 'idle' ? `portrait-${mood}` : ''} ${className}`}
+      fetchPriority={eager ? 'high' : undefined}
+      className={`portrait max-w-none shrink-0 rounded-full border border-edge bg-[#f3efe8] select-none ${mood && mood !== 'idle' ? `portrait-${mood}` : ''} ${className}`}
       style={{ width: size, height: size }}
     />
   );
