@@ -3,7 +3,7 @@ import type { SpiceLevel } from './types';
 
 // Comment lines (JS/TS/C-style, Python/shell #, HTML). Preprocessor lines like #include are code.
 const isComment = (l: string) => /^(\/\/|\/\*|\*|<!--|#(?!include|define|if|endif|pragma|!))/.test(l);
-const isTestFile = (p: string) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$/i.test(p);
+const isTestFile = (p: string) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$|(^|\/)(tests?|spec)\.[a-z]+$/i.test(p);
 const RETRY_OR_DUPLICATE = /\b(retr(y|ies|ied|ying)|duplicate|twice|double)/i;
 
 /**

@@ -146,7 +146,7 @@ export function computeStats(module: Pick<Module, 'filePaths'>, files: RepoFile[
     biggestFile,
     todoCount,
     maxNesting,
-    hasTests: fs.some((f) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$/i.test(f.path)),
+    hasTests: fs.some((f) => /(^|\/)(__tests__|tests?|spec)\/|[._-](test|spec)\.[a-z]+$|(^|\/)(tests?|spec)\.[a-z]+$/i.test(f.path)),
   };
 }
 
