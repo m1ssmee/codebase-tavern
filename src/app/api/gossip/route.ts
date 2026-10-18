@@ -6,7 +6,8 @@ import { fallbackGossip } from '@/lib/characters';
 import { editLines, type Candidate } from '@/lib/editor';
 import { codeFacts, knownNumbers } from '@/lib/guards';
 import { cleanModule, clip, neighbour, promptModule, type InModule } from '@/lib/personaInput';
-import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
+import { BUBBLE_RULE, bubbleOk, cleanBubble, recentBlock } from '@/lib/quip';
+import type { SpiceLevel } from '@/lib/types';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -61,7 +62,10 @@ export async function POST(req: Request) {
   const fallback = () => fallbackGossip(speaker, all);
 
   const prompt = `Repo: ${clip(body.repoName, 200)}\n\nSpeaker:\n${JSON.stringify(promptModule(speaker))}\n\nOther tenants:\n${JSON.stringify(others.map((o) => ({ ...neighbour(o), files: o.filePaths.slice(0, 8) })))}`;
-  const key = createHash('sha256').update(JSON.stringify([prompt, spice, mode])).digest('base64url');
+  // The recent bubbles are client-sent text in the prompt, so they're part of the key: no request can fill an entry
+  // another request (with other or no recent bubbles) would be served.
+  const recent = recentBlock(body.recentBubbles);
+  const key = createHash('sha256').update(JSON.stringify([prompt, spice, mode, recent])).digest('base64url');
   const hit = done.get(key);
   if (hit) {
     done.delete(key);
@@ -72,7 +76,7 @@ export async function POST(req: Request) {
   try {
     const out = await llmJSON<{ gossip?: unknown[] }>('gossip', {
       system: SYSTEM,
-      dynamic: `${levelBlock(spice)}\n- ${mode === 'expert' ? 'MODE: EXPERT: standard technical terms are fine.' : `MODE: BEGINNER: no jargon without a plain definition in parentheses. ${PLAIN_WORDS}`}\n${recentBlock(body.recentBubbles)}\n${levelReminder(spice)}`,
+      dynamic: `${levelBlock(spice)}\n- ${mode === 'expert' ? 'MODE: EXPERT: standard technical terms are fine.' : `MODE: BEGINNER: no jargon without a plain definition in parentheses. ${PLAIN_WORDS}`}\n${recent}\n${levelReminder(spice)}`,
       prompt,
       schema: SCHEMA,
       timeoutMs: 20_000,
@@ -94,7 +98,9 @@ export async function POST(req: Request) {
     const chosen = lines.map((l, i) => picked.get(l.id) ?? fb[i % fb.length]).filter(Boolean);
     if (!picked.size) throw new Error('no gossip line survived the filter');
     // A line that fell back to its template has no bubble (the client makes one from the line).
-    const bubbles = lines.map((l, i) => (picked.get(l.id) ? cleanBubble(raw[i]?.bubble).slice(0, 200) : '')).filter((_, i) => !!(picked.get(lines[i].id) ?? fb[i % fb.length]));
+    // Checked here too (short, no code or citations, past the filter at this spice) before it's cached or sent.
+    const ok = (b: string) => (bubbleOk(b, spice as SpiceLevel) ? b : '');
+    const bubbles = lines.map((l, i) => (picked.get(l.id) ? ok(cleanBubble(raw[i]?.bubble)) : '')).filter((_, i) => !!(picked.get(lines[i].id) ?? fb[i % fb.length]));
     const result = { lines: chosen, bubbles, source: 'llm' as const };
     done.set(key, result);
     if (done.size > CACHE_MAX) done.delete(done.keys().next().value!);
