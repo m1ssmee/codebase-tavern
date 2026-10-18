@@ -678,10 +678,19 @@ function RoadCard({ e, cut, onClose }: { e: Edge; cut: boolean; onClose: () => v
     const r = refs[0];
     if (!r) return;
     const A = name(e.from), B = name(e.to);
+    // Concrete for the diff writer: the names this import brings in and the lines of the file that use them.
+    const lines = repo.files.find((f) => f.path === r.file)?.content.split('\n') ?? [];
+    const spec = lines.slice(r.line - 1, Math.max(r.line, r.endLine)).join(' ');
+    const names = (spec.match(/import\s+(?:type\s+)?(?:\{([^}]*)\}|\*\s+as\s+(\w+)|(\w+))/)?.slice(1).find(Boolean) ?? '')
+      .split(',')
+      .map((x) => x.trim().split(/\s+as\s+/).pop()!.replace(/^type\s+/, ''))
+      .filter((x) => /^\w+$/.test(x));
+    const uses = names.length ? lines.flatMap((l, i) => (i + 1 >= r.line && i + 1 <= Math.max(r.line, r.endLine)) || !names.some((n) => new RegExp(`\\b${n}\\b`).test(l)) ? [] : [i + 1]).slice(0, 8) : [];
+    const what = e.kind === 'calls' ? `Delete the call at ${where(r)}` : `Delete the import at ${where(r)}${names.length ? ` (${names.join(', ')})` : ''}`;
     useTavern.getState().openWhatIf({
       kind: 'describe',
       title: `Cut the road from ${A} to ${B}`,
-      description: `Remove the dependency from ${A} to ${B}: ${A} stops ${e.kind === 'calls' ? 'calling' : 'importing'} ${B}. Delete the ${e.kind === 'calls' ? 'call' : 'import'} at ${where(r)} and change ${A}'s code so it works without ${B}.`,
+      description: `Remove the dependency from ${A} to ${B}: ${A} stops ${e.kind === 'calls' ? 'calling' : 'importing'} ${B}. ${what}${uses.length ? ` and rewrite every use of ${names.join(', ')} in ${r.file} (lines ${uses.join(', ')})` : ''} so ${A} works without ${B}.`,
       path: r.file,
       startLine: r.line,
       endLine: r.kind === 'calls' ? r.line : Math.max(r.line, r.endLine),
@@ -762,7 +771,11 @@ export default function MapView() {
       const b = useStage.getState().bubbles;
       if (Object.values(b).some((x) => x.until && x.until < now)) useStage.setState({ bubbles: Object.fromEntries(Object.entries(b).filter(([, x]) => !x.until || x.until >= now)) });
     }, 500);
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && useHood.setState({ cut: false });
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      useHood.setState({ cut: false });
+      useStage.setState({ menu: null });
+    };
     window.addEventListener('keydown', esc);
     return () => {
       clearInterval(t);
@@ -805,7 +818,7 @@ export default function MapView() {
           {said ?? caption}
         </div>
       )}
-      <div className="absolute top-3 right-3 flex gap-1.5">
+      <div className="absolute right-3 bottom-12 flex gap-1.5">
         <button
           type="button"
           disabled={!!follow}
@@ -830,7 +843,7 @@ export default function MapView() {
         <button
           type="button"
           onClick={() => useTavern.getState().ripple(selected ?? busiest.id)}
-          className="absolute top-12 right-3 rounded-full border border-dashed border-tomato px-3 py-1 text-xs text-tomato hover:bg-tomato/10"
+          className="absolute top-3 right-3 rounded-full border border-dashed border-tomato px-3 py-1 text-xs text-tomato hover:bg-tomato/10"
         >
           Test ripple (dev)
         </button>

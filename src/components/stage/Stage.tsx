@@ -558,8 +558,10 @@ export function Menu({ id }: { id: string }) {
   const characters = useTavern((s) => s.characters);
   const [fight, setFight] = useState(false);
   const first = useRef<HTMLButtonElement>(null);
+  // A frame later: on the Neighbourhood the menu's layer is still hidden (unfocusable) on its first frame.
   useEffect(() => {
-    first.current?.focus();
+    const t = setTimeout(() => first.current?.focus(), 40);
+    return () => clearTimeout(t);
   }, [id, fight]);
   useEffect(() => {
     const away = (e: PointerEvent) => {
