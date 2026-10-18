@@ -57,7 +57,8 @@ const py = { path: 'm/a.py', content: 'def f():\n    if x:\n        for y in z:\
 const js = { path: 'm/index.js', content: 'function a() { if (b) { c({}) } } // FIXME XXX', lineCount: 1 };
 const st = computeStats({ filePaths: ['m/a.py', 'm/index.js'] }, [py, js]);
 assert.deepEqual([st.maxNesting, st.todoCount, st.hasTests, st.biggestFile.path], [3, 3, false, 'm/a.py']);
-assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js', 'm/sub/README.md'], stats: st }), 'm/sub/README.md');
+assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js', 'm/sub/README.md'], stats: st }), 'm/index.js'); // code beats the README
+assert.equal(entryFile({ filePaths: ['m/guide.md', 'm/sub/README.md'], stats: { ...st, biggestFile: { path: 'm/guide.md', lines: 9 } } }), 'm/sub/README.md'); // no code: the README
 assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js'], stats: st }), 'm/index.js');
 
 console.log('checks ok');
@@ -871,4 +872,46 @@ console.log('judge template checks ok');
   assert.equal(hits['sk-busy'], 1);
   server.close();
   console.log('retry policy checks ok');
+}
+
+// Casting and AI polish: importance ranking, the root rule, the main-file rule, Go imports into a split root.
+{
+  const { detectModules, importance, mainFile, entryFile } = await import('../src/lib/analyze.ts');
+  const { assignCast } = await import('../src/lib/cast.ts');
+  const { buildGraph } = await import('../src/lib/graph.ts');
+  const F = (path, content = 'x\nx\n') => ({ path, content, lineCount: content.split('\n').length });
+  const L = (n, head = '') => head + 'x\n'.repeat(n);
+  // importance: who depends on it beats size; the repo's own name (react, react-dom) counts
+  const pk = (name, lines, imports = []) => F(`packages/${name}/src/index.js`, imports.map((i) => `import x from '${i}';\n`).join('') + L(lines));
+  const mono = [
+    pk('big-tool', 3000), pk('tool-b', 2500), pk('tool-c', 2400), pk('tool-d', 2300), pk('tool-e', 2200), pk('tool-f', 2100), pk('tool-g', 2000), pk('tool-h', 1900),
+    pk('react', 300), pk('react-dom', 400, ['react']), pk('shared', 200), pk('scheduler', 150, ['shared']),
+    pk('reconciler', 900, ['shared', 'scheduler', 'react']), pk('art', 100, ['reconciler', 'shared', 'react']),
+  ];
+  const cast = detectModules(mono, 'facebook/react').map((m) => m.name);
+  for (const n of ['react', 'react-dom', 'shared', 'reconciler']) assert.ok(cast.includes(n), `${n} in ${cast}`);
+  assert.equal(cast.at(-1), 'misc');
+  assert.ok(!cast.includes('tool-h')); // big but nobody needs it
+  const score = importance(detectModules(mono.slice(8), 'facebook/react'), mono.slice(8), 'facebook/react');
+  assert.ok(score.get('packages/react') > score.get('packages/art')); // exact name + 3 dependents > a leaf
+  // the root: the Librarian only when it is mostly docs or config; otherwise from its content like anyone else
+  const docsRoot = detectModules([F('README.md'), F('LICENSE'), F('package.json'), F('index.js', L(5)), F('lib/a.js', L(50)), F('lib/b.js', L(40))]);
+  const codeRoot = detectModules([F('go.mod', 'module github.com/spf13/cobra\n'), F('cobra.go', L(300)), F('args.go', L(200)), F('README.md'), F('doc/man.go', L(100, 'package doc\nimport "github.com/spf13/cobra"\n'))], 'spf13/cobra');
+  const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, c.archetype]));
+  assert.equal(castOf(docsRoot)['(root)'], 'librarian');
+  assert.notEqual(castOf(codeRoot)['(root)'], 'librarian');
+  // main file: source code over the README whenever the module has code (cobra's root: a .go file)
+  assert.equal(entryFile(codeRoot.find((m) => m.id === '(root)')), 'cobra.go');
+  assert.equal(mainFile([F('m/README.md', L(80)), F('m/util.py', L(30)), F('m/core.py', L(60)), F('m/test_core.py', L(500))]), 'm/core.py');
+  assert.equal(mainFile([F('m/README.md', L(80)), F('m/index.ts', L(5)), F('m/big.ts', L(600))]), 'm/index.ts');
+  assert.equal(mainFile([F('d/guide.md', L(80)), F('d/README.md', L(10))]), 'd/README.md');
+  // Go: importing the root package lands on the root module even when its biggest files are tenants
+  const goFiles = [F('go.mod', 'module github.com/spf13/cobra\n'), F('command.go', L(900)), F('completions.go', L(700)), F('flags.go', L(400)), F('args.go', L(200)), F('cobra.go', L(150)), F('util.go', L(50)), F('doc/man.go', L(300, 'package doc\nimport "github.com/spf13/cobra"\n'))];
+  const gm = detectModules(goFiles, 'spf13/cobra');
+  assert.deepEqual(buildGraph(goFiles, gm).edges.map((e) => `${e.from}>${e.to}`), ['doc>(root)']);
+  // the saved argument counts the retry right: MAX_PAYMENT_ATTEMPTS = 2 is one retry, not two
+  const { default: argue } = await import('../src/data/demoArgue.json', { with: { type: 'json' } });
+  const ordersTurn = argue.pairs[0].turns[2].text;
+  assert.ok(!/exactly twice|retry twice|two retries/i.test(ordersTurn) && /one retry/.test(ordersTurn) && /\[orders\/checkout\.ts:18\]/.test(ordersTurn), ordersTurn);
+  console.log('casting polish checks ok');
 }

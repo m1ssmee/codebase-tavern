@@ -526,7 +526,7 @@ function Menu({ id }: { id: string }) {
         { label: 'Who needs you?', run: go(() => scenes.whoNeedsYou(id, send)) },
         { label: 'Roast me', run: go(() => scenes.roastMe(id, send)) },
         { label: 'What if I change you?', run: go(() => scenes.whatIfMe(id)) },
-        { label: 'Gossip', run: go(() => scenes.gossip(id)) },
+        { label: 'Gossip', run: go(async () => (await useTavern.getState().getGossip(id), scenes.gossip(id))) }, // written on request (store.getGossip)
         { label: 'Pick a fight with…', run: () => setFight(true) },
       ];
   const n = items.length;

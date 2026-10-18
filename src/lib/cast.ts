@@ -20,7 +20,7 @@ export const CAST: Record<Archetype, { name: string; joke: string; keywords: str
   junkDrawer: { name: 'The Junk Drawer', joke: 'Everything nobody knew where to put ends up here.', keywords: ['utils', 'helpers', 'lib', 'common', 'shared', 'misc'] },
   plumber: { name: 'The Plumber', joke: "Everything flows through it, and it's held together with tape.", keywords: ['db', 'database', 'models', 'data', 'repository', 'migrations', 'store', 'schema'] },
   star: { name: 'The Star', joke: 'Flawless from the front, held together with clamps from behind.', keywords: ['ui', 'components', 'views', 'pages', 'styles', 'frontend', 'client'] },
-  librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: ['docs', 'readme', 'root', 'config', 'settings', '.github'] },
+  librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: ['docs', 'readme', 'config', 'settings', '.github'] },
   landlord: { name: 'The Landlord', joke: 'Owns the building, fixes nothing, and is tired of every tenant.', keywords: [] },
   judge: { name: 'The Judge', joke: 'Its head is a gavel: the final word, applied with blunt force.', keywords: [] },
 };
@@ -49,15 +49,19 @@ export const mainFiles = (m: Pick<Module, 'path' | 'filePaths'>) =>
   );
 
 const CONFIG_JSON = /^(\.|package|tsconfig|jsconfig|composer|vercel|netlify|turbo|lerna|nx|renovate|app\.json$)|(config|settings|rc)\.json$/i;
+// Dotfiles (.gitignore, .editorconfig, .npmrc, .eslintrc) are config too.
 const isDocOrConfig = (p: string) =>
-  /(^|\/)\.github\//.test(p) || /\.(md|mdx|txt|rst|adoc|ya?ml)$/i.test(p) || /^licen[cs]e(\.[a-z]+)?$/i.test(base(p)) || (/\.json$/i.test(p) && CONFIG_JSON.test(base(p)));
-/** At least 60% of its files are docs or config: the Librarian's territory, like root. */
+  /(^|\/)\.github\//.test(p) || /^\.[^/]+$/.test(base(p)) || /\.(md|mdx|txt|rst|adoc|ya?ml)$/i.test(p) || /^licen[cs]e(\.[a-z]+)?$/i.test(base(p)) || (/\.json$/i.test(p) && CONFIG_JSON.test(base(p)));
+/** At least 60% of its files are docs or config: the Librarian's territory (a root that is mostly README and config, too). */
 export const isDocsModule = (m: Pick<Module, 'filePaths'>) => m.filePaths.length > 0 && m.filePaths.filter(isDocOrConfig).length / m.filePaths.length >= 0.6;
 
-/** Every archetype a module could be, best first: root or docs/config, then its folder name, then its main file names. */
+/**
+ * Every archetype a module could be, best first: docs/config, then its folder name, then its main file names. The root
+ * is the Librarian only when it is mostly docs or config; otherwise its files decide, like any module ("root" says nothing).
+ */
 export function candidates(m: Module): Archetype[] {
   const fileHits = mainFiles(m).flatMap((p) => keywordArchetypes(base(p).replace(/\.[^.]+$/, '')));
-  return [...new Set<Archetype>([...(m.id === '(root)' || isDocsModule(m) ? ['librarian' as const] : []), ...keywordArchetypes(m.name), ...fileHits])];
+  return [...new Set<Archetype>([...(isDocsModule(m) ? ['librarian' as const] : []), ...(m.id === '(root)' ? [] : keywordArchetypes(m.name)), ...fileHits])];
 }
 
 /**
