@@ -5,12 +5,12 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import dynamic from 'next/dynamic';
 import { useTavern } from '@/lib/store';
-import Rich from '../Rich';
+import { quip } from '@/lib/quip';
 import { sendChat } from '../ChatPanel';
 import { useCast3D } from '../cast/settings';
 import { reducedMotion } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
-import { actorOf, thinkWhile, useStage, type Member } from './store';
+import { actorOf, thinkWhile, useStage, type Bubble, type Member } from './store';
 import { bus, lineAt, lineBox } from './bus';
 import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
 import { perchNear, tickPerches, typed } from './perches';
@@ -436,54 +436,54 @@ function Bubbles() {
   const reactions = useTavern((s) => s.bubbles); // What-if reactions, also shown on the map
   const members = useStage((s) => s.members);
   const thinking = useStage((s) => s.thinking);
-  const [, tick] = useState(0);
-  // Re-placed twice a second (the frame loop moves them; this catches new sizes).
+  // Twice a second: re-placed (the frame loop moves them; this catches new sizes), and fading ones fade.
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const t = setInterval(() => tick((x) => x + 1), 500);
+    const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, []);
   const ids = members.map((m) => m.id).filter((id) => bubbles[id] || reactions[id] || thinking[id]);
   return (
     <>
       {ids.map((id) => (
-        <BubbleView key={id} id={id} text={bubbles[id]?.text ?? reactions[id] ?? ''} msg={bubbles[id]?.msg} />
+        <BubbleView key={id} id={id} b={bubbles[id]} reaction={reactions[id] ?? undefined} now={now} />
       ))}
     </>
   );
 }
 
-const MAX_CHARS = 420;
-function BubbleView({ id, text, msg }: { id: string; text: string; msg?: { mod: string; id: string } }) {
-  const live = useTavern((s) => (msg ? s.chats[msg.mod]?.find((m) => m.id === msg.id) : undefined));
+/**
+ * The bubble over a character. When its text is in full elsewhere (a chat answer in the transcript, a What-if
+ * reaction in the panel; scenes pass quips for the rest), it shows only the quip, about 5 s, then fades; a click
+ * scrolls to the full text. Thinking cues and the lines that live only here show as they are.
+ */
+function BubbleView({ id, b, reaction, now }: { id: string; b?: Bubble; reaction?: string; now: number }) {
+  const live = useTavern((s) => (b?.msg ? s.chats[b.msg.mod]?.find((m) => m.id === b.msg!.id) : undefined));
+  const streaming = useTavern((s) => s.isLoading);
+  const spice = useTavern((s) => s.spice);
   const thinking = useThinking(id);
-  const files = useTavern((s) => s.repo?.files ?? []);
   const name = useTavern((s) => (id === 'judge' ? 'The Judge' : id === 'landlord' ? 'The Landlord' : (s.characters[id]?.name ?? id)));
-  // A citation still being typed shows only once it closes.
-  const body = (live ? live.text : text).replace(/\[[^\]\n]*$/, '');
   if (live?.role === 'system') return null;
-  const long = body.length > MAX_CHARS;
+  const body = live ? quip(live.text, spice, { partial: streaming }) : b ? b.text : reaction ? quip(reaction, spice) : '';
+  const link = b?.msg ? `msg-${b.msg.id}` : (b?.link ?? (reaction && !b ? `whatif-${id}` : undefined));
+  const fading = !!b?.until && b.until - now < 700;
   return (
     <div
       ref={(el) => {
         if (el) bubbleEls.set(id, el);
         else bubbleEls.delete(id);
       }}
-      className="stage-bubble pointer-events-auto absolute top-0 left-0 w-80 max-w-[42vw] rounded-2xl border-2 border-cream bg-white px-3 py-2 text-[13px] leading-snug text-cream shadow-[3px_3px_0_rgba(0,0,0,0.85)]"
-      style={{ visibility: 'hidden' }}
+      onClick={() => link && document.getElementById(link)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+      title={link ? 'Show the full text' : undefined}
+      className={`stage-bubble pointer-events-auto absolute top-0 left-0 w-72 max-w-[42vw] rounded-2xl border-2 border-cream bg-white px-3 py-2 text-[13px] leading-snug text-cream shadow-[3px_3px_0_rgba(0,0,0,0.85)] transition-opacity duration-700 ${link ? 'cursor-pointer' : ''} ${!b && reaction ? 'quip-fade' : ''}`}
+      style={{ visibility: 'hidden', opacity: fading ? 0 : 1 }}
       role="status"
       aria-live="polite"
     >
       <div className="text-[11px] font-semibold text-muted">{name}</div>
-      <div className="max-h-48 overflow-hidden">
-        {body && <Rich text={long ? body.slice(0, MAX_CHARS).replace(/\s+\S*$/, '') + '…' : body} files={files} />}
-        {/* Waiting on the AI: the thinking cue until the answer starts. */}
-        {thinking ? <ThinkingText id={id} className="block text-muted italic" /> : !body && <span className="text-muted">…</span>}
-      </div>
-      {long && msg && (
-        <button type="button" className="mt-1 text-[11px] font-medium text-amber-700 underline underline-offset-2" onClick={() => document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
-          Continue in transcript
-        </button>
-      )}
+      {body && <div className={link ? 'line-clamp-2' : 'max-h-48 overflow-hidden'}>{body}</div>}
+      {/* Waiting on the AI: the thinking cue until the answer starts. */}
+      {thinking ? <ThinkingText id={id} className="block text-muted italic" /> : !body && <span className="text-muted">…</span>}
     </div>
   );
 }

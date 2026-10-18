@@ -8,6 +8,7 @@ import { blipText } from '@/lib/blips';
 import { dependentsOf } from '@/lib/graph';
 import { entryFile, isCode } from '@/lib/analyze';
 import { aiOffLine, flingLine, needsLine, needsSummary, neverMet } from '@/lib/stageLines';
+import { quip } from '@/lib/quip';
 import type { Citation, ChatMessage } from '@/lib/types';
 import demoArgue from '@/data/demoArgue.json';
 import { getActor } from '../cast/anim/actor';
@@ -126,26 +127,33 @@ const busy = (id: string, on: boolean) => useStage.setState((s) => ({ busy: { ..
 export const isBusy = (id: string) => !!S().busy[id] || (T().isLoading && T().selectedModuleId === id);
 
 /** A bubble that types itself out with the character's voice, then stays `keep` ms. */
-export async function typeOut(id: string, text: string, o: { keep?: number; avoid?: Citation | null } = {}) {
+export async function typeOut(id: string, text: string, o: { keep?: number; avoid?: Citation | null; link?: string } = {}) {
   const pitch = T().characters[id]?.voicePitch ?? 1;
   actor(id)?.setTalking(true);
-  if (reducedMotion()) say(id, { text, avoid: o.avoid });
+  if (reducedMotion()) say(id, { text, avoid: o.avoid, link: o.link });
   else
     for (let i = 2; i < text.length; i += 2) {
-      say(id, { text: text.slice(0, i), avoid: o.avoid });
+      say(id, { text: text.slice(0, i), avoid: o.avoid, link: o.link });
       blipText(text[i - 1], pitch, T().muted);
       await sleep(40);
     }
-  say(id, { text, avoid: o.avoid, until: Date.now() + (o.keep ?? 5000) });
+  say(id, { text, avoid: o.avoid, link: o.link, until: Date.now() + (o.keep ?? 5000) });
   actor(id)?.setTalking(false);
 }
 
-/** Add a line to the transcript (the right panel), in the selected module's history. */
-function transcript(speakerId: string, text: string, role: ChatMessage['role'] = 'character') {
+/** Add a line to the transcript (the right panel), in the selected module's history. Returns its element id. */
+function transcript(speakerId: string, text: string, role: ChatMessage['role'] = 'character'): string | undefined {
   const t = T();
   const mod = t.selectedModuleId;
   if (!mod) return;
-  t.addMessage(mod, { id: crypto.randomUUID(), role, characterId: speakerId, text, citations: extractCitations(text).filter((c) => isValidCitation(c, t.repo?.files ?? [])) });
+  const id = crypto.randomUUID();
+  t.addMessage(mod, { id, role, characterId: speakerId, text, citations: extractCitations(text).filter((c) => isValidCitation(c, t.repo?.files ?? [])) });
+  return `msg-${id}`;
+}
+/** Said in the transcript in full; the bubble gets the quip (the line with the most personality) and links to it. */
+async function sayBoth(id: string, text: string, o: { keep?: number; avoid?: Citation | null } = {}) {
+  const link = transcript(id, text);
+  await typeOut(id, quip(text, T().spice), { keep: 5000, ...o, link });
 }
 
 // ---------- pointing ----------
@@ -239,7 +247,7 @@ export async function answer(mod: string, msgId: string, focus: Citation | null)
   if (onMap()) {
     say(mod, { text: '', msg: { mod, id: msgId } });
     await until(() => !T().isLoading || msg()?.role === 'system', 60_000);
-    useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 12_000 } } } : {}));
+    useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 5000 } } } : {}));
     return;
   }
   if (!visible()) return;
@@ -258,7 +266,7 @@ export async function answer(mod: string, msgId: string, focus: Citation | null)
   }
   await tour(mod, () => msg()?.text ?? '', () => !T().isLoading || msg()?.role === 'system');
   busy(mod, false);
-  useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 12_000 } } } : {}));
+  useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 5000 } } } : {}));
   settle(mod, 6000);
 }
 
@@ -270,8 +278,7 @@ export async function gossip(id: string) {
   if (!lines.length) return;
   speaker(id);
   const line = lines[Math.floor(Math.random() * lines.length)];
-  transcript(id, line);
-  await typeOut(id, line, { keep: 5000 });
+  await sayBoth(id, line);
 }
 
 /** "Roast me": the character roasts itself (a chat turn), the neighbours on stage laugh; it holds a grudge after. */
@@ -325,17 +332,15 @@ export async function whoNeedsYou(id: string, send: Send) {
   await sleep(900 + deps.length * 250);
   for (const [i, { e, c }] of refs.entries()) {
     const line = needsLine({ id: e.from, name: nameOf(e.from), stats: t.repo.modules.find((m) => m.id === e.from)!.stats }, nameOf(id), { ...c, kind: e.kind }, e.weight, t.spice);
-    transcript(e.from, line);
     busy(e.from, true);
-    await Promise.all([pointLine(e.from, c, { hold: 1.2 }), typeOut(e.from, line, { keep: 2500, avoid: c })]);
+    await Promise.all([pointLine(e.from, c, { hold: 1.2 }), sayBoth(e.from, line, { keep: 2500, avoid: c })]);
     busy(e.from, false);
     setAnchor(e.from, { k: 'row', i: i + 1, n: deps.length + 1 });
   }
   if (t.demo || !deps.length) {
     const text = needsSummary(nameOf(id), refs.map(({ e, c }) => ({ name: nameOf(e.from), weight: e.weight, kind: e.kind, ref: c })), t.spice);
-    transcript(id, text);
     busy(id, true);
-    await Promise.all([typeOut(id, text, { keep: 7000 }), tour(id, () => text, () => true)]);
+    await Promise.all([sayBoth(id, text), tour(id, () => text, () => true)]);
     busy(id, false);
   } else await send('Who depends on you? Which other files import or use you?', id);
   await sleep(3500);
@@ -386,10 +391,9 @@ export async function argue(a: string, b: string) {
       last = turn;
       const other = turn.moduleId === a ? b : a;
       say(other, null);
-      transcript(turn.moduleId, turn.text);
       busy(turn.moduleId, true);
       const c = extractCitations(turn.text).find((x) => isValidCitation(x, t.repo!.files));
-      await Promise.all([typeOut(turn.moduleId, turn.text, { keep: 4000, avoid: c }), c ? pointLine(turn.moduleId, c, { hold: 1 }) : Promise.resolve()]);
+      await Promise.all([sayBoth(turn.moduleId, turn.text, { avoid: c }), c ? pointLine(turn.moduleId, c, { hold: 1 }) : Promise.resolve()]);
       busy(turn.moduleId, false);
       setAnchor(turn.moduleId, { k: 'row', i: turn.moduleId === a ? 0 : 1, n: 2 });
       await sleep(350);
@@ -504,16 +508,24 @@ const seat = new Map<string, Anchor>();
 export async function courtTurn(turn: { moduleId: string; text: string; accuses?: string }) {
   if (S().scene !== 'tribunal') return;
   const id = turn.moduleId;
-  useStage.setState((s) => ({ bubbles: { [id]: { text: '' } }, busy: { ...s.busy, [id]: true } }));
+  // The turn is in full in the Tribunal's transcript: the bubble types its quip out alongside.
+  said.set(id, { q: quip(turn.text, T().spice) });
+  useStage.setState((s) => ({ bubbles: { [id]: { text: '', link: 'tribunal-end' } }, busy: { ...s.busy, [id]: true } }));
   const a = home(id);
   if (a) seat.set(id, a);
   if (turn.accuses && walks()) await bonk(actorOf(id), actorOf(turn.accuses));
   const c = extractCitations(turn.text).find((x) => isValidCitation(x, T().repo?.files ?? []));
   if (c) await pointLine(id, c, { hold: 1.4 });
 }
-export const courtSay = (id: string, text: string) => S().scene === 'tribunal' && useStage.setState((s) => ({ bubbles: { ...s.bubbles, [id]: { ...s.bubbles[id], text } } }));
+const said = new Map<string, { q: string }>();
+export const courtSay = (id: string, typed: string) => {
+  const w = said.get(id);
+  const text = w ? w.q.slice(0, typed.length) : typed; // typed at the panel's pace, so the short quip is up at once
+  if (S().scene === 'tribunal') useStage.setState((s) => ({ bubbles: { ...s.bubbles, [id]: { ...s.bubbles[id], text } } }));
+};
 export function courtTurnEnd(id: string) {
   if (S().scene !== 'tribunal') return;
+  useStage.setState((s) => (s.bubbles[id] ? { bubbles: { ...s.bubbles, [id]: { ...s.bubbles[id], until: Date.now() + 5000 } } } : {}));
   busy(id, false);
   setAnchor(id, seat.get(id) ?? { k: 'home' });
   useStage.setState({ arrows: {} });

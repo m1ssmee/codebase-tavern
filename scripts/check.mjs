@@ -990,3 +990,50 @@ console.log('judge template checks ok');
   }
   console.log('thinking cue checks ok');
 }
+
+// ---- quips: the bubble's short line when the full text is in the chat or a panel. For every saved demo text (the
+// line explanation, the argument, the hearing, the What-if reactions, the gossip), the stage's template lines and the
+// voice guide's example, at every spice level: at most two lines (90 characters), no citation, no code, past the filter.
+{
+  const { quip, hasCode, QUIP_MAX } = await import('../src/lib/quip.ts');
+  const { lineProblem, SWEARING } = await import('../src/lib/guards.ts');
+  const { neverMet, needsLine, needsSummary, aiOffLine, sulkyOpener } = await import('../src/lib/stageLines.ts');
+  const json = (f) => import(`../src/data/${f}`, { with: { type: 'json' } }).then((m) => m.default);
+  const [lines, argue, hearing, whatIf, cast] = await Promise.all(['demoLines.json', 'demoArgue.json', 'demoTribunal.json', 'demoWhatIf.json', 'demoCharacters.json'].map(json));
+  const saved = [
+    ...lines.items.map((i) => i.text),
+    ...argue.pairs.flatMap((p) => p.turns.map((t) => t.text)),
+    ...hearing.turns.map((t) => t.text),
+    ...whatIf.runs.flatMap((r) => r.items.map((i) => i.reaction).filter(Boolean)),
+    ...(cast.characters ?? cast).flatMap((c) => c.gossip ?? []),
+  ];
+  const who = (id, name, lines) => ({ id, name, stats: { totalLines: lines, fileCount: 3, todoCount: 1, biggestFile: { path: '', lines }, maxNesting: 3, hasTests: false } });
+  const ref = { path: 'orders/checkout.ts', startLine: 20, endLine: 31, kind: 'imports' };
+  const EXAMPLE = "I turn a customer's basket into a paid order by asking payments to charge their card.\n1. A customer clicks Pay and `checkout()` starts [orders/checkout.ts:33].\n2. I send payments a charge request with `order_id` and `amount` [orders/checkout.ts:20-31].\n3. If the gateway stops waiting after 2000ms, I get an `UpstreamTimeoutError` and fire the same damn charge again, up to `MAX_PAYMENT_ATTEMPTS = 2` [orders/checkout.ts:44-52].\nWhy it matters: payments takes about 2400ms under load [payments/processor.ts:26], so my retry bills the card twice. No idempotency key (a unique ID that lets payments recognise a repeated request), so that retry is a fucking landmine.";
+  let n = 0;
+  for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
+    const texts = [
+      ...saved,
+      EXAMPLE,
+      ...neverMet(who('orders', 'orders', 169), who('utils', 'utils', 503), spice).map((t) => t.text),
+      needsLine(who('orders', 'orders', 169), 'utils', ref, 2, spice),
+      needsSummary('utils', [{ name: 'orders', weight: 2, kind: 'imports', ref }], spice),
+      aiOffLine(spice, 'orders'),
+      sulkyOpener({ roasted: 1, pestered: 0 }, spice) + '\n\n' + EXAMPLE,
+    ];
+    for (const t of texts) {
+      const q = quip(t, spice);
+      n++;
+      assert.ok(q && q.length <= QUIP_MAX, `${spice}: quip within two lines: ${q}`);
+      assert.ok(!/\[[^\]\n]*:[^\]\n]*\]/.test(q) && !hasCode(q), `${spice}: no citation or code: ${q}`);
+      assert.equal(lineProblem(q, { clean: spice === 'clean' }), null, `${spice}: ${q}`);
+      if (spice === 'clean') assert.ok(!SWEARING.test(q), `clean quip: ${q}`);
+    }
+  }
+  // The curse, never the technical step; a reply still streaming quips only finished sentences.
+  assert.equal(quip(EXAMPLE, 'unhinged'), 'That retry is a fucking landmine.');
+  assert.equal(quip(EXAMPLE, 'clean'), "I turn a customer's basket into a paid order by asking payments to charge their card.");
+  assert.equal(quip('I retry once. That is damn reckless when the gate', 'unhinged', { partial: true }), 'I retry once.');
+  assert.equal(quip(''), '');
+  console.log(`quip checks ok (${n} texts)`);
+}

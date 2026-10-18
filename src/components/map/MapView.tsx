@@ -630,19 +630,10 @@ function Scene() {
                   </div>
                 </Dom>
               )}
-              {(talk[m.id] || thinking[m.id]) && menu !== m.id ? (
+              {(talk[m.id] || thinking[m.id] || bubbles[m.id]) && menu !== m.id && !(hovered === m.id && !dragging && !talk[m.id] && !thinking[m.id]) && (
                 <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={5} clamp>
-                  <SpeechBubble id={m.id} b={talk[m.id]} />
+                  <SpeechBubble id={m.id} b={talk[m.id]} reaction={bubbles[m.id] ?? undefined} />
                 </Dom>
-              ) : (
-                bubbles[m.id] &&
-                !(hovered === m.id && !dragging) && (
-                  <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={4} clamp>
-                    <div className="w-max max-w-60 -translate-y-1/2 rounded-2xl rounded-bl-sm border border-edge bg-panel px-2.5 py-1.5 text-xs leading-snug text-cream shadow-md">
-                      {bubbles[m.id]}
-                    </div>
-                  </Dom>
-                )
               )}
             </group>
             <Dom position={[0, 0, n.scale * 0.42 + 0.35]} z={1}>

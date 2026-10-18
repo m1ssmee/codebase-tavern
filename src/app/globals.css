@@ -94,6 +94,10 @@ body {
   .think-dots i { animation: none; opacity: 0.6; }
 }
 
+/* A What-if reaction's quip over a character: it fades after about 5 s. */
+@keyframes quip-fade { to { opacity: 0; } }
+.quip-fade { animation: quip-fade 0.7s ease 4.3s forwards; }
+
 /* nuclear: short screen shake on the Tribunal verdict */
 @keyframes nuclear-shake {
   0%, 100% { transform: translate(0, 0); }

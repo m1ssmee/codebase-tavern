@@ -94,7 +94,10 @@ export default function TribunalPanel() {
   const judgeWait = useRef<(() => void) | null>(null);
   const judgeThinks = (on: boolean) => {
     if (on) judgeWait.current ??= think(['judge']);
-    else (judgeWait.current?.(), (judgeWait.current = null));
+    else {
+      judgeWait.current?.();
+      judgeWait.current = null;
+    }
   };
   const stop = useRef(false);
   const skip = useRef(false);
@@ -439,7 +442,7 @@ export default function TribunalPanel() {
             <Cue id="judge" size={36} />
           </div>
         )}
-        <div ref={endRef} />
+        <div ref={endRef} id="tribunal-end" />
       </div>
 
       <div className="border-t border-edge p-3">

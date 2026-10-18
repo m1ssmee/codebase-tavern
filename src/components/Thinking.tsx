@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { useTavern } from '@/lib/store';
 import { hash } from '@/lib/characters';
 import { thinkingLine } from '@/lib/thinkingLines';
-import Rich from './Rich';
+import { quip } from '@/lib/quip';
 import { archetypeOf, ModuleFace } from './Portrait';
 import { useStage, type Bubble } from './stage/store';
 
@@ -35,20 +35,36 @@ export function ThinkingText({ id, className = '' }: { id: string; className?: s
   );
 }
 
-/** A character's speech bubble off the stage (the Neighbourhood, the Blueprint): its live answer, a line, or its cue. */
-export function SpeechBubble({ id, b }: { id: string; b?: Bubble }) {
+/**
+ * A character's speech bubble off the stage (the Neighbourhood, the Blueprint), like the stage's: a chat answer or a
+ * What-if reaction as its quip (the full text is in the chat or the panel; a click scrolls there), a line as said,
+ * or its thinking cue. Fades out at the end.
+ */
+export function SpeechBubble({ id, b, reaction }: { id: string; b?: Bubble; reaction?: string }) {
   const live = useTavern((s) => (b?.msg ? s.chats[b.msg.mod]?.find((x) => x.id === b.msg!.id) : undefined));
-  const files = useTavern((s) => s.repo?.files ?? []);
+  const streaming = useTavern((s) => s.isLoading);
+  const spice = useTavern((s) => s.spice);
   const name = useTavern((s) => (id === 'judge' ? 'The Judge' : id === 'landlord' ? 'The Landlord' : (s.characters[id]?.name ?? id)));
   const thinking = useThinking(id);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
   if (live?.role === 'system') return null;
-  const body = (live ? live.text : (b?.text ?? '')).replace(/\[[^\]\n]*$/, '');
-  const short = body.length > 280 ? body.slice(0, 280).replace(/\s+\S*$/, '') + '…' : body;
+  const body = live ? quip(live.text, spice, { partial: streaming }) : b ? b.text : reaction ? quip(reaction, spice) : '';
+  const link = b?.msg ? `msg-${b.msg.id}` : (b?.link ?? (reaction && !b ? `whatif-${id}` : undefined));
+  const fading = !!b?.until && b.until - now < 700;
   return (
-    <div className="pointer-events-auto w-72 -translate-y-1/2 rounded-2xl rounded-bl-sm border-2 border-cream bg-white px-3 py-2 text-xs leading-snug text-cream shadow-[3px_3px_0_rgba(0,0,0,0.85)]">
+    <div
+      onClick={() => link && document.getElementById(link)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+      title={link ? 'Show the full text' : undefined}
+      className={`pointer-events-auto w-64 -translate-y-1/2 rounded-2xl rounded-bl-sm border-2 border-cream bg-white px-3 py-2 text-xs leading-snug text-cream shadow-[3px_3px_0_rgba(0,0,0,0.85)] transition-opacity duration-700 ${link ? 'cursor-pointer' : ''} ${!b && reaction ? 'quip-fade' : ''}`}
+      style={{ opacity: fading ? 0 : 1 }}
+    >
       <div className="text-[11px] font-semibold text-muted">{name}</div>
-      {short && <Rich text={short} files={files} />}
-      {thinking ? <ThinkingText id={id} className="block text-muted italic" /> : !short && <span className="text-muted">…</span>}
+      {body && <div className={link ? 'line-clamp-2' : ''}>{body}</div>}
+      {thinking ? <ThinkingText id={id} className="block text-muted italic" /> : !body && <span className="text-muted">…</span>}
     </div>
   );
 }

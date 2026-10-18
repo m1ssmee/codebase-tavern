@@ -62,7 +62,11 @@ export default function WhatIfPanel() {
   const waits = useRef(new Map<string, () => void>());
   const wait = (ids: string[]) => ids.forEach((id) => !waits.current.has(id) && waits.current.set(id, think([id])));
   const unwait = (id?: string) => {
-    for (const [k, end] of waits.current) if (!id || k === id) (end(), waits.current.delete(k));
+    for (const [k, end] of waits.current)
+      if (!id || k === id) {
+        end();
+        waits.current.delete(k);
+      }
   };
   const ownerOf = (path?: string) => repo?.modules.find((m) => path && m.filePaths.includes(path))?.id;
 
@@ -90,7 +94,7 @@ export default function WhatIfPanel() {
     const s = useTavern.getState();
     s.setBubble(id, r.reaction);
     blipText(r.reaction, s.characters[id]?.voicePitch ?? 1, s.muted);
-    later(7000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null));
+    later(5000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null)); // its quip, ~5 s
   };
   /** Live runs: the reactions come after the verdicts, once the comedy editor has picked them; they play in turn. */
   const voice = (reactions: Record<string, string>) =>
@@ -527,7 +531,7 @@ export default function WhatIfPanel() {
                 .filter((c, k, all) => isValidCitation(c, repo.files) && all.findIndex((x) => x.path === c.path && x.startLine === c.startLine) === k)
                 .slice(0, 6);
               return (
-                <div key={i.moduleId} className="rounded-xl border border-edge p-2.5">
+                <div key={i.moduleId} id={`whatif-${i.moduleId}`} className="rounded-xl border border-edge p-2.5">
                   <div className="flex items-center gap-2">
                     <ModuleFace id={i.moduleId} size={36} mood={moods[i.moduleId]} />
                     <div className="min-w-0 flex-1">

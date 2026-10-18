@@ -22,7 +22,11 @@ export type MemberKind = 'module' | 'judge' | 'landlord';
 /** Where a companion perches when it's at home: the speaker's strongest dependency above, its strongest dependent beside the chat. */
 export type Role = 'up' | 'side';
 export type Member = { id: string; kind: MemberKind; anchor: Anchor; temp?: boolean; role?: Role };
-export type Bubble = { text: string; msg?: { mod: string; id: string }; until?: number; avoid?: Citation | null };
+/**
+ * A speech bubble. `msg`: a chat answer streaming in (the bubble shows its quip); `link`: the element with the full
+ * text (a transcript message, the Tribunal's transcript), which a click on the bubble scrolls to.
+ */
+export type Bubble = { text: string; msg?: { mod: string; id: string }; until?: number; avoid?: Citation | null; link?: string };
 
 type Stage = {
   tenants: Tenants;
