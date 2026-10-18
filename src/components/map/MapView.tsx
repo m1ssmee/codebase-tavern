@@ -805,7 +805,7 @@ export default function MapView() {
           {said ?? caption}
         </div>
       )}
-      <div className="absolute top-3 left-3 flex gap-1.5">
+      <div className="absolute top-3 right-3 flex gap-1.5">
         <button
           type="button"
           disabled={!!follow}
@@ -830,7 +830,7 @@ export default function MapView() {
         <button
           type="button"
           onClick={() => useTavern.getState().ripple(selected ?? busiest.id)}
-          className="absolute top-3 right-3 rounded-full border border-dashed border-tomato px-3 py-1 text-xs text-tomato hover:bg-tomato/10"
+          className="absolute top-12 right-3 rounded-full border border-dashed border-tomato px-3 py-1 text-xs text-tomato hover:bg-tomato/10"
         >
           Test ripple (dev)
         </button>
