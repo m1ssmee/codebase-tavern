@@ -44,8 +44,8 @@ export default function Stage() {
   const selected = useTavern((s) => s.selectedModuleId);
   const threeD = useCast3D((s) => s.on);
   const tour = useTavern((s) => s.tourOn);
-  // Hidden while the map is open (it has its own cast) and during the Landlord's tour (its own show).
-  const show = tenants !== 'off' && view !== 'map' && !tour && !!repo;
+  // Hidden on the Neighbourhood and the Blueprint (their own casts) and during the Landlord's tour (its own show).
+  const show = tenants !== 'off' && view !== 'map' && view !== 'diagram' && !tour && !!repo;
 
   // The cast follows the repo and the selected module: the speaker and its two closest neighbours.
   useEffect(() => {

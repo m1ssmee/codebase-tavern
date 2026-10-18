@@ -25,8 +25,8 @@ const NORMAL = 3; // the speaker and two others
 const SCENE = 5;
 const STOP_MS = 1200; // at least this long at each line an answer cites
 
-// Hidden while the map is open (it has its own cast) and during the Landlord's tour (its own show).
-export const visible = () => S().tenants !== 'off' && T().view !== 'map' && !T().tourOn && !!T().repo;
+// Hidden on the Neighbourhood and the Blueprint (they have their own casts) and during the Landlord's tour (its own show).
+export const visible = () => S().tenants !== 'off' && T().view !== 'map' && T().view !== 'diagram' && !T().tourOn && !!T().repo;
 /** Walking and pointing only when tenants are on stage and motion is allowed; else they stand still and an arrow points. */
 const walks = () => S().tenants === 'stage' && !reducedMotion();
 const kindOf = (id: string): MemberKind => (id === 'judge' ? 'judge' : id === 'landlord' ? 'landlord' : 'module');

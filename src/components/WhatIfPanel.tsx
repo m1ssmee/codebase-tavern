@@ -112,8 +112,8 @@ export default function WhatIfPanel() {
       .filter((i) => i.role !== 'changed' && i.via)
       .map((i) => ({ id: i.moduleId, hops: i.hops, via: i.via!, dir: i.role === 'downstream' ? 'down' : 'up' }));
     // On stage (unless the tenants are off): the change is a glowing hot potato passed along the ripple order over
-    // the code, and each module reacts when it lands. Otherwise the ripple plays on the map, as before.
-    const staged = useStage.getState().tenants !== 'off' && s.view !== 'map';
+    // the code, and each module reacts when it lands. Otherwise the ripple plays on the Neighbourhood, as before.
+    const staged = useStage.getState().tenants !== 'off' && s.view !== 'map' && s.view !== 'diagram';
     const order = [...new Set([...changed, ...[...steps].sort((a, b) => a.hops - b.hops).map((x) => x.id)])];
     if (staged) void stageDo('potato', order, POTATO_MS);
     else s.ripple(changed, { steps, label: `What if: ${label}` });

@@ -77,9 +77,9 @@ function courtLines(suspects: { name: string; files: string[] }[], spice: SpiceL
 export default function TribunalPanel() {
   const { repo, characters, moods, spice, setTribunal } = useTavern();
   const cast3D = useCast3D((s) => s.on);
-  // The court sits on the stage over the code panel unless the tenants are off (or the map is open).
+  // The court sits on the stage over the code panel unless the tenants are off (or the Neighbourhood or Blueprint is open).
   const tenantsOn = useStage((s) => s.tenants !== 'off');
-  const mapOpen = useTavern((s) => s.view === 'map');
+  const mapOpen = useTavern((s) => s.view === 'map' || s.view === 'diagram');
   const staged = tenantsOn && !mapOpen;
   const [bug, setBug] = useState('');
   const [phase, setPhase] = useState<Phase>('input');

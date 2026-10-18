@@ -11,10 +11,13 @@ import Mermaid, { type MermaidHandle } from './Mermaid';
 import CharacterFace from './CharacterFace';
 import LandlordFace from './LandlordFace';
 import { CharacterStage } from './cast/Character3D';
+import { useCast3D } from './cast/settings';
+import { getActor } from './cast/anim/actor';
+import BlueprintCast, { MAX_3D, useBlueprint } from './BlueprintCast';
 
 const NS = 'http://www.w3.org/2000/svg';
 const CARD = 250; // px the tour card covers at the bottom; focus keeps the stop above it
-type Slot = { id: string; face: HTMLElement; caption: HTMLElement | null };
+type Slot = { id: string; face: HTMLElement; caption: HTMLElement | null; node: Element };
 
 /** A div in a new foreignObject inside `parent` (SVG units), so React content pans and zooms with the diagram. */
 function slot(parent: Element, x: number, y: number, w: number, h: number) {
@@ -36,6 +39,7 @@ export default function DiagramView() {
   const moods = useTavern((s) => s.moods);
   const spice = useTavern((s) => s.spice);
   const tourOn = useTavern((s) => s.tourOn);
+  const threeD = useCast3D((s) => s.on);
   const [drill, setDrill] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[]>([]);
   const [svg, setSvg] = useState<{ el: SVGSVGElement; rid: string } | null>(null);
@@ -74,7 +78,7 @@ export default function DiagramView() {
       extra.setAttribute('data-node', nid);
       g.parentNode?.appendChild(extra);
       // Face as a badge on the node's top-left corner (clear of edges and labels); caption under the node, as wide as it.
-      found.push({ id: m.id, face: slot(extra, b.x - 30, b.y - 34, 60, 60), caption: caps.has(m.id) ? slot(extra, b.x - 14, b.y + b.height + 4, b.width + 28, 96) : null });
+      found.push({ id: m.id, node: g, face: slot(extra, b.x - 30, b.y - 34, 60, 60), caption: caps.has(m.id) ? slot(extra, b.x - 14, b.y + b.height + 4, b.width + 28, 96) : null });
       const open = () => !useTavern.getState().tourOn && setDrill(m.id);
       g.classList.add('cite-target');
       g.addEventListener('click', open);
@@ -112,6 +116,8 @@ export default function DiagramView() {
       </div>
       <div className="relative min-h-0 flex-1">
         <Mermaid ref={mer} code={chart.code} fill onReady={onReady} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
+        {/* Live characters on the modules' badges (the first MAX_3D); 3D off: the 2D faces in the badges. */}
+        {threeD && !mod && slots.length > 0 && <BlueprintCast slots={slots} />}
         {!tourOn && (
           <div className="pointer-events-none absolute bottom-2 left-3 rounded-lg bg-panel/85 px-2 py-1 text-xs text-muted">
             Arrows point from the needy to the needed. Solid: imports. Dashed: talks over the network. Red: codependent.
@@ -119,8 +125,9 @@ export default function DiagramView() {
         )}
         {tourOn && svg && !('ext' in chart) && <Tour svg={svg.el} rid={svg.rid} ids={chart.ids} mer={mer} facts={facts} />}
       </div>
-      {slots.map((s) => {
+      {slots.map((s, i) => {
         const m = repo.modules.find((x) => x.id === s.id)!;
+        if (threeD && i < MAX_3D) return null;
         return createPortal(
           <div className="flex h-full items-center justify-center">
             <CharacterFace size={54} name={m.name} stats={m.stats} color={characters[m.id]?.color} mood={moods[m.id]} />
@@ -175,6 +182,13 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
     useTavern.getState().endTour();
     then?.();
   };
+  /** Skipped: the Landlord writes it up on the clipboard first. */
+  const skip = () => {
+    if (reduced) return end();
+    void getActor('tour:landlord')?.play('annoyed', { priority: 2 });
+    setAuto(false);
+    setTimeout(() => end(), 1300);
+  };
 
   // Each stop: dim the rest, glow this module and its edges, pan to it, and let it talk, then the Landlord.
   useEffect(() => {
@@ -202,7 +216,9 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
     timers.push(setTimeout(() => (setSpeaking(true), blipText(line, 0.7, useTavern.getState().muted)), wait));
     timers.push(setTimeout(() => setSpeaking(false), wait + 2300));
     if (stop === '@outro') rememberTour(repo);
+    useBlueprint.setState({ star: m?.id ?? null }); // it steps forward on its node
     return () => {
+      useBlueprint.setState({ star: null });
       timers.forEach(clearTimeout);
       lit.forEach((e) => e.classList.remove('tour-focus'));
       svg.classList.remove('tour-dim');
@@ -298,7 +314,7 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
                 {auto ? <Pause size={13} /> : <Play size={13} />} {auto ? 'Autoplay on' : 'Autoplay off'}
               </button>
             )}
-            <button type="button" className={`${btn} ml-auto`} onClick={() => end()}>
+            <button type="button" className={`${btn} ml-auto`} onClick={skip}>
               Skip tour
             </button>
           </>
