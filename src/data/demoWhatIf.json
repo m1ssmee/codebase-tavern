@@ -25,8 +25,8 @@
           "verdict": "fine",
           "reason": "`checkout()` still calls `forward()` twice at most on `UpstreamTimeoutError`, and it still sends the same `order_id`, `amount`, `currency`, and `payment_method_id` shape to payments [orders/checkout.ts:20-30][orders/checkout.ts:44-57]. The new payment-side promise reuse only reduces duplicate work during an overlapping retry; it does not change the checkout code path here [payments/processor.ts:29-49].",
           "reaction": "`MAX_PAYMENT_ATTEMPTS` is still 2. The retry is ugly, but the charge duplication is less damn fragile now.",
-          "bubble": "That payment-side fix only trims overlap; checkout still retries twice.",
-          "bubbleClean": "That payment-side fix only trims overlap; checkout still retries twice."
+          "bubble": "That payment-side fix only trims overlap; checkout still retries once.",
+          "bubbleClean": "That payment-side fix only trims overlap; checkout still retries once."
         },
         {
           "moduleId": "utils",

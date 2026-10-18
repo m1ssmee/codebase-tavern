@@ -102,7 +102,7 @@ export function chooseBubble(ai: unknown, full: string, spice: SpiceLevel, recen
 
 /** The rule every route gives the model for a bubble field (or chat's "@@bubble:" line). */
 export const BUBBLE_RULE =
-  "the short form of its main point in the speaker's own voice: one sentence, at most 90 characters, no citations, no code, no backticks, no file paths, no identifiers with brackets or underscores. Name the specific thing it is about (the behaviour, the bug, the line) in plain words, so it could not fit anything else. Swearing follows the spice level: at most one swear word, never required. Don't repeat a sentence of the text word for word";
+  "the short version of its main point PLUS one bit of the speaker's own attitude, in its archetype's voice (a dry aside, a complaint, a grudge, a boast; not a summary read off a slide): one sentence, at most 90 characters, no citations, no code, no backticks, no file paths, no identifiers with brackets or underscores. Still name the specific thing it is about (the behaviour, the bug, the line) in plain words, so it could not fit anything else. Swearing follows the spice level: at most one swear word, never required. Don't repeat a sentence of the text word for word. Flat: 'The cache keeps sessions for one hour.' Right: 'I keep sessions for an hour, then forget them on purpose.'";
 
 /** For the dynamic part of a prompt: the last bubbles shown this session, not to be echoed. */
 export function recentBlock(v: unknown): string {

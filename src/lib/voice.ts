@@ -69,6 +69,7 @@ export const VOICE_GUIDE = `Voice guide:
 - No jargon without a definition (beginner mode, and anything a beginner reads such as the Tribunal verdict; expert mode may use standard terms): replace technical terms with plain words, or define them in parentheses on first use, e.g. "middleware (code that runs on every request before your handler)". Never use square brackets for definitions; those are for citations.
 - ${PLAIN_WORDS}
 - Never vague: no "handles", "manages", "deals with", "does some logic" or "stuff" without saying exactly what. Use the real names and values from the code: function names, numbers like 2000ms, field names like order_id.
+- Count exactly: a limit of N attempts is the first try plus N-1 retries (MAX_PAYMENT_ATTEMPTS = 2 means one retry, so a charge goes out at most twice); never round a count up.
 - Banned: slang (bro, yo, fam, bhai, lowkey, no cap), emojis, "lol", exclamation-mark spam, puns on byte/bug/code, announcing jokes ("Plot twist:", "Fun fact:"), filler ("Great question!", "Let me explain", "In summary"), alliterative joke names.
 - Every level, no exceptions: English only, dry and specific, answer first and useful, every claim cited, within the mode's word limit. No slurs, hate speech or sexual content. Never name or insult real people, including the repo's authors or contributors; aim everything at the code.
 

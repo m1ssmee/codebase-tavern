@@ -5,6 +5,7 @@ import { CHAT_BUDGET } from '@/lib/context';
 import { CiteChecker, CiteStream } from '@/lib/citations';
 import { BUBBLE_SEP, BubbleSplitter } from '@/lib/bubbleMarker';
 import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
+import { ARCHETYPES, CAST } from '@/lib/cast';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -49,6 +50,7 @@ export async function POST(req: Request) {
   if (foreign) files.push({ path: fp, content: foreign, truncated: foreign.length >= 20_000 });
   const focus = fp && fs && (shown.has(fp) || foreign) ? { path: fp, start: fs, end: fe, owner: str(b.focus?.owner, 100), relation: str(b.focus?.relation, 300) } : null;
   const roasted = int(b.grudge?.roasted, 20), pestered = int(b.grudge?.pestered, 20);
+  const arch = ARCHETYPES.find((a) => a === b.archetype); // its 3D archetype, for the voice
   const others = arr<{ title: string; path: string }>(b.others, 12)
     .map((o) => `- ${str(o?.title, 100)} (owns ${str(o?.path, 200) || 'the repo root files'})`)
     .join('\n');
@@ -59,7 +61,7 @@ export async function POST(req: Request) {
   const system = `${VOICE_GUIDE}
 
 You are "${title}", a module of the repo ${str(b.repoName, 200)}, in Codebase Tavern.
-Personality: ${str(b.character?.personality, 300)}
+Personality: ${str(b.character?.personality, 300)}${arch ? `\nYou look and act like ${CAST[arch].name}: ${CAST[arch].joke}` : ''}
 Catchphrase: ${str(b.character?.catchphrase, 150)}
 
 Rules:

@@ -991,6 +991,22 @@ console.log('judge template checks ok');
   console.log('thinking cue checks ok');
 }
 
+// ---- retry facts: quickcart's MAX_PAYMENT_ATTEMPTS = 2 means ONE retry. No saved text (answers, bubbles, arguments,
+// hearings, What-if runs, gossip, the roast, the unused candidates) may claim more than one.
+{
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../src/data/', import.meta.url);
+  const files = [...readdirSync(dir).filter((f) => f.endsWith('.json') && !['demoRepo.json', 'expressModules.json'].includes(f)), ...readdirSync(new URL('demoCandidates/', dir)).map((f) => `demoCandidates/${f}`)];
+  const strings = (v, out = []) => (typeof v === 'string' ? out.push(v) : v && typeof v === 'object' && Object.values(v).forEach((x) => strings(x, out)), out);
+  const CLAIM = /\bretr(?:y|ies|ied|ying)\b(?:\s+[\w'`]+){0,3}?\s+(?:twice|two times|2 times|three times|3 times|again and again)\b|\b(?:two|2|three|3|multiple|several)\s+retries\b|\b(?:second|2nd|third)\s+retry\b/i;
+  for (const bad of ['checkout still retries twice.', 'the retry reached me twice', 'two retries later', 'it retries the charge two times']) assert.match(bad, CLAIM, bad);
+  for (const ok of ['the same order charged twice by one retry', 'one retry, two charges', 'MAX_PAYMENT_ATTEMPTS = 2 buys exactly one retry', 'retry attempt 2']) assert.doesNotMatch(ok, CLAIM, ok);
+  for (const f of files)
+    for (const s of strings(JSON.parse(readFileSync(new URL(f, dir), 'utf8'))))
+      for (const sentence of s.split(/(?<=[.!?])\s+|\n/)) assert.doesNotMatch(sentence, CLAIM, `${f}: claims more than one retry: ${sentence.slice(0, 160)}`);
+  console.log(`retry fact checks ok (${files.length} saved files)`);
+}
+
 // ---- speech bubbles: the AI writes each one in the same call (chat: a final "@@bubble:" line the route cuts out;
 // arguments, Tribunal turns, What-if verdicts, gossip: a bubble field). Every saved demo text carries its bubble and a
 // clean version: short, no citation, no code, past the filter at every spice level, all different. The demo data

@@ -111,18 +111,26 @@ export async function POST(req: Request) {
         files: arr<string>(m?.filePaths, 60).map((p) => str(p, 200)),
       }));
       const ids = modules.map((m) => m.moduleId);
+      const edges = arr<{ from: string; to: string; kind: string; weight: number }>(b.edges, 64)
+        .map((e) => ({ from: str(e?.from, 200), to: str(e?.to, 200), kind: e?.kind === 'calls' ? 'calls' : 'imports', weight: num(e?.weight) }))
+        .filter((e) => ids.includes(e.from) && ids.includes(e.to) && e.from !== e.to);
       const t0 = Date.now();
       const timings: Timing[] = [];
       const out = await llmJSON<{ suspects: { moduleId: string; reason: string }[] }>('tribunal-suspects', {
         timings,
-        system: 'You triage bug reports for a codebase. Pick the 2-4 modules most likely involved, including modules whose interaction could cause the bug (callers, callees, timeouts, retries, shared state). Use only the moduleId values given.',
-        prompt: `Bug: ${bug}\n\nModules:\n${JSON.stringify(modules)}`,
+        system: 'You triage bug reports for a codebase. Pick the 2-3 modules most likely involved, following the edges (who imports or calls whom): callers, callees, timeouts, retries, shared state along one path. Most likely first. Use only the moduleId values given.',
+        prompt: `Bug: ${bug}\n\nModules:\n${JSON.stringify(modules)}\n\nEdges (from imports or calls to):\n${JSON.stringify(edges)}`,
         schema: SUSPECTS_SCHEMA,
       });
-      let suspects = [...new Set(arr<{ moduleId: string }>(out?.suspects, 6).map((s) => s?.moduleId).filter((id) => ids.includes(id)))].slice(0, 4);
+      let suspects = [...new Set(arr<{ moduleId: string }>(out?.suspects, 6).map((s) => s?.moduleId).filter((id) => ids.includes(id)))].slice(0, 3);
       // Always a trial: pad with the biggest remaining modules (client sends them sorted by size).
       for (const id of ids) if (suspects.length < 2 && !suspects.includes(id)) suspects.push(id);
-      suspects = suspects.slice(0, 4);
+      suspects = suspects.slice(0, 3);
+      // One bystander from the graph: the heaviest neighbour of the suspects not already in, so the court has someone
+      // to clear (the biggest remaining module when nothing connects).
+      const near = edges.filter((e) => suspects.includes(e.from) !== suspects.includes(e.to)).sort((x, y) => y.weight - x.weight);
+      const bystander = near.map((e) => (suspects.includes(e.from) ? e.to : e.from))[0] ?? ids.find((id) => !suspects.includes(id));
+      if (bystander) suspects.push(bystander);
       console.info('[tribunal] suspects timings', JSON.stringify({ totalMs: Date.now() - t0, calls: timings }));
       return Response.json({ suspects, timings: publicTimings(timings) }); // timings: diagnostics only
     }
@@ -191,7 +199,7 @@ Rules:
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
 - bubble: the speech bubble shown over the speaker for that turn: ${BUBBLE_RULE}. No two bubbles of the hearing open the same way.
-- verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
+- verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one). Not every suspect is guilty: at least one suspect is only a neighbour of the bug; clear it (leave it out of culprits) unless its own code is needed for the bug to happen.
 - verdict.rootCause: plain sentences, no jokes, as the mode rules at the end say. verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: 3 variants of one dry closing sentence from the judge, three different jokes, each naming a culprit or a real value from the case; an editor picks the best one.
 - verdict.diagram: a Mermaid sequenceDiagram showing how the bug happens, step by step, at most 10 messages:
   - First line "sequenceDiagram". One "participant <id> as <title>" line per module involved, using these ids and titles: ${suspects.map((sp) => `${participantId(sp.id)} as ${sp.title.replace(/[:;#]/g, ' ')}`).join('; ')}.

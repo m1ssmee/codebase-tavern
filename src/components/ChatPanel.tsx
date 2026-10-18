@@ -129,6 +129,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
         focus: focusBody,
         grudge: { ...grudge, opener },
         recentBubbles: recentBubbles(5),
+        archetype: archetypeOf(repo.modules, mod.id),
         messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
       }),
     });

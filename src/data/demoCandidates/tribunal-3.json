@@ -32,7 +32,7 @@
     },
     {
       "moduleId": "payments",
-      "text": "I can show the pattern in my own logs: the same `orderId=ord_8f3k2b61` was processed twice with two different `chargeId` values. That means the retry reached me twice, and because I have no dedupe or idempotency check, I happily wrote both rows like a damn amnesiac clerk [payments/logs/sample-charges.log:6-7] [payments/ledger.ts:13-18].",
+      "text": "I can show the pattern in my own logs: the same `orderId=ord_8f3k2b61` was processed twice with two different `chargeId` values. That means the charge reached me twice, and because I have no dedupe or idempotency check, I happily wrote both rows like a damn amnesiac clerk [payments/logs/sample-charges.log:6-7] [payments/ledger.ts:13-18].",
       "accuses": "orders"
     },
     {
