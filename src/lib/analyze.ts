@@ -174,7 +174,7 @@ export function nesting(f: RepoFile): number {
 const isTenantCode = (p: string) => isCode(p) && !p.split('/').slice(0, -1).some((d) => d.startsWith('.'));
 const codeLines = (fs: RepoFile[]) => fs.reduce((n, f) => n + (isTenantCode(f.path) ? f.lineCount : 0), 0);
 
-function makeModule(id: string, path: string, name: string, fs: RepoFile[], all: RepoFile[], named: string[] = [name]): Module {
+function makeModule(id: string, path: string, name: string, fs: RepoFile[], all: RepoFile[], named: string[] = []): Module {
   const filePaths = fs.map((f) => f.path);
   const main = mainFile(fs, named);
   return { id, name, path, filePaths, stats: computeStats({ filePaths }, all), ...(main && { main }) };
@@ -184,9 +184,9 @@ const ENTRY = /^(index|main|app|lib|mod|server|cli|__main__)\.[a-z0-9]+$/i;
 const MARKUP = /\.(html?|css|scss|sass|less)$/i;
 /**
  * A module's main file: a source file whenever it has code, never a README next to code. First an index/main/app/
- * lib/mod file, then one named after the module (cobra.go in cobra's root, render.go in render/), shallowest first,
- * else the biggest. Script code before markup and styles; tests and examples only if that's all the code there is.
- * No code: the README, else the biggest file.
+ * lib/mod file, then (for the root) one named after the repo (cobra.go), shallowest first, else the biggest
+ * (orders/checkout.ts, which the demo's saved line explanation relies on). Script code before markup and styles;
+ * tests and examples only if that's all the code there is. No code: the README, else the biggest file.
  */
 export function mainFile(fs: RepoFile[], named: string[] = []): string | undefined {
   const depth = (p: string) => p.split('/').length;
@@ -266,6 +266,47 @@ function javaRoot(files: RepoFile[], total: number): string | null {
  * one module; a repo that is all root files gets one module per big file. Max 8 incl. "misc", chosen by importance
  * (who depends on it, its size, a name matching the repo's) and returned most important first.
  */
+// Name words that say nothing about what a file does: tests, platforms, versions (bash_completionsV2, command_win).
+const NOISE = new Set(['test', 'tests', 'spec', 'specs', 'win', 'windows', 'notwin', 'unix', 'linux', 'darwin', 'posix']);
+/** The words in a file's name: bash_completionsV2.go → bash, completions; index.d.ts → index. */
+export function stemTokens(p: string): string[] {
+  return base(p)
+    .replace(/\.[^.]+$/, '')
+    .replace(/\.d$/, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !/^v?\d+$/.test(t) && !NOISE.has(t));
+}
+
+type RootUnit = { name: string; files: RepoFile[] };
+/**
+ * The root's code files as would-be tenants: files sharing a name word are one, named after it (bash_completions.go,
+ * zsh_completions.go and completions.go are "completions"; args.go and args_test.go are "args"), each file joining
+ * the word most files share (on a tie the later one, the head noun); everything else one file each. The file named
+ * after the repo (cobra.go) stays with the root, and so does a group without a source file. Deterministic.
+ */
+export function rootUnits(fs: RepoFile[], repoShort: string): RootUnit[] {
+  const repo = repoShort.toLowerCase();
+  const own = fs.filter((f) => !repo || stemTokens(f.path).join('') !== repo);
+  const words = new Map(own.map((f) => [f, stemTokens(f.path).filter((t) => t !== repo)]));
+  const count = new Map<string, number>();
+  for (const ts of words.values()) for (const t of new Set(ts)) count.set(t, (count.get(t) ?? 0) + 1);
+  const byWord = new Map<string, RepoFile[]>();
+  const units: RootUnit[] = [];
+  for (const f of own) {
+    const word = words.get(f)!.filter((t) => count.get(t)! >= 2).reduce<string | null>((a, t) => (!a || count.get(t)! >= count.get(a)! ? t : a), null);
+    if (word) byWord.set(word, [...(byWord.get(word) ?? []), f]);
+    else units.push({ name: base(f.path), files: [f] });
+  }
+  // Named after the stem they all share when they do (flag_groups.go + flag_groups_test.go → flag_groups), else the word.
+  const core = (f: RepoFile) => stemTokens(f.path).join('_');
+  for (const [word, group] of byWord)
+    if (group.length >= 2 && group.some((f) => !TEST_PATH.test(f.path))) units.push({ name: new Set(group.map(core)).size === 1 ? core(group[0]) : word, files: group });
+    else units.push(...group.map((f) => ({ name: base(f.path), files: [f] })));
+  return units;
+}
+
 export function detectModules(files: RepoFile[], repoName?: string): Module[] {
   const total = codeLines(files);
   const share = (prefix: string) => codeLines(files.filter((f) => f.path.startsWith(prefix + '/')));
@@ -294,19 +335,25 @@ export function detectModules(files: RepoFile[], repoName?: string): Module[] {
   const root = groups.get('') ?? [];
   const rootCode = root.filter((f) => isTenantCode(f.path));
   const allAtRoot = rootCode.length >= 3 && [...groups].every(([k, fs]) => k === '' || !fs.some((f) => isTenantCode(f.path)));
-  const files_: Record<string, RepoFile[]> = {};
+  let units: RootUnit[] = [];
   if (allAtRoot || (rootCode.length >= 5 && codeLines(root) >= total * 0.6)) {
-    // Source files first: context.go is a tenant, context_test.go stays with the rest of the root.
-    const big = [...rootCode].sort((a, b) => +TEST_PATH.test(a.path) - +TEST_PATH.test(b.path) || b.lineCount - a.lineCount).slice(0, allAtRoot ? 6 : 5);
-    for (const f of big) files_[f.path] = [f];
-    groups.set('', root.filter((f) => !big.includes(f)));
+    // Files sharing a name word are one tenant (completions); source before tests (a lone context_test.go stays
+    // with the root), then the biggest.
+    const lines = (u: RootUnit) => u.files.reduce((n, f) => n + f.lineCount, 0);
+    const onlyTests = (u: RootUnit) => u.files.every((f) => TEST_PATH.test(f.path));
+    units = rootUnits(rootCode, repoName?.split('/')[1] ?? '')
+      .sort((a, b) => +onlyTests(a) - +onlyTests(b) || lines(b) - lines(a) || a.name.localeCompare(b.name))
+      .slice(0, allAtRoot ? 6 : 5);
+    const taken = new Set(units.flatMap((u) => u.files));
+    groups.set('', root.filter((f) => !taken.has(f)));
     if (!groups.get('')!.length) groups.delete('');
   }
 
   const mods = [
-    ...Object.entries(files_).map(([path, fs]) => makeModule(path, path, base(path), fs, files)),
+    // one file: its path is the id; a group: "(root):completions", never a folder's path
+    ...units.map((u) => (u.files.length === 1 ? makeModule(u.files[0].path, u.files[0].path, base(u.files[0].path), u.files, files) : makeModule(`(root):${u.name}`, `(root):${u.name}`, u.name, u.files, files))),
     // the root's main file may be named after the repo (cobra.go, gin.go)
-    ...[...groups].map(([path, fs]) => makeModule(path || '(root)', path, path ? base(path) : files.length === 1 ? base(files[0].path) : 'root', fs, files, path ? [base(path)] : [repoName?.split('/')[1] ?? ''])),
+    ...[...groups].map(([path, fs]) => makeModule(path || '(root)', path, path ? base(path) : files.length === 1 ? base(files[0].path) : 'root', fs, files, path ? [] : [repoName?.split('/')[1] ?? ''])),
   ];
   const bySize = (a: Module, b: Module) => b.stats.totalLines - a.stats.totalLines;
   let code = mods.filter((m) => m.filePaths.some(isCode)).sort(bySize);

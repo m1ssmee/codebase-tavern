@@ -158,7 +158,7 @@ assert.equal(keywordArchetype('feedback'), null); // whole tokens only, no "db" 
 assert.equal(keywordArchetype('Payment'), 'accountant'); // case and plural folded
 const M = (id, filePaths, s = {}) => ({ id, name: id, path: id, filePaths, stats: { fileCount: 1, totalLines: 50, biggestFile: { path: '', lines: 50 }, todoCount: 0, maxNesting: 1, hasTests: false, ...s } });
 assert.deepEqual(castOf([M('core', ['core/server.ts', 'core/README.md']), M('x', ['x/a.ts']), M('y', ['y/b.ts'], { todoCount: 5 }), M('z', ['z/z.test.ts'])]), {
-  core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'clerk', // tests aren't main files
+  core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'junkDrawer*', // tests aren't main files; untested → Junk Drawer (the alternate)
 });
 // a repeat tries its next-best match before the alternate variant
 assert.deepEqual(castOf([M('api', ['api/routes.ts']), M('handlers', ['handlers/db.ts'])]), { api: 'clerk', handlers: 'plumber' });
@@ -914,4 +914,53 @@ console.log('judge template checks ok');
   const ordersTurn = argue.pairs[0].turns[2].text;
   assert.ok(!/exactly twice|retry twice|two retries/i.test(ordersTurn) && /one retry/.test(ordersTurn) && /\[orders\/checkout\.ts:18\]/.test(ordersTurn), ordersTurn);
   console.log('casting polish checks ok');
+}
+// Casting fixes: quickcart's cast frozen, at most two of an archetype, specialists only for real matches, stem groups.
+{
+  const { buildRepo, detectModules, rootUnits, entryFile } = await import('../src/lib/analyze.ts');
+  const { assignCast, GENERAL } = await import('../src/lib/cast.ts');
+  const { readFileSync } = await import('node:fs');
+  const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, `${c.archetype}${c.variant ? '*' : ''}`]));
+  // the saved demo depends on this exact cast
+  const qc = JSON.parse(readFileSync(new URL('../src/data/demoRepo.json', import.meta.url), 'utf8'));
+  assert.deepEqual(castOf(buildRepo(qc.name, qc.files, qc.url).modules), { utils: 'junkDrawer', payments: 'accountant', inventory: 'hoarder', orders: 'clerk', gateway: 'doorman', auth: 'bouncer', '(misc)': 'librarian' });
+  const st = (o = {}) => ({ fileCount: 1, totalLines: 100, biggestFile: { path: '', lines: 100 }, todoCount: 0, maxNesting: 1, hasTests: true, ...o });
+  const M = (id, filePaths, s) => ({ id, name: id, path: id, filePaths, stats: st(s) });
+  const tally = (c) => Object.values(c).reduce((n, a) => ((n[a.replace('*', '')] = (n[a.replace('*', '')] ?? 0) + 1), n), {});
+  // five modules that all want the Doorman (an index file each): two get it, the rest go to stats, then the least-used general
+  const doors = castOf(['p1', 'p2', 'p3', 'p4', 'p5'].map((id, i) => M(id, [`${id}/index.js`], { totalLines: 500 - i * 50 })));
+  assert.equal(tally(doors).doorman, 2);
+  assert.deepEqual(doors, { p1: 'doorman', p2: 'doorman*', p3: 'hoarder', p4: 'clerk', p5: 'clerk*' });
+  // nothing over two while there is room: 8 modules, every archetype count <= 2
+  const eight = castOf(Array.from({ length: 8 }, (_, i) => M(`m${i}`, [`m${i}/index.js`], { totalLines: 900 - i * 10, hasTests: i % 2 === 0 })));
+  assert.ok(Object.values(tally(eight)).every((n) => n <= 2), JSON.stringify(eight));
+  // specialists only for a real match: unmatched modules never become the Inspector, Librarian, Accountant, Bouncer, Star or Plumber
+  const plain = castOf(Array.from({ length: 8 }, (_, i) => M(`box${i}`, [`box${i}/thing${i}.js`], { totalLines: 900 - i * 10 })));
+  assert.ok(Object.values(plain).every((a) => GENERAL.includes(a.replace('*', ''))), JSON.stringify(plain));
+  assert.ok(Object.values(tally(plain)).every((n) => n <= 2));
+  // ...and a code module named "docs" or "config" is not the Librarian unless it is docs-heavy
+  assert.notEqual(castOf([M('config', ['config/loader.go', 'config/env.go'])]).config, 'librarian');
+  assert.equal(castOf([M('docs', ['docs/a.md', 'docs/b.md', 'docs/c.md'])]).docs, 'librarian');
+  // a real match still wins over variety: the second payments-like module is the alternate Accountant
+  assert.deepEqual(castOf([M('payments', ['payments/a.ts']), M('billing', ['billing/b.ts'])]), { payments: 'accountant', billing: 'accountant*' });
+  // stem grouping: the completions files are one tenant, args.go keeps its test, cobra.go stays with the root
+  const F = (path, n = 10) => ({ path, content: 'x\n'.repeat(n - 1) + 'x', lineCount: n });
+  const cobra = [F('go.mod'), F('cobra.go', 200), F('command.go', 900), F('command_test.go', 800), F('command_win.go', 20), F('args.go', 150), F('args_test.go', 300), F('bash_completions.go', 500), F('bash_completionsV2.go', 400), F('powershell_completions.go', 300), F('zsh_completions.go', 250), F('fish_completions.go', 200), F('completions.go', 600), F('completions_test.go', 700), F('flag_groups.go', 250), F('active_help.go', 60), F('doc/man_docs.go', 300)];
+  const units = rootUnits(cobra.filter((f) => f.path.endsWith('.go') && !f.path.includes('/')), 'cobra');
+  const unit = (n) => units.find((u) => u.name === n)?.files.map((f) => f.path).sort();
+  assert.deepEqual(unit('completions'), ['bash_completions.go', 'bash_completionsV2.go', 'completions.go', 'completions_test.go', 'fish_completions.go', 'powershell_completions.go', 'zsh_completions.go']);
+  assert.deepEqual(unit('args'), ['args.go', 'args_test.go']);
+  assert.deepEqual(unit('command'), ['command.go', 'command_test.go', 'command_win.go']);
+  assert.ok(!units.some((u) => u.files.some((f) => f.path === 'cobra.go')));
+  const mods = detectModules(cobra, 'spf13/cobra');
+  const comp = mods.find((m) => m.name === 'completions');
+  assert.ok(comp && comp.id === '(root):completions' && entryFile(comp) === 'completions.go');
+  assert.equal(entryFile(mods.find((m) => m.id === '(root)')), 'cobra.go');
+  assert.deepEqual(unit('flag_groups.go'), ['flag_groups.go']); // one source file, no test here: stays a single file
+  const fg = rootUnits([F('flag_groups.go', 200), F('flag_groups_test.go', 300), F('x.go')], 'cobra');
+  assert.deepEqual(fg.map((u) => u.name).sort(), ['flag_groups', 'x.go']); // the shared stem names it, not "groups"
+  // the demo's saved line explanation is orders/checkout.ts:50: orders' main file must stay checkout.ts
+  const qcRepo = buildRepo(qc.name, qc.files, qc.url);
+  assert.equal(entryFile(qcRepo.modules.find((m) => m.id === 'orders')), 'orders/checkout.ts');
+  console.log('casting diversity and grouping checks ok');
 }
