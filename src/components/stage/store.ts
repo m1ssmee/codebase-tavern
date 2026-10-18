@@ -40,6 +40,8 @@ type Stage = {
   /** The Judge is performing the verdict: everyone's app mood waits until it is done. */
   holdMoods: boolean;
   grudges: Record<string, { roasts: number[]; pesters: number[] }>;
+  /** Two modules arguing: on the Neighbourhood the road between them lights up and they meet on it. */
+  road: { a: string; b: string } | null;
   /** "What if I change you?": the code panel selects these lines and opens its presets. */
   whatIfFor: { path: string; start: number; end: number; at: number } | null;
   setTenants: (t: Tenants) => void;
@@ -80,6 +82,7 @@ export const useStage = create<Stage>((set) => ({
   dim: false,
   holdMoods: false,
   grudges: {},
+  road: null,
   whatIfFor: null,
   setTenants: (tenants) => {
     try {

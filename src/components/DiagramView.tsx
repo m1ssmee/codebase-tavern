@@ -279,7 +279,7 @@ function Tour({ svg, rid, ids, mer, facts }: TourProps) {
               Summon the Tribunal
             </button>
             <button type="button" className={btn} onClick={() => end(() => useTavern.getState().setView('map'))}>
-              Explore the map
+              Explore the Neighbourhood
             </button>
             <button type="button" className={btn} onClick={() => end(() => useTavern.getState().setRoastOpen(true))}>
               Roast this repo

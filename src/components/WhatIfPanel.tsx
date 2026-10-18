@@ -137,6 +137,7 @@ export default function WhatIfPanel() {
     const s = useTavern.getState();
     const line = closingLine(s.spice, depth, imp.items.length, imp.files.map((f) => f.path).join());
     s.setLandlordSays(line);
+    void stageDo('completeFix');
     blipText(line, 0.7, s.muted);
   };
 

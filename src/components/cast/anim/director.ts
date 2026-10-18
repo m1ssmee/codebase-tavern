@@ -150,7 +150,7 @@ export function click(id: Id) {
   }
 }
 /**
- * Clean: a glare. Unhinged+: the middle finger. Feral+, if the pestering continues: a twerk at you. The Judge
+ * Clean: a glare. Unhinged+: the middle finger (both hands at nuclear). Feral+, if the pestering continues: a twerk at you. The Judge
  * bangs its head in exasperation first, then stares (and flips you off at unhinged and above); it never twerks.
  */
 export async function pester(id: Id) {
@@ -167,7 +167,7 @@ export async function pester(id: Id) {
   }
   if (spice() === 0) return a.play('glare', { priority: 2 });
   if (again && spice() >= 2) return a.play('twerk', { priority: 2 });
-  return a.play('middle', { priority: 2 });
+  return a.play(spice() >= 3 ? 'doubleMiddle' : 'middle', { priority: 2 });
 }
 /** Asked about someone else's code: points at the right module, then (unhinged+) flips you off. */
 export async function outOfScope(id: Id, rightId: Id) {
@@ -181,8 +181,9 @@ export async function outOfScope(id: Id, rightId: Id) {
   await a.play(spice() >= 1 ? 'middle' : 'shrug', { priority: 2 });
 }
 /**
- * Roasted: mortified; 1-2 neighbours point and laugh (unhinged) or twerk at it (feral+). Feral: the roasted one
- * goes red and steams. Nuclear: it screams at the camera, and the neighbours finish with a twerk-off.
+ * Roasted: mortified; at unhinged one neighbour points and laughs and the other gives it a slow clap; feral+ they
+ * twerk at it. Feral: the roasted one goes red and steams. Nuclear: it screams at the camera, and the neighbours
+ * finish with a twerk-off.
  */
 export async function roast(id: Id, neighbourIds: Id[] = []) {
   const a = A(id);
@@ -197,8 +198,7 @@ export async function roast(id: Id, neighbourIds: Id[] = []) {
   if (s === 1) {
     await Promise.all(ns.map((n, i) => wait(i * 0.25).then(async () => {
       n.turnTo(head(a));
-      void n.pointAt(head(a), { hold: 1.3 });
-      await n.play('laugh', { priority: 2, force: true });
+      await n.play(i ? 'slowClap' : 'pointLaugh', { priority: 2 });
       n.turnTo(null);
     })));
     return;

@@ -11,7 +11,7 @@ import { aiOffLine, flingLine, needsLine, needsSummary, neverMet } from '@/lib/s
 import type { Citation, ChatMessage } from '@/lib/types';
 import demoArgue from '@/data/demoArgue.json';
 import { getActor } from '../cast/anim/actor';
-import { bonk, bored as boredGag, click as clickActor, judgeVerdict, roast as roastGag, undo as undoGag } from '../cast/anim/director';
+import { bonk, bored as boredGag, click as clickActor, completeFix as fixGag, judgeVerdict, outOfScope, roast as roastGag, undo as undoGag } from '../cast/anim/director';
 import { reducedMotion } from '../cast/settings';
 import { actorOf, addGrudge, grudgeOf, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
 import { bus, lineBox, reveal } from './bus';
@@ -30,7 +30,10 @@ export const visible = () => S().tenants !== 'off' && T().view !== 'map' && !T()
 /** Walking and pointing only when tenants are on stage and motion is allowed; else they stand still and an arrow points. */
 const walks = () => S().tenants === 'stage' && !reducedMotion();
 const kindOf = (id: string): MemberKind => (id === 'judge' ? 'judge' : id === 'landlord' ? 'landlord' : 'module');
-const actor = (id: string) => getActor(actorOf(id));
+/** The Neighbourhood has its own cast: the same scenes play there with its characters, in bubbles over its nodes. */
+const onMap = () => T().view === 'map';
+const aid = (id: string) => (onMap() ? `map:${id}` : actorOf(id));
+const actor = (id: string) => getActor(aid(id));
 const nameOf = (id: string) => T().characters[id]?.name ?? T().repo?.modules.find((m) => m.id === id)?.name ?? id;
 const key = (c: Citation) => `${c.path}:${c.startLine}-${c.endLine}`;
 
@@ -231,12 +234,28 @@ async function tour(id: string, text: () => string, done: () => boolean) {
  * into its bubble while it hops to every line it cites.
  */
 export async function answer(mod: string, msgId: string, focus: Citation | null) {
+  const msg = () => T().chats[mod]?.find((m) => m.id === msgId);
+  // On the Neighbourhood: the answer streams into a bubble over its node.
+  if (onMap()) {
+    say(mod, { text: '', msg: { mod, id: msgId } });
+    await until(() => !T().isLoading || msg()?.role === 'system', 60_000);
+    useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 12_000 } } } : {}));
+    return;
+  }
   if (!visible()) return;
   speaker(mod);
   busy(mod, true);
   say(mod, { text: '', msg: { mod, id: msgId }, avoid: focus });
-  const msg = () => T().chats[mod]?.find((m) => m.id === msgId);
   if (focus) await pointLine(mod, focus, { hold: 1.4 });
+  // Somebody else's code: "Not mine." It points at the owner (who floats in if it isn't here), then the gesture.
+  const owner = focus ? ownerOf(focus.path) : undefined;
+  if (focus && owner && owner !== mod && walks()) {
+    const here = S().members.some((m) => m.id === owner);
+    if (!here) enter(owner, { k: 'home' }, true);
+    await sleep(here ? 0 : 900);
+    await outOfScope(aid(mod), aid(owner));
+    if (!here) setTimeout(() => S().members.find((m) => m.id === owner)?.temp && leave(owner), 2500);
+  }
   await tour(mod, () => msg()?.text ?? '', () => !T().isLoading || msg()?.role === 'system');
   busy(mod, false);
   useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 12_000 } } } : {}));
@@ -259,7 +278,8 @@ export async function gossip(id: string) {
 export async function roastMe(id: string, send: (text: string, moduleId: string) => Promise<void>) {
   speaker(id);
   addGrudge(id, 'roasts');
-  void roastGag(actorOf(id), S().members.filter((m) => m.id !== id && m.kind === 'module').map((m) => actorOf(m.id)));
+  const laughing = onMap() ? companions(id).map((p) => p.id) : S().members.filter((m) => m.id !== id && m.kind === 'module').map((m) => m.id);
+  void roastGag(aid(id), laughing.map(aid));
   await send('Roast yourself: your worst code, with the exact lines.', id);
 }
 
@@ -324,7 +344,7 @@ export async function whoNeedsYou(id: string, send: Send) {
 
 /** A scene is over: its temporary members leave, everyone else goes home. */
 export function endScene() {
-  useStage.setState((s) => ({ scene: null, potato: null, members: s.members.filter((m) => !m.temp).map((m) => ({ ...m, anchor: { k: 'home' } })), arrows: {} }));
+  useStage.setState((s) => ({ scene: null, potato: null, road: null, members: s.members.filter((m) => !m.temp).map((m) => ({ ...m, anchor: { k: 'home' } })), arrows: {} }));
 }
 
 // ---------- arguments ----------
@@ -338,7 +358,7 @@ export async function argue(a: string, b: string) {
   const ma = t.repo?.modules.find((m) => m.id === a), mb = t.repo?.modules.find((m) => m.id === b);
   if (!t.repo || !g || !ma || !mb || a === b) return;
   t.selectModule(a);
-  useStage.setState({ scene: 'argue', menu: null });
+  useStage.setState({ scene: 'argue', menu: null, road: { a, b } });
   speaker(a);
   enter(b, anchorOf(b) ?? { k: 'home' }, true);
   setAnchor(a, { k: 'row', i: 0, n: 2 });
@@ -380,7 +400,7 @@ export async function argue(a: string, b: string) {
     const other = last.moduleId === a ? b : a;
     await sleep(400);
     if (t.spice === 'clean') await actor(last.moduleId)?.play('glare', { priority: 2 });
-    else await bonk(actorOf(last.moduleId), actorOf(other));
+    else await bonk(aid(last.moduleId), aid(other));
   }
   await sleep(2500);
   endScene();
@@ -426,7 +446,7 @@ async function streamArgument(a: string, b: string, refs: { file: string; line: 
 const clicks = new Map<string, number[]>();
 /** A click (or a landing after a fling) counts towards pestering: 3 in 5 seconds and it holds a grudge. */
 export function poke(id: string) {
-  clickActor(actorOf(id));
+  clickActor(aid(id));
   const now = Date.now();
   const list = (clicks.get(id) ?? []).filter((x) => now - x < 5000);
   list.push(now);
@@ -592,6 +612,8 @@ export function bored() {
 
 /** Undo in What-if: everyone on stage groans. */
 export const undo = () => visible() && void undoGag(S().members.map((m) => actorOf(m.id)));
+/** A complete fix in What-if: everyone on stage celebrates, deadpan, under confetti. */
+export const completeFix = () => visible() && void fixGag(S().members.map((m) => actorOf(m.id)));
 
 /** Sulking while it holds a grudge (roasted or pestered in the last 10 minutes): a sulky idle pose. */
 export function sulk() {

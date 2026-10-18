@@ -557,7 +557,8 @@ function RadialMenu() {
   const id = useStage((s) => s.menu);
   return id ? <Menu key={id} id={id} /> : null;
 }
-function Menu({ id }: { id: string }) {
+/** The click menu: radial items around the character (also used on the Neighbourhood, at the node). */
+export function Menu({ id }: { id: string }) {
   const repo = useTavern((s) => s.repo);
   const characters = useTavern((s) => s.characters);
   const [fight, setFight] = useState(false);

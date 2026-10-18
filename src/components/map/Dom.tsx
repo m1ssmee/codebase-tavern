@@ -21,13 +21,15 @@ const v = new Vector3();
  * DOM pinned to a 3D point, centred on it. `worldSize`: scale so `px` pixels span that many world units (ortho zoom).
  * `clamp`: slide sideways to stay inside the canvas (speech bubbles, tooltips).
  */
-export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0, clamp = false, style }: {
+export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0, clamp = false, keepIn, style }: {
   children: ReactNode;
   position?: [number, number, number];
   worldSize?: number;
   px?: number;
   z?: number;
   clamp?: boolean;
+  /** Keep the anchor at least this far ([x, y] px) from the canvas edges (the radial menu). */
+  keepIn?: [number, number];
   style?: CSSProperties;
 }) {
   const id = useId();
@@ -48,7 +50,12 @@ export function Dom({ children, position = [0, 0, 0], worldSize, px = 100, z = 0
       const half = (el.current.offsetWidth * s) / 2 + 6;
       x = Math.min(Math.max(x, half), Math.max(half, size.width - half));
     }
-    el.current.style.transform = `translate(${x}px,${((1 - v.y) / 2) * size.height}px) translate(-50%,-50%) scale(${s})`;
+    let y = ((1 - v.y) / 2) * size.height;
+    if (keepIn) {
+      x = Math.min(Math.max(x, keepIn[0]), Math.max(keepIn[0], size.width - keepIn[0]));
+      y = Math.min(Math.max(y, keepIn[1]), Math.max(keepIn[1], size.height - keepIn[1]));
+    }
+    el.current.style.transform = `translate(${x}px,${y}px) translate(-50%,-50%) scale(${s})`;
     el.current.style.visibility = 'visible';
   });
   return <group ref={group} position={position} />;

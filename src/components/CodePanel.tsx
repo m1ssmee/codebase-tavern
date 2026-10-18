@@ -15,10 +15,10 @@ import { stageDo } from './stage/api';
 
 type Ed = Parameters<OnMount>[0];
 
-// three.js + R3F only download when someone opens the map; Mermaid only with the Diagram tab.
+// three.js + R3F only download when someone opens the Neighbourhood; Mermaid only with the Blueprint tab.
 const MapView = dynamic(() => import('./map/MapView'), {
   ssr: false,
-  loading: () => <div className="grid h-full place-items-center bg-[#fbfaf8] text-muted">Drawing the map…</div>,
+  loading: () => <div className="grid h-full place-items-center bg-[#fbfaf8] text-muted">Drawing the Neighbourhood…</div>,
 });
 const DiagramView = dynamic(() => import('./DiagramView'), {
   ssr: false,
@@ -195,7 +195,7 @@ export default function CodePanel() {
               onClick={() => setView(v)}
               className={`rounded-full px-3 py-0.5 text-xs transition-colors ${view === v ? 'bg-amber text-ink' : 'text-muted hover:text-cream'}`}
             >
-              {{ code: 'Code', map: 'Map', diagram: 'Diagram', diff: 'Diff' }[v]}
+              {{ code: 'Code', map: 'Neighbourhood', diagram: 'Blueprint', diff: 'Diff' }[v]}
             </button>
           ))}
         </div>
