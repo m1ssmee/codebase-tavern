@@ -17,7 +17,8 @@ import demoLines from '@/data/demoLines.json';
 import CharacterFace from './CharacterFace';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
-import { grudgeOf, useStage } from './stage/store';
+import { grudgeOf, think, useStage } from './stage/store';
+import { ThinkingText } from './Thinking';
 import { stageDo } from './stage/api';
 import { ModuleFace } from './Portrait';
 
@@ -41,6 +42,10 @@ function relation(g: Graph | null, me: string, owner: string): string {
 /** The demo route makes no AI calls: a saved answer for a saved line, else one in-character "live AI is off" line. */
 async function demoReply(modId: string, id: string, focus: Citation | null, pitch: number) {
   const s = useTavern.getState();
+  // A short pause with the thinking cue, as a live answer would have.
+  const end = think([modId]);
+  await new Promise((r) => setTimeout(r, 900));
+  end();
   const hit = focus && SAVED_LINES.find((x) => x.moduleId === modId && x.path === focus.path && focus.startLine <= x.endLine && focus.endLine >= x.startLine);
   const text = hit?.text ?? aiOffLine(s.spice, modId);
   for (let i = 0; i < text.length; i += 4) {
@@ -101,6 +106,8 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
   };
   let full = '';
   let highlighted = false;
+  // The thinking cue, from the request until the first words arrive (or it fails, or is cancelled).
+  const thought = think([mod.id]);
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -126,6 +133,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
       const { done, value } = await reader.read();
       if (done) break;
       full += value;
+      if (full.trim()) thought();
       useTavern.getState().appendToMessage(mod.id, id, value);
       blipText(value, char?.voicePitch ?? 1, useTavern.getState().muted);
       // Light up the code the moment the first valid citation completes, while it's still talking.
@@ -143,6 +151,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
     console.warn('[chat]', err);
     s.updateMessage(mod.id, id, { role: 'system', text: (err as Error).cause === 503 ? UNAVAILABLE : BUSY });
   } finally {
+    thought();
     s.setLoading(false);
     s.setMood(mod.id, 'idle');
   }
@@ -150,6 +159,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
 
 export default function ChatPanel() {
   const { repo, characters, moods, selectedModuleId, openFilePath, chats, isLoading } = useTavern();
+  const thinking = useStage((s) => s.thinking);
   const [input, setInput] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const mod = repo?.modules.find((m) => m.id === selectedModuleId);
@@ -247,11 +257,9 @@ export default function ChatPanel() {
                 {m.role === 'character' && m.characterId && m.characterId !== mod.id && (
                   <div className="text-xs font-medium text-muted">{characters[m.characterId]?.name ?? m.characterId}</div>
                 )}
-                {m.role === 'user'
-                  ? m.text
-                  : m.text
-                    ? <Rich text={m.text} files={repo.files} />
-                    : '…'}
+                {m.role === 'user' ? m.text : m.text ? <Rich text={m.text} files={repo.files} /> : !thinking[m.characterId ?? mod.id] && '…'}
+                {/* Waiting on the AI: the character's thinking cue under whatever it has said so far. */}
+                {m.role === 'character' && m === messages.at(-1) && isLoading && <ThinkingText id={m.characterId ?? mod.id} className={`block text-muted italic ${m.text ? 'mt-1' : ''}`} />}
               </div>
             </motion.div>
           ),

@@ -7,6 +7,8 @@ import { inspect } from '@/lib/roast';
 import { qrSvg } from '@/lib/faceSvg';
 import RoastCardView, { CARD_SIZE, type CardSize } from './RoastCardView';
 import { portraitUri } from './Portrait';
+import { thinkWhile } from './stage/store';
+import { Cue } from './Thinking';
 
 // The app's own fonts (next/font variables); html-to-image embeds them in the PNG.
 const FONTS = {
@@ -65,6 +67,7 @@ export default function RoastPanel() {
   // One generation per repo per session (cached in the store); a tick later so StrictMode's remount doesn't double it.
   useEffect(() => {
     if (result) return;
+    const ac = new AbortController(); // closing the panel cancels the request (and its cue)
     const t = setTimeout(async () => {
       const s = useTavern.getState();
       if (!s.repo || !s.graph) return;
@@ -79,12 +82,18 @@ export default function RoastPanel() {
         const found = inspect(s.repo.files, s.repo.modules, s.graph, name, (id) => s.characters[id]?.color ?? '#f5a524');
         body = { upload: true, repo: s.repo.name, entries: found.entries, violations: found.violations, modules: found.modules, keys: s.repo.modules.length, ...common };
       }
-      const res = await fetch('/api/roast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
-      const data = await res?.json().catch(() => null);
+      // The Landlord's thinking cue while the notice is written.
+      const data = await thinkWhile(
+        ['landlord'],
+        fetch('/api/roast', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal })
+          .then((r) => r.json())
+          .catch(() => null),
+      );
+      if (ac.signal.aborted) return;
       if (data?.cards) s.setRoast(key, data);
       else setFailed(true);
     }, 0);
-    return () => clearTimeout(t);
+    return () => (clearTimeout(t), ac.abort());
   }, [result, key, attempt]);
 
   useEffect(() => {
@@ -182,7 +191,10 @@ export default function RoastPanel() {
               </button>
             </div>
           ) : (
-            <p className="text-muted italic">The inspector is counting violations.</p>
+            <div className="flex flex-col items-center gap-3">
+              <Cue id="landlord" size={56} />
+              <p className="text-muted italic">The inspector is counting violations.</p>
+            </div>
           )}
         </div>
         {result && (

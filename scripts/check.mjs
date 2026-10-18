@@ -964,3 +964,29 @@ console.log('judge template checks ok');
   assert.equal(entryFile(qcRepo.modules.find((m) => m.id === 'orders')), 'orders/checkout.ts');
   console.log('casting diversity and grouping checks ok');
 }
+
+// ---- the thinking cue: every archetype (the Landlord and the Judge too) has its four lines at every spice level,
+// distinct, short, clean without swearing, and every line passes the deterministic filter (blocklist, banned words).
+{
+  const { THINKING, thinkingLines, thinkingLine, shout } = await import('../src/lib/thinkingLines.ts');
+  const { ARCHETYPES } = await import('../src/lib/cast.ts');
+  const { lineProblem, SWEARING } = await import('../src/lib/guards.ts');
+  for (const a of ARCHETYPES) {
+    assert.ok(THINKING[a], `${a} has thinking lines`);
+    for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
+      const lines = thinkingLines(a, spice);
+      assert.equal(lines.length, 4, `${a} ${spice}: four lines`);
+      assert.equal(new Set(lines).size, 4, `${a} ${spice}: distinct lines`);
+      for (const l of lines) assert.equal(lineProblem(l, { clean: spice === 'clean', maxWords: 12 }), null, `${a} ${spice}: ${l}`);
+      if (spice === 'clean') assert.ok(!lines.some((l) => SWEARING.test(l)), `${a}: clean has no swearing`);
+    }
+    // Two openers, the second line after 5 s, "still going" after 12 s; nuclear shouts only that one.
+    const [x, y, second, still] = thinkingLines(a, 'unhinged');
+    assert.ok([x, y].includes(thinkingLine(a, 'unhinged', 0, 7)) && thinkingLine(a, 'unhinged', 4999) !== second);
+    assert.equal(thinkingLine(a, 'unhinged', 5000), second);
+    assert.equal(thinkingLine(a, 'unhinged', 12_000), still);
+    assert.equal(thinkingLine(a, 'nuclear', 12_000), shout(still));
+    assert.notEqual(shout(still), still);
+  }
+  console.log('thinking cue checks ok');
+}

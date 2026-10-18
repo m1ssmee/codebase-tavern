@@ -10,7 +10,8 @@ import { blipText, unlockAudio } from '@/lib/blips';
 import type { Mood } from '@/lib/types';
 import demoWhatIf from '@/data/demoWhatIf.json';
 import CitationChip from './CitationChip';
-import { useStage } from './stage/store';
+import { think, useStage } from './stage/store';
+import { Cue } from './Thinking';
 import { stageDo } from './stage/api';
 import Rich from './Rich';
 import { LandlordPortrait, ModuleFace } from './Portrait';
@@ -56,6 +57,14 @@ export default function WhatIfPanel() {
   const landed = useRef(new Map<string, Result>());
   const spoken = useRef(new Set<string>()); // modules whose reaction bubble has played this step
   const ctrl = useRef<AbortController | null>(null);
+  // The thinking cue: whoever is waiting on the AI (the changed module while the diff is written; then each module
+  // in the list until its verdict lands). Every way out of a step ends them.
+  const waits = useRef(new Map<string, () => void>());
+  const wait = (ids: string[]) => ids.forEach((id) => !waits.current.has(id) && waits.current.set(id, think([id])));
+  const unwait = (id?: string) => {
+    for (const [k, end] of waits.current) if (!id || k === id) (end(), waits.current.delete(k));
+  };
+  const ownerOf = (path?: string) => repo?.modules.find((m) => path && m.filePaths.includes(path))?.id;
 
   // Closing What-if ends the hot potato scene on stage.
   useEffect(() => () => void stageDo('potatoEnd'), []);
@@ -94,6 +103,7 @@ export default function WhatIfPanel() {
       later(k * 900, () => speak(id));
     });
   const land = (r: Result) => {
+    unwait(r.moduleId);
     landed.current.set(r.moduleId, r);
     setResults((x) => ({ ...x, [r.moduleId]: r }));
     react(r.moduleId);
@@ -130,6 +140,7 @@ export default function WhatIfPanel() {
   /** A step's results are all in: after stacked changes, if nobody is worse off, the Landlord shows up. */
   /** The Landlord closes a complete fix: everyone fine or relieved, and nothing left to follow up (or a stack that finished one). */
   const finish = (imp: Impact, depth: number, sum: Summary | null) => {
+    unwait();
     setPhase('done');
     const ok = imp.items.every((i) => ['fine', 'relieved'].includes(landed.current.get(i.moduleId)?.verdict ?? ''));
     if (!ok || (depth < 2 && (!sum || sum.followUps?.length))) return;
@@ -159,6 +170,7 @@ export default function WhatIfPanel() {
   };
 
   const undo = () => {
+    unwait();
     void stageDo('undo'); // everyone on stage groans
     timers.current.forEach(clearTimeout);
     timers.current = [];
@@ -223,6 +235,7 @@ export default function WhatIfPanel() {
     setPhase('writing');
     let patch = '';
     if (!s.demo) {
+      wait([mod.id]);
       const ac = (ctrl.current = new AbortController());
       const limit = repo.url?.includes('/quickcart') && savedRun ? setTimeout(() => ac.abort(), LIVE_LIMIT_MS) : undefined;
       const res = await fetch('/api/whatif', {
@@ -233,6 +246,7 @@ export default function WhatIfPanel() {
       }).catch(() => null);
       clearTimeout(limit);
       const data = await res?.json().catch(() => null);
+      unwait(mod.id);
       if (dead()) return;
       patch = data?.diff ?? '';
     }
@@ -270,6 +284,8 @@ export default function WhatIfPanel() {
       }
       setPhase('writing');
       const file = repo.files.find((f) => f.path === change.path);
+      const owner = ownerOf(change.path);
+      if (owner) wait([owner]);
       const res = await fetch('/api/whatif', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -277,6 +293,7 @@ export default function WhatIfPanel() {
         signal: ac.signal,
       }).catch(() => null);
       const data = await res?.json().catch(() => null);
+      if (owner) unwait(owner);
       if (dead()) return;
       if (!res?.ok || !data?.diff) {
         setPhase('error');
@@ -311,9 +328,11 @@ export default function WhatIfPanel() {
     s.setWhatIfDiff(imp.files.map((f) => ({ path: f.path, before: f.before, after: f.after })));
     setPhase('assessing');
     play(imp, label, from);
+    wait(imp.items.map((i) => i.moduleId)); // they read the diff
 
     const saved = savedFor(imp);
     const graphOnly = (why: string) => {
+      unwait();
       setNote(why);
       setPhase('done');
     };
@@ -384,7 +403,7 @@ export default function WhatIfPanel() {
       if (!dead()) finish(imp, depth, sum);
     } catch (err) {
       clearTimeout(limit);
-      if (dead()) return;
+      if (dead()) return unwait();
       console.warn('[whatif]', err);
       if (isDemoRepo && saved) return replay(saved, ac.signal.aborted ? SLOW_NOTE : DOWN_NOTE, dead, imp, depth);
       graphOnly(ac.signal.aborted ? 'Live AI is slow right now. The impact list comes from the import graph and is still accurate.' : 'The AI is busy right now. The impact list comes from the import graph and is still accurate.');
@@ -399,6 +418,7 @@ export default function WhatIfPanel() {
       gen.current++; // eslint-disable-line react-hooks/exhaustive-deps -- a run counter, not a DOM ref
       ctrl.current?.abort();
       timers.current.forEach(clearTimeout);
+      unwait();
       const s = useTavern.getState();
       for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
       useTavern.setState({ bubbles: {} });
@@ -484,7 +504,14 @@ export default function WhatIfPanel() {
             </div>
           </div>
         )}
-        {phase === 'writing' && <p className="text-center text-sm text-muted italic">Writing the change against the real file.</p>}
+        {phase === 'writing' && (
+          <div className="flex flex-col items-center gap-2">
+            {[...waits.current.keys()].slice(0, 1).map((id) => (
+              <Cue key={id} id={id} size={36} />
+            ))}
+            <p className="text-center text-sm text-muted italic">Writing the change against the real file.</p>
+          </div>
+        )}
         {error && <p className="text-center text-sm text-tomato">{error}</p>}
         {note && <p className="text-center text-xs text-neutral-400">{note}</p>}
 

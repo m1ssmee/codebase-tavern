@@ -13,7 +13,7 @@ import demoArgue from '@/data/demoArgue.json';
 import { getActor } from '../cast/anim/actor';
 import { bonk, bored as boredGag, click as clickActor, completeFix as fixGag, judgeVerdict, outOfScope, roast as roastGag, undo as undoGag } from '../cast/anim/director';
 import { reducedMotion } from '../cast/settings';
-import { actorOf, addGrudge, grudgeOf, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
+import { actorOf, addGrudge, grudgeOf, think, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
 import { bus, lineBox, reveal } from './bus';
 import { aims, anchorPoint, codeRect, leftBlocked, placed, sizeOf } from './geo';
 import { resetPerches } from './perches';
@@ -30,9 +30,9 @@ export const visible = () => S().tenants !== 'off' && T().view !== 'map' && T().
 /** Walking and pointing only when tenants are on stage and motion is allowed; else they stand still and an arrow points. */
 const walks = () => S().tenants === 'stage' && !reducedMotion();
 const kindOf = (id: string): MemberKind => (id === 'judge' ? 'judge' : id === 'landlord' ? 'landlord' : 'module');
-/** The Neighbourhood has its own cast: the same scenes play there with its characters, in bubbles over its nodes. */
-const onMap = () => T().view === 'map';
-const aid = (id: string) => (onMap() ? `map:${id}` : actorOf(id));
+/** The Neighbourhood and the Blueprint have their own casts: the same scenes play there, in bubbles over their characters. */
+const onMap = () => T().view === 'map' || T().view === 'diagram';
+const aid = (id: string) => (T().view === 'map' ? `map:${id}` : T().view === 'diagram' ? `bp:${id}` : actorOf(id));
 const actor = (id: string) => getActor(aid(id));
 const nameOf = (id: string) => T().characters[id]?.name ?? T().repo?.modules.find((m) => m.id === id)?.name ?? id;
 const key = (c: Citation) => `${c.path}:${c.startLine}-${c.endLine}`;
@@ -235,7 +235,7 @@ async function tour(id: string, text: () => string, done: () => boolean) {
  */
 export async function answer(mod: string, msgId: string, focus: Citation | null) {
   const msg = () => T().chats[mod]?.find((m) => m.id === msgId);
-  // On the Neighbourhood: the answer streams into a bubble over its node.
+  // On the Neighbourhood and the Blueprint: the answer streams into a bubble over its character.
   if (onMap()) {
     say(mod, { text: '', msg: { mod, id: msgId } });
     await until(() => !T().isLoading || msg()?.role === 'system', 60_000);
@@ -375,8 +375,13 @@ export async function argue(a: string, b: string) {
     ended = true;
   } else void streamArgument(a, b, refs, (turn) => queue.push(turn)).finally(() => (ended = true));
   let last: Turn | null = null;
+  // Waiting on the AI: both think until the first turn, then whoever speaks next (the cue never stacks).
+  let waiting: (() => void) | null = null;
+  const wait = (ids: string[]) => (waiting ??= think(ids));
+  const stopWaiting = () => (waiting?.(), (waiting = null));
   for (let i = 0; ; ) {
     if (i < queue.length) {
+      stopWaiting();
       const turn = queue[i++];
       last = turn;
       const other = turn.moduleId === a ? b : a;
@@ -391,8 +396,10 @@ export async function argue(a: string, b: string) {
       continue;
     }
     if (ended) break;
+    wait(i ? [last?.moduleId === a ? b : a] : [a, b]);
     await sleep(150);
   }
+  stopWaiting();
   if (!queue.length) {
     await typeOut(a, "We're not doing this right now. The AI is out, so there's nobody to write my comebacks.", { keep: 4000 });
   } else if (last) {
@@ -629,6 +636,27 @@ export function sulk() {
       if ((T().moods[m.id] ?? 'idle') === 'idle' || T().moods[m.id] === 'talking') a.setExpression(on ? 'sulky' : 'deadpan');
     }
     if (on && !isBusy(m.id) && !a.cur && !a.holds.length && (T().moods[m.id] ?? 'idle') === 'idle') void a.play('sulk', { priority: 0 });
+  }
+}
+
+// ---------- the thinking pose ----------
+const PREFIXES = ['stage', 'map', 'bp', 'trib', 'chat', 'tour'];
+const posing = new Set<string>();
+/** Every few hundred ms: whoever is waiting on the AI holds the thinking pose (once it's free), in every cast it's in. */
+export function thinkPoses() {
+  const waiting = S().thinking;
+  const want = reducedMotion() ? [] : Object.keys(waiting).flatMap((id) => PREFIXES.map((p) => `${p}:${id}`));
+  for (const key of posing)
+    if (!want.includes(key)) {
+      getActor(key)?.stopLoop('think');
+      posing.delete(key);
+    }
+  for (const key of want) {
+    const a = getActor(key);
+    // Not over another clip, a float or a point; the stage's floats take the loop while it travels.
+    if (!a || a.cur || a.pointer || (a.loop && a.loop.name !== 'think')) continue;
+    if (a.loop?.name !== 'think') void a.play('think', { priority: 0 });
+    posing.add(key);
   }
 }
 

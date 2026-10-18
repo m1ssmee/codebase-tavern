@@ -84,6 +84,16 @@ body {
   .portrait-talking, .portrait-accused, .portrait-nervous, .portrait-happy { animation: none; }
 }
 
+/* The thinking cue's dots: three, pulsing in turn (still for reduced motion). */
+@keyframes think-dot { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+.think-dots { display: inline-flex; gap: 3px; margin-left: 5px; vertical-align: middle; }
+.think-dots i { display: block; width: 4px; height: 4px; border-radius: 9999px; background: currentColor; animation: think-dot 1.2s ease-in-out infinite; }
+.think-dots i:nth-child(2) { animation-delay: 0.15s; }
+.think-dots i:nth-child(3) { animation-delay: 0.3s; }
+@media (prefers-reduced-motion: reduce) {
+  .think-dots i { animation: none; opacity: 0.6; }
+}
+
 /* nuclear: short screen shake on the Tribunal verdict */
 @keyframes nuclear-shake {
   0%, 100% { transform: translate(0, 0); }

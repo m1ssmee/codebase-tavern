@@ -15,12 +15,12 @@ import { tourOrder } from '@/lib/landlord';
 import type { Module } from '@/lib/types';
 import MapNode from './MapNode';
 import { Dom, DomLayer } from './Dom';
-import Rich from '../Rich';
+import { SpeechBubble } from '../Thinking';
 import { CastCanvas, CastFallbackNote, CastLights } from '../cast/Character3D';
 import { getActor } from '../cast/anim/actor';
 import { Menu } from '../stage/Stage';
 import { stageDo } from '../stage/api';
-import { useStage, type Bubble } from '../stage/store';
+import { useStage } from '../stage/store';
 
 const PX = 30; // d3 layout pixels per world unit
 const LIFT = 0.25; // gap between a face and the ground
@@ -115,6 +115,7 @@ function Scene() {
   const rippleFrom = useTavern((s) => s.rippleFrom);
   const bubbles = useTavern((s) => s.bubbles);
   const talk = useStage((s) => s.bubbles);
+  const thinking = useStage((s) => s.thinking);
   const menu = useStage((s) => s.menu);
   const road = useStage((s) => s.road);
   const follow = useHood((s) => s.follow);
@@ -612,7 +613,7 @@ function Scene() {
                   <Menu id={m.id} />
                 </Dom>
               )}
-              {hovered === m.id && !dragging && menu !== m.id && !talk[m.id] && (
+              {hovered === m.id && !dragging && menu !== m.id && !talk[m.id] && !thinking[m.id] && (
                 <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={3} clamp>
                   <div className="-translate-y-1/2 rounded-lg border border-edge bg-panel px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md">
                     <div className="font-medium text-cream">{char?.name ?? m.name}</div>
@@ -629,9 +630,9 @@ function Scene() {
                   </div>
                 </Dom>
               )}
-              {talk[m.id] && menu !== m.id ? (
+              {(talk[m.id] || thinking[m.id]) && menu !== m.id ? (
                 <Dom position={[0, LIFT + n.scale + 0.1, 0]} z={5} clamp>
-                  <MapBubble id={m.id} b={talk[m.id]} />
+                  <SpeechBubble id={m.id} b={talk[m.id]} />
                 </Dom>
               ) : (
                 bubbles[m.id] &&
@@ -739,22 +740,6 @@ function RoadCard({ e, cut, onClose }: { e: Edge; cut: boolean; onClose: () => v
   );
 }
 
-/** A speech bubble from the stage's scenes (an answer streaming in, gossip, an argument), over its node. */
-function MapBubble({ id, b }: { id: string; b: Bubble }) {
-  const live = useTavern((s) => (b.msg ? s.chats[b.msg.mod]?.find((x) => x.id === b.msg!.id) : undefined));
-  const files = useTavern((s) => s.repo?.files ?? []);
-  const name = useTavern((s) => s.characters[id]?.name ?? id);
-  if (live?.role === 'system') return null;
-  const body = (live ? live.text : b.text).replace(/\[[^\]\n]*$/, '');
-  const short = body.length > 280 ? body.slice(0, 280).replace(/\s+\S*$/, '') + '…' : body;
-  return (
-    <div className="pointer-events-auto w-72 -translate-y-1/2 rounded-2xl rounded-bl-sm border-2 border-cream bg-white px-3 py-2 text-xs leading-snug text-cream shadow-[3px_3px_0_rgba(0,0,0,0.85)]">
-      <div className="text-[11px] font-semibold text-muted">{name}</div>
-      {short ? <Rich text={short} files={files} /> : <span className="text-muted">…</span>}
-    </div>
-  );
-}
-
 /** The import graph as a floating town: drag, hover, click for the menu, roads, a request to follow, ripple(). Lazy-loaded; never server-rendered. */
 export default function MapView() {
   const repo = useTavern((s) => s.repo);
@@ -764,13 +749,8 @@ export default function MapView() {
   const follow = useHood((s) => s.follow);
   const cut = useHood((s) => s.cut);
   const said = useHood((s) => s.caption);
-  // Leaving the Neighbourhood closes its menu and stops the parcel; expired bubbles go (the stage isn't running here).
+  // Leaving the Neighbourhood closes its menu and stops the parcel.
   useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      const b = useStage.getState().bubbles;
-      if (Object.values(b).some((x) => x.until && x.until < now)) useStage.setState({ bubbles: Object.fromEntries(Object.entries(b).filter(([, x]) => !x.until || x.until >= now)) });
-    }, 500);
     const esc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       useHood.setState({ cut: false });
@@ -778,7 +758,6 @@ export default function MapView() {
     };
     window.addEventListener('keydown', esc);
     return () => {
-      clearInterval(t);
       window.removeEventListener('keydown', esc);
       useStage.setState({ menu: null });
       useHood.setState({ follow: null, cut: false, caption: null });

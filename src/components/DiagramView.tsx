@@ -13,6 +13,8 @@ import { useCast3D } from './cast/settings';
 import { getActor } from './cast/anim/actor';
 import BlueprintCast, { MAX_3D, useBlueprint } from './BlueprintCast';
 import { LandlordPortrait, ModuleFace } from './Portrait';
+import { SpeechBubble } from './Thinking';
+import { useStage } from './stage/store';
 
 const NS = 'http://www.w3.org/2000/svg';
 const CARD = 250; // px the tour card covers at the bottom; focus keeps the stop above it
@@ -43,6 +45,7 @@ export default function DiagramView() {
   const [slots, setSlots] = useState<Slot[]>([]);
   const [svg, setSvg] = useState<{ el: SVGSVGElement; rid: string } | null>(null);
   const mer = useRef<MermaidHandle>(null);
+  const box = useRef<HTMLDivElement>(null);
 
   const names = useMemo(() => Object.fromEntries(repo.modules.map((m) => [m.id, m.name])), [repo]);
   const titles = useMemo(() => Object.fromEntries(repo.modules.map((m) => [m.id, characters[m.id]?.name ?? m.name])), [repo, characters]);
@@ -113,10 +116,11 @@ export default function DiagramView() {
           </button>
         )}
       </div>
-      <div className="relative min-h-0 flex-1">
+      <div ref={box} className="relative min-h-0 flex-1">
         <Mermaid ref={mer} code={chart.code} fill onReady={onReady} className="absolute inset-0 cursor-grab active:cursor-grabbing" />
         {/* Live characters on the modules' badges (the first MAX_3D); 3D off: the 2D faces in the badges. */}
         {threeD && !mod && slots.length > 0 && <BlueprintCast slots={slots} />}
+        {!mod && slots.length > 0 && <BlueprintBubbles slots={slots} box={box} />}
         {!tourOn && (
           <div className="pointer-events-none absolute bottom-2 left-3 rounded-lg bg-panel/85 px-2 py-1 text-xs text-muted">
             Arrows point from the needy to the needed. Solid: imports. Dashed: talks over the network. Red: codependent.
@@ -145,6 +149,46 @@ export default function DiagramView() {
           ),
       )}
     </div>
+  );
+}
+
+/** Speech bubbles on the Blueprint (answers, gossip, arguments, the thinking cue), next to each module's badge. */
+function BlueprintBubbles({ slots, box }: { slots: Slot[]; box: RefObject<HTMLDivElement | null> }) {
+  const talk = useStage((s) => s.bubbles);
+  const thinking = useStage((s) => s.thinking);
+  const els = useRef(new Map<string, HTMLDivElement>());
+  useEffect(() => {
+    let raf = 0;
+    const place = () => {
+      const c = box.current?.getBoundingClientRect();
+      for (const s of slots) {
+        const el = els.current.get(s.id);
+        if (!el || !c) continue;
+        const r = s.face.getBoundingClientRect();
+        const x = Math.max(4, Math.min(c.width - el.offsetWidth - 4, r.right - c.left + 2));
+        el.style.transform = `translate(${x}px,${Math.max(el.offsetHeight / 2 + 4, r.top - c.top + r.height / 2)}px)`;
+        el.style.visibility = r.width > 3 ? 'visible' : 'hidden';
+      }
+      raf = requestAnimationFrame(place);
+    };
+    raf = requestAnimationFrame(place);
+    return () => cancelAnimationFrame(raf);
+  }, [slots, box]);
+  return (
+    <>
+      {slots
+        .filter((s) => talk[s.id] || thinking[s.id])
+        .map((s) => (
+          <div
+            key={s.id}
+            ref={(el) => void (el ? els.current.set(s.id, el) : els.current.delete(s.id))}
+            className="absolute top-0 left-0 z-20"
+            style={{ visibility: 'hidden' }}
+          >
+            <SpeechBubble id={s.id} b={talk[s.id]} />
+          </div>
+        ))}
+    </>
   );
 }
 

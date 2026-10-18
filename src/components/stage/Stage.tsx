@@ -10,12 +10,13 @@ import { sendChat } from '../ChatPanel';
 import { useCast3D } from '../cast/settings';
 import { reducedMotion } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
-import { actorOf, useStage, type Member } from './store';
+import { actorOf, think, thinkWhile, useStage, type Member } from './store';
 import { bus, lineAt, lineBox } from './bus';
 import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
 import { perchNear, tickPerches, typed } from './perches';
 import * as scenes from './scenes';
 import { JudgePortrait, LandlordPortrait, ModuleFace } from '../Portrait';
+import { ThinkingText, useThinking } from '../Thinking';
 
 const Stage3D = dynamic(() => import('./Stage3D'), { ssr: false });
 
@@ -52,6 +53,11 @@ export default function Stage() {
   useEffect(() => {
     if (selected && !useStage.getState().scene) scenes.castFor(selected);
   }, [selected]);
+  // Its AI persona still on the way: the selected character shows the thinking cue until it arrives.
+  const personaDue = useTavern((s) => s.personas === 'pending' && !!s.selectedModuleId && !s.arrivals[s.selectedModuleId]);
+  useEffect(() => {
+    if (personaDue && selected) return think([selected]);
+  }, [personaDue, selected]);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -75,8 +81,14 @@ export default function Stage() {
         scenes.bored();
       }
     }, 2000);
-    // Perches follow the layout (and wandering ticks) a few times a second.
-    const perch = setInterval(() => scenes.visible() && tickPerches(), 400);
+    // Perches follow the layout (and wandering ticks) a few times a second; waiting characters strike the thinking pose.
+    const perch = setInterval(() => {
+      if (scenes.visible()) tickPerches();
+      scenes.thinkPoses();
+      // Bubbles with an end time go, in every cast (the stage, the Neighbourhood, the Blueprint).
+      const b = useStage.getState().bubbles, now = Date.now();
+      if (Object.values(b).some((x) => x.until && x.until < now)) useStage.setState({ bubbles: Object.fromEntries(Object.entries(b).filter(([, x]) => !x.until || x.until >= now)) });
+    }, 400);
     return () => {
       window.removeEventListener('pointermove', move);
       evs.forEach((e) => window.removeEventListener(e, touch));
@@ -428,23 +440,18 @@ function Bubbles() {
   const bubbles = useStage((s) => s.bubbles);
   const reactions = useTavern((s) => s.bubbles); // What-if reactions, also shown on the map
   const members = useStage((s) => s.members);
+  const thinking = useStage((s) => s.thinking);
   const [, tick] = useState(0);
-  // Bubbles with an end time disappear on their own.
+  // Re-placed twice a second (the frame loop moves them; this catches new sizes).
   useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      const s = useStage.getState();
-      const gone = Object.entries(s.bubbles).filter(([, b]) => b.until && b.until < now);
-      if (gone.length) useStage.setState({ bubbles: Object.fromEntries(Object.entries(s.bubbles).filter(([, b]) => !b.until || b.until >= now)) });
-      tick((x) => x + 1);
-    }, 500);
+    const t = setInterval(() => tick((x) => x + 1), 500);
     return () => clearInterval(t);
   }, []);
-  const ids = members.map((m) => m.id).filter((id) => bubbles[id] || reactions[id]);
+  const ids = members.map((m) => m.id).filter((id) => bubbles[id] || reactions[id] || thinking[id]);
   return (
     <>
       {ids.map((id) => (
-        <BubbleView key={id} id={id} text={bubbles[id]?.text ?? reactions[id]} msg={bubbles[id]?.msg} />
+        <BubbleView key={id} id={id} text={bubbles[id]?.text ?? reactions[id] ?? ''} msg={bubbles[id]?.msg} />
       ))}
     </>
   );
@@ -453,6 +460,7 @@ function Bubbles() {
 const MAX_CHARS = 420;
 function BubbleView({ id, text, msg }: { id: string; text: string; msg?: { mod: string; id: string } }) {
   const live = useTavern((s) => (msg ? s.chats[msg.mod]?.find((m) => m.id === msg.id) : undefined));
+  const thinking = useThinking(id);
   const files = useTavern((s) => s.repo?.files ?? []);
   const name = useTavern((s) => (id === 'judge' ? 'The Judge' : id === 'landlord' ? 'The Landlord' : (s.characters[id]?.name ?? id)));
   // A citation still being typed shows only once it closes.
@@ -471,7 +479,11 @@ function BubbleView({ id, text, msg }: { id: string; text: string; msg?: { mod: 
       aria-live="polite"
     >
       <div className="text-[11px] font-semibold text-muted">{name}</div>
-      <div className="max-h-48 overflow-hidden">{body ? <Rich text={long ? body.slice(0, MAX_CHARS).replace(/\s+\S*$/, '') + '…' : body} files={files} /> : <span className="text-muted">…</span>}</div>
+      <div className="max-h-48 overflow-hidden">
+        {body && <Rich text={long ? body.slice(0, MAX_CHARS).replace(/\s+\S*$/, '') + '…' : body} files={files} />}
+        {/* Waiting on the AI: the thinking cue until the answer starts. */}
+        {thinking ? <ThinkingText id={id} className="block text-muted italic" /> : !body && <span className="text-muted">…</span>}
+      </div>
       {long && msg && (
         <button type="button" className="mt-1 text-[11px] font-medium text-amber-700 underline underline-offset-2" onClick={() => document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
           Continue in transcript
@@ -587,7 +599,8 @@ export function Menu({ id }: { id: string }) {
         { label: 'Who needs you?', run: go(() => scenes.whoNeedsYou(id, send)) },
         { label: 'Roast me', run: go(() => scenes.roastMe(id, send)) },
         { label: 'What if I change you?', run: go(() => scenes.whatIfMe(id)) },
-        { label: 'Gossip', run: go(async () => (await useTavern.getState().getGossip(id), scenes.gossip(id))) }, // written on request (store.getGossip)
+        // Written on request (store.getGossip): the character's thinking cue while it's written.
+        { label: 'Gossip', run: go(async () => (await thinkWhile([id], useTavern.getState().getGossip(id)), scenes.gossip(id))) },
         { label: 'Pick a fight with…', run: () => setFight(true) },
       ];
   const n = items.length;

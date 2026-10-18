@@ -40,6 +40,11 @@ type Stage = {
   /** The Judge is performing the verdict: everyone's app mood waits until it is done. */
   holdMoods: boolean;
   grudges: Record<string, { roasts: number[]; pesters: number[] }>;
+  /**
+   * Characters waiting on an AI call (the thinking cue): since when, and how many waits are open on each. A second
+   * wait on the same character joins the first one's cue instead of stacking.
+   */
+  thinking: Record<string, { since: number; n: number }>;
   /** Two modules arguing: on the Neighbourhood the road between them lights up and they meet on it. */
   road: { a: string; b: string } | null;
   /** "What if I change you?": the code panel selects these lines and opens its presets. */
@@ -82,6 +87,7 @@ export const useStage = create<Stage>((set) => ({
   dim: false,
   holdMoods: false,
   grudges: {},
+  thinking: {},
   road: null,
   whatIfFor: null,
   setTenants: (tenants) => {
@@ -102,6 +108,43 @@ export const useStage = create<Stage>((set) => ({
 export const memberId = (kind: MemberKind, id: string) => (kind === 'module' ? id : kind);
 /** Actor ids for the stage's 3D characters (the map, the tour and the panels use their own). */
 export const actorOf = (id: string) => `stage:${id}`;
+
+/**
+ * A character (or several: both sides of an argument) starts waiting on an AI call: its thinking cue shows at once.
+ * Returns the end of the wait; calling it more than once is harmless. Ids: module ids, 'judge', 'landlord'.
+ */
+export function think(ids: string[]): () => void {
+  if (!ids.length) return () => {};
+  const now = Date.now();
+  useStage.setState((s) => {
+    const t = { ...s.thinking };
+    for (const id of new Set(ids)) t[id] = { since: t[id]?.since ?? now, n: (t[id]?.n ?? 0) + 1 };
+    return { thinking: t };
+  });
+  let open = true;
+  return () => {
+    if (!open) return;
+    open = false;
+    useStage.setState((s) => {
+      const t = { ...s.thinking };
+      for (const id of new Set(ids)) {
+        const x = t[id];
+        if (x && x.n > 1) t[id] = { ...x, n: x.n - 1 };
+        else delete t[id];
+      }
+      return { thinking: t };
+    });
+  };
+}
+/** Waits on `p` with the cue on `ids`; the cue ends however `p` ends (answer, error, cancel). */
+export async function thinkWhile<T>(ids: string[], p: Promise<T>): Promise<T> {
+  const end = think(ids);
+  try {
+    return await p;
+  } finally {
+    end();
+  }
+}
 
 const MIN10 = 10 * 60_000;
 /** A character's grudge: roasts and pesterings in the last 10 minutes. */

@@ -13,7 +13,8 @@ import CitationChip from './CitationChip';
 import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
-import { useStage } from './stage/store';
+import { think, useStage } from './stage/store';
+import { Cue } from './Thinking';
 import { stageDo } from './stage/api';
 import { ModuleFace } from './Portrait';
 
@@ -89,6 +90,12 @@ export default function TribunalPanel() {
   const [verdict, setVerdict] = useState<Verdict | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [lineIdx, setLineIdx] = useState(0);
+  // The Judge's thinking cue while the court waits on the AI (the suspects, the first turn, each next turn).
+  const judgeWait = useRef<(() => void) | null>(null);
+  const judgeThinks = (on: boolean) => {
+    if (on) judgeWait.current ??= think(['judge']);
+    else (judgeWait.current?.(), (judgeWait.current = null));
+  };
   const stop = useRef(false);
   const skip = useRef(false);
   const endRef = useRef<HTMLDivElement>(null);
@@ -106,6 +113,7 @@ export default function TribunalPanel() {
   useEffect(
     () => () => {
       stop.current = true;
+      judgeWait.current?.();
       void stageDo('courtClose');
       const s = useTavern.getState();
       for (const id of Object.keys(s.moods)) s.setMood(id, 'idle');
@@ -129,6 +137,7 @@ export default function TribunalPanel() {
 
   /** Types one turn out with blips; speaker talks, accused rolls its eyes, chips highlight as they complete. */
   const playTurn = async (turn: Turn, ids: string[]) => {
+    judgeThinks(false);
     mood(ids, 'idle');
     useTavern.getState().setMood(turn.moduleId, 'talking');
     if (turn.accuses) useTavern.getState().setMood(turn.accuses, 'accused');
@@ -156,6 +165,7 @@ export default function TribunalPanel() {
   };
 
   const showVerdict = (v: Verdict, ids: string[]) => {
+    judgeThinks(false);
     airhorn(useTavern.getState().muted);
     // nuclear: the whole screen shakes for the verdict (CSS; disabled for reduced motion).
     if (useTavern.getState().spice === 'nuclear') {
@@ -199,6 +209,7 @@ export default function TribunalPanel() {
     setNote(null);
     setLineIdx(0);
     setPhase('picking');
+    judgeThinks(true);
     // Demo route: replay the saved hearing with the same pacing, no API calls.
     if (useTavern.getState().demo && DEMO.turns?.length) {
       await sleep(900);
@@ -287,13 +298,18 @@ export default function TribunalPanel() {
           if (played === 0) setPhase('playing');
           await playTurn(queue[played++], ids);
         } else if (ended) break;
-        else await nextEvent();
+        else {
+          judgeThinks(true);
+          await nextEvent();
+        }
       }
+      judgeThinks(false);
       if (stop.current) return;
       if (!live || played < 2) throw new Error(ctrl.signal.aborted ? 'slow' : 'no verdict');
       showVerdict(live, ids);
     } catch (err) {
       clearTimeout(limit);
+      judgeThinks(false);
       if (stop.current) return;
       console.warn('[tribunal]', err);
       // Demo safety: on the demo repo, replay the saved hearing instead of stalling or failing on stage.
@@ -416,6 +432,11 @@ export default function TribunalPanel() {
               </div>
             )}
             <p className="font-display text-lg italic">&ldquo;{verdict.judgeLine}&rdquo;</p>
+          </div>
+        )}
+        {(phase === 'picking' || phase === 'hearing' || phase === 'playing') && (
+          <div className="flex justify-center pt-1">
+            <Cue id="judge" size={36} />
           </div>
         )}
         <div ref={endRef} />

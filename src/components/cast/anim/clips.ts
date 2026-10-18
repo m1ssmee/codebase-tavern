@@ -297,6 +297,16 @@ export const SHARED: Record<string, ClipFn> = {
     tracks: { 'root.sq': one([0.07, 0.8, 'out'], [0.24, 1.06, 'out'], [0.5, 1]), 'head.r': [[0, z], [0.07, [6, 0, 0], 'out'], [0.4, z]] },
     cues: [[0, snd('thud', 0.25)]],
   }),
+  /** Waiting on an answer (the thinking cue): head tilted, a slight lean, a foot tapping. */
+  think: () => ({
+    dur: 1.2, loop: true,
+    tracks: {
+      'head.r': [[0, [-8, 12, 12]]],
+      'torso.r': [[0, [2, 5, 3]]],
+      'footR.r': osc(2.5, [-16, 0, 0], 0, 1e9, 0),
+      'armR.p': osc(1 / 0.6, [0, 0.008, 0], 0, 1e9, 0),
+    },
+  }),
   /** Generic float: a bob, legs dangling. */
   floats: () => ({
     dur: 1.2, loop: true,
@@ -378,7 +388,7 @@ export const ALIASES: Partial<Record<Archetype, Record<string, string[]>>> = {
 
 /** Every clip name the board offers, in order. */
 export const GAG_NAMES = ['idle', 'accused', 'guilty', 'happy', 'points', 'floats', 'bonks', 'middle', 'twerk'] as const;
-export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode', 'dangle', 'wave', 'dizzy', 'sulk', 'takeoff', 'land'] as const;
+export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode', 'dangle', 'wave', 'dizzy', 'sulk', 'takeoff', 'land', 'think'] as const;
 
 export function clipFor(arch: Archetype, name: string): ClipFn | undefined {
   return GAGS[arch]?.[name] ?? SHARED[name];
