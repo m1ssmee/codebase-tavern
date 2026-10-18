@@ -124,7 +124,7 @@ export class Actor {
   pointer: Pointer | null = null;
   /** What a bonk is aimed at (set by the director): thrown ducks, keys and books fly there. */
   target: Target | null = null;
-  /** Plays its idle gag now and then when nothing else is going on (off in the app for now: no new gags yet). */
+  /** Plays its signature idle fidget every 8-15 s when nothing else is going on. */
   ambient = true;
   /** Small per-character gag state (the Judge's bangs this hearing). */
   readonly memo: Record<string, number> = {};
@@ -487,9 +487,9 @@ export class Actor {
     this.t += dt;
     const now = clock.now;
     // Ambient idle gags now and then.
-    if (!this.cur && !this.holds.length && !this.float && !this.pointer && this.mood === 'idle' && !this.talking && this.ambient && useCastAnim.getState().ambient && now > this.nextIdle) {
+    if (!this.cur && !this.holds.length && !this.loop && !this.float && !this.pointer && this.mood === 'idle' && !this.talking && this.ambient && useCastAnim.getState().ambient && now > this.nextIdle) {
       void this.play('idle', { priority: 0 });
-      this.nextIdle = now + 9 + Math.random() * 9;
+      this.nextIdle = now + 8 + Math.random() * 7;
     }
     mixer.update(dt);
     for (const r of [this.cur, this.loop]) if (r && !r.still) this.fireCues(r, r.action.time);

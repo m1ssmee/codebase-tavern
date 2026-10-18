@@ -8,7 +8,7 @@ import { useTavern } from '@/lib/store';
 import type { Built } from '../cast/archetypes';
 import { CastCanvas, CastLights, Character3D } from '../cast/Character3D';
 import { actorOf, useStage, type Member } from './store';
-import { HEIGHT, placed, sizes } from './geo';
+import { HEIGHT, placed, sizes, zooms } from './geo';
 
 const Z = 60; // pixels per world unit
 // The What-if relieved hop, as on the map.
@@ -41,6 +41,7 @@ function Tenant({ m }: { m: Member }) {
     const p = placed.get(m.id);
     if (!p || !group.current) return;
     group.current.position.set((p.x - size.width / 2) / Z, (size.height / 2 - p.y) / Z, 0);
+    group.current.scale.setScalar(zooms.get(m.id) ?? 1); // smaller while perched
   });
   // Every character is HEIGHT pixels tall on stage, whatever its build; the hitbox takes the model's width.
   const onBuilt = useCallback(
@@ -68,7 +69,6 @@ function Tenant({ m }: { m: Member }) {
         scale={scale || 1}
         mood={m.kind === 'module' ? (hold ? 'idle' : (mood ?? 'idle')) : undefined}
         moodClips={CLIPS}
-        ambient={false}
         clicks={false}
         hitbox
         onBuilt={onBuilt}

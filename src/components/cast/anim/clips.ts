@@ -285,6 +285,18 @@ export const SHARED: Record<string, ClipFn> = {
     tracks: { 'root.p': [[0, z], [0.2, z], [0.4, [0, 0.12, 0], 'out'], [0.6, z, 'in']], 'root.sq': one([0.2, 0.88], [0.3, 1.08, 'out'], [0.6, 0.92, 'out'], [0.8, 1]), 'head.r': [[0.6, z], [0.8, [8, 0, 0]], [1.1, z]] },
     cues: [[0.1, expr('smug')], [0.3, snd('pop', 0.6)]],
   }),
+  /** Before floating off somewhere: a short crouch, then up. */
+  takeoff: () => ({
+    dur: 0.24, beat: 0.14,
+    tracks: { 'root.sq': one([0.14, 0.78, 'out'], [0.24, 1.1, 'out']), 'armL.p': [[0, z], [0.14, [0, -0.03, 0]], [0.24, z]], 'armR.p': [[0, z], [0.14, [0, -0.03, 0]], [0.24, z]] },
+    cues: [[0.16, snd('whoosh', 0.2)]],
+  }),
+  /** Touching down after a float: a squash and a settle. */
+  land: () => ({
+    dur: 0.5, beat: 0.1,
+    tracks: { 'root.sq': one([0.07, 0.8, 'out'], [0.24, 1.06, 'out'], [0.5, 1]), 'head.r': [[0, z], [0.07, [6, 0, 0], 'out'], [0.4, z]] },
+    cues: [[0, snd('thud', 0.25)]],
+  }),
   /** Generic float: a bob, legs dangling. */
   floats: () => ({
     dur: 1.2, loop: true,
@@ -366,7 +378,7 @@ export const ALIASES: Partial<Record<Archetype, Record<string, string[]>>> = {
 
 /** Every clip name the board offers, in order. */
 export const GAG_NAMES = ['idle', 'accused', 'guilty', 'happy', 'points', 'floats', 'bonks', 'middle', 'twerk'] as const;
-export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode', 'dangle', 'wave', 'dizzy', 'sulk'] as const;
+export const SHARED_NAMES = ['glare', 'sigh', 'shrug', 'nervous', 'hop', 'horrified', 'breaks', 'groan', 'mortified', 'laugh', 'pointLaugh', 'slowClap', 'fart', 'doubleMiddle', 'steam', 'moon', 'scream', 'softBonked', 'bonked', 'knocked', 'faint', 'duck', 'bangFaint', 'sooted', 'blasted', 'explode', 'dangle', 'wave', 'dizzy', 'sulk', 'takeoff', 'land'] as const;
 
 export function clipFor(arch: Archetype, name: string): ClipFn | undefined {
   return GAGS[arch]?.[name] ?? SHARED[name];

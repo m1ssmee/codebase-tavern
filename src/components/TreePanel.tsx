@@ -156,7 +156,9 @@ export default function TreePanel() {
 
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="border-b border-edge px-3 py-2 font-display text-lg italic">The Regulars</div>
+      <div data-perch="tree" className="border-b border-edge px-3 py-2 font-display text-lg italic">
+        The Regulars
+      </div>
       <nav className="flex-1 overflow-auto p-2">
         {loose.map((m) => (
           <button

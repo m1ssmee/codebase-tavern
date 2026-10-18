@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Gavel, Stamp, Volume2, VolumeX } from 'lucide-react';
+import { ChevronDown, Gavel, Stamp, Volume2, VolumeX } from 'lucide-react';
 import { useCast3D } from './cast/settings';
 import { useStage, type Tenants } from './stage/store';
 import { useTavern } from '@/lib/store';
@@ -45,6 +45,8 @@ export default function TopBar() {
   const cast3D = useCast3D((s) => s.on);
   const tenants = useStage((s) => s.tenants);
   const setTenants = useStage((s) => s.setTenants);
+  const wander = useStage((s) => s.wander);
+  const setWander = useStage((s) => s.setWander);
   const setCast3D = useCast3D((s) => s.setOn);
 
   // Hidden clean mode: Ctrl+Shift+C toggles it, restoring whatever level was active before.
@@ -63,7 +65,7 @@ export default function TopBar() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
   return (
-    <header className="flex flex-wrap items-center gap-3 border-b border-edge bg-panel px-4 py-2">
+    <header data-perch="bar" className="flex flex-wrap items-center gap-3 border-b border-edge bg-panel px-4 py-2">
       <Link href="/" className="text-[15px] font-medium tracking-tight">
         Codebase Tavern
       </Link>
@@ -79,7 +81,18 @@ export default function TopBar() {
         <Segmented options={SPICES} value={spice} onChange={setSpice} />
         <Segmented options={MODES.map((m) => ({ value: m, label: m === 'beginner' ? 'Beginner' : 'Expert' }))} value={mode} onChange={setMode} />
         <div className="flex items-center gap-1.5" role="group" aria-label="Tenants">
-          <span className="text-xs text-muted">Tenants</span>
+          <details className="relative">
+            <summary className="flex cursor-pointer list-none items-center gap-0.5 text-xs text-muted hover:text-cream [&::-webkit-details-marker]:hidden">
+              Tenants <ChevronDown size={12} />
+            </summary>
+            <div className="absolute top-6 left-0 z-50 w-56 rounded-lg border border-edge bg-panel p-2.5 text-xs text-cream shadow-lg">
+              <label className="flex cursor-pointer items-center gap-2 font-medium">
+                <input type="checkbox" checked={wander} onChange={(e) => setWander(e.target.checked)} className="accent-amber" />
+                Idle wandering
+              </label>
+              <p className="mt-1 text-muted">Every 20 to 40 seconds, one idle character floats to another free spot.</p>
+            </div>
+          </details>
           <Segmented options={TENANTS} value={tenants} onChange={setTenants} />
         </div>
         <button

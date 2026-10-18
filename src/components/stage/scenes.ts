@@ -13,9 +13,10 @@ import demoArgue from '@/data/demoArgue.json';
 import { getActor } from '../cast/anim/actor';
 import { bonk, bored as boredGag, click as clickActor, judgeVerdict, roast as roastGag, undo as undoGag } from '../cast/anim/director';
 import { reducedMotion } from '../cast/settings';
-import { actorOf, addGrudge, grudgeOf, useStage, type Anchor, type Bubble, type Member, type MemberKind } from './store';
+import { actorOf, addGrudge, grudgeOf, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
 import { bus, lineBox, reveal } from './bus';
 import { aims, anchorPoint, codeRect, leftBlocked, placed, sizeOf } from './geo';
+import { resetPerches } from './perches';
 
 const S = () => useStage.getState();
 const T = () => useTavern.getState();
@@ -67,18 +68,46 @@ export function speaker(id: string) {
   });
 }
 
-/** The cast for a repo: the selected module and its two closest neighbours. */
+/**
+ * The speaker's companions: its strongest dependency (perches above) and its strongest dependent (beside the chat),
+ * by edge weight with imports and calls added up. A missing one is filled by the next-strongest neighbour; none, alone.
+ */
+export function companions(id: string): { id: string; role: Role }[] {
+  const edges = T().graph?.edges ?? [];
+  const rank = (other: (e: (typeof edges)[number]) => string | null) => {
+    const w = new Map<string, number>();
+    for (const e of edges) {
+      const k = other(e);
+      if (k && k !== id) w.set(k, (w.get(k) ?? 0) + e.weight);
+    }
+    return [...w].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  };
+  const up = rank((e) => (e.from === id ? e.to : null))[0];
+  const side = rank((e) => (e.to === id ? e.from : null)).find((x) => x !== up);
+  const rest = rank((e) => (e.from === id ? e.to : e.to === id ? e.from : null)).filter((x) => x !== up && x !== side);
+  const pals: { id: string | undefined; role: Role }[] = [
+    { id: up ?? rest.shift(), role: 'up' },
+    { id: side ?? rest.shift(), role: 'side' },
+  ];
+  return pals.filter((p): p is { id: string; role: Role } => !!p.id);
+}
+
+/** The cast for the selected module: it and its two companions. Those already on stage float to their new perches. */
 export function castFor(selected: string | null) {
   const t = T();
   if (!t.repo || !selected) return;
-  const near = (t.graph?.edges ?? [])
-    .filter((e) => e.from === selected || e.to === selected)
-    .sort((a, b) => b.weight - a.weight)
-    .map((e) => (e.from === selected ? e.to : e.from));
-  const others = [...new Set(near)].filter((x) => x !== selected).slice(0, 2);
-  useStage.setState({ members: [], bubbles: {}, speaker: null, scene: null, potato: null, arrows: {}, dim: false });
-  speaker(selected);
-  others.forEach((o) => enter(o));
+  const pals = companions(selected);
+  const keep = new Set([selected, ...pals.map((p) => p.id)]);
+  resetPerches();
+  useStage.setState((s) => ({
+    members: [{ id: selected, kind: 'module', anchor: { k: 'home' } }, ...pals.map((p): Member => ({ id: p.id, kind: 'module', anchor: { k: 'home' }, role: p.role }))],
+    speaker: selected,
+    bubbles: Object.fromEntries(Object.entries(s.bubbles).filter(([k]) => keep.has(k))),
+    scene: null,
+    potato: null,
+    arrows: {},
+    dim: false,
+  }));
 }
 
 // ---------- talking ----------

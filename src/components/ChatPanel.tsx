@@ -258,7 +258,7 @@ export default function ChatPanel() {
         <div ref={endRef} />
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-t border-edge px-3 pt-2">
+      <div data-perch="chat-chips" className="flex flex-wrap gap-1.5 border-t border-edge px-3 pt-2">
         {QUICK.map((q) => (
           <button
             key={q.label}

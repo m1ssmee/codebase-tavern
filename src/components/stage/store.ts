@@ -9,7 +9,7 @@ export type Tenants = 'stage' | 'parked' | 'off';
 
 /** Where a member stands (feet, in screen pixels), worked out every frame. */
 export type Anchor =
-  | { k: 'home' } // the bottom-right of the code panel, in member order
+  | { k: 'home' } // its perch (on stage), or the bottom-right of the code panel in member order (parked)
   | { k: 'line'; c: Citation; side: 'L' | 'R' } // in the gutter at that line, pointing at it
   | { k: 'at'; x: number; y: number } // a fixed screen point (dropped, flung, peeking)
   | { k: 'row'; i: number; n: number } // a lineup along the bottom of the code panel (scenes)
@@ -19,7 +19,9 @@ export type Anchor =
   | { k: 'edge'; y: number }; // popped in at the right screen edge
 
 export type MemberKind = 'module' | 'judge' | 'landlord';
-export type Member = { id: string; kind: MemberKind; anchor: Anchor; temp?: boolean };
+/** Where a companion perches when it's at home: the speaker's strongest dependency above, its strongest dependent beside the chat. */
+export type Role = 'up' | 'side';
+export type Member = { id: string; kind: MemberKind; anchor: Anchor; temp?: boolean; role?: Role };
 export type Bubble = { text: string; msg?: { mod: string; id: string }; until?: number; avoid?: Citation | null };
 
 type Stage = {
@@ -41,6 +43,9 @@ type Stage = {
   /** "What if I change you?": the code panel selects these lines and opens its presets. */
   whatIfFor: { path: string; start: number; end: number; at: number } | null;
   setTenants: (t: Tenants) => void;
+  /** Every 20-40 s one idle character floats to another free perch. */
+  wander: boolean;
+  setWander: (on: boolean) => void;
 };
 
 const KEY = 'tavern-tenants';
@@ -50,6 +55,15 @@ const saved = (): Tenants => {
     return v === 'parked' || v === 'off' ? v : 'stage';
   } catch {
     return 'stage';
+  }
+};
+
+const WANDER = 'tavern-wander';
+const savedWander = () => {
+  try {
+    return localStorage.getItem(WANDER) !== 'off';
+  } catch {
+    return true;
   }
 };
 
@@ -72,6 +86,13 @@ export const useStage = create<Stage>((set) => ({
       localStorage.setItem(KEY, tenants);
     } catch {}
     set({ tenants, menu: null });
+  },
+  wander: typeof window === 'undefined' ? true : savedWander(),
+  setWander: (wander) => {
+    try {
+      localStorage.setItem(WANDER, wander ? 'on' : 'off');
+    } catch {}
+    set({ wander });
   },
 }));
 

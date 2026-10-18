@@ -2,6 +2,7 @@
 // Screen geometry for the stage: where each member stands this frame (feet, in client pixels), its size, and what its
 // hand aims at. The overlay's frame loop writes these; the 3D characters, bubbles and scenes read them.
 import { bus, editorBox, lineBox } from './bus';
+import type { Citation } from '@/lib/types';
 import type { Anchor, Member } from './store';
 
 /** x = centre, y = feet. */
@@ -12,6 +13,12 @@ export const sizes = new Map<string, { w: number; h: number }>();
 /** What each member's hand points at, as screen points the actor re-reads every frame (follows scrolling). */
 export const aims = new Map<string, { from: { client: [number, number] }; to: { client: [number, number] } }>();
 export const cursor = { x: -1e4, y: -1e4 };
+/** A member's perch (perches.ts): feet and scale, or `c`: beside that line (the speaker, next to the discussed line). */
+export type Perch = { name: string; x: number; y: number; s: number; c?: Citation };
+export const perches = new Map<string, Perch>();
+/** Each member's drawn scale right now (perched characters are smaller); eases towards zoomTarget. */
+export const zooms = new Map<string, number>();
+export const zoomTarget = (m: Member) => (m.anchor.k === 'home' ? (perches.get(m.id)?.s ?? 1) : 1);
 
 /** Characters are this tall on screen (px); the Judge's bench makes it wider, not taller. */
 export const HEIGHT = 112;
@@ -37,8 +44,12 @@ export function anchorPoint(m: Member, homeRight: number | null, size: { w: numb
   const floor = r.bottom - 6;
   const spread = (i: number, n: number, y: number, from = r.left + 70, to = r.right - 70) => ({ x: n <= 1 ? (from + to) / 2 : from + ((to - from) * i) / (n - 1), y });
   switch (a.k) {
-    case 'home':
+    case 'home': {
+      const p = perches.get(m.id);
+      if (p?.c) return besideLine(p.c, 'L', size, r) ?? { x: r.right - 52, y: floor };
+      if (p) return { x: p.x, y: p.y };
       return { x: Math.max(r.left + size.w / 2, (homeRight ?? r.right - 8) - size.w / 2), y: floor };
+    }
     case 'at':
       return { x: a.x, y: a.y };
     case 'edge':
@@ -54,15 +65,18 @@ export function anchorPoint(m: Member, homeRight: number | null, size: { w: numb
       return { x: r.left + r.width / 2, y: r.top + r.height * 0.5 };
     case 'gallery':
       return { x: r.right - size.w / 2 - 14, y: r.top + r.height * 0.5 };
-    case 'line': {
-      if (bus.path !== a.c.path) return { x: r.right - 52, y: floor };
-      const lb = lineBox(a.c.startLine);
-      if (!lb) return { x: r.right - 52, y: floor };
-      // Hand at the line: the shoulder sits about 55% up the body. Off-screen lines park it at the edge they left by.
-      const y = Math.min(floor, Math.max(r.top + size.h * 0.95, lb.mid + size.h * 0.5));
-      return { x: a.side === 'L' ? lb.left + Math.max(22, size.w * 0.32) : lb.right - size.w / 2 - 18, y };
-    }
+    case 'line':
+      return besideLine(a.c, a.side, size, r) ?? { x: r.right - 52, y: floor };
   }
+}
+
+/** Feet for standing at a line of the open file, in the gutter (L) or at the right edge (R); null if it isn't open. */
+function besideLine(c: Citation, side: 'L' | 'R', size: { w: number; h: number }, r: DOMRect) {
+  const lb = bus.path === c.path ? lineBox(c.startLine) : null;
+  if (!lb) return null;
+  // Hand at the line: the shoulder sits about 55% up the body. Off-screen lines park it at the edge they left by.
+  const y = Math.min(r.bottom - 6, Math.max(r.top + size.h * 0.95, lb.mid + size.h * 0.5));
+  return { x: side === 'L' ? lb.left + Math.max(22, size.w * 0.32) : lb.right - size.w / 2 - 18, y };
 }
 
 /** Where a line-anchored member aims: the start of the code on its first line, sweeping to its last. */

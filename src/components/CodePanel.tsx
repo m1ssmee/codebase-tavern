@@ -176,7 +176,7 @@ export default function CodePanel() {
 
   return (
     <div className="flex h-full flex-col bg-panel">
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-edge px-3 py-2 font-mono text-sm whitespace-nowrap text-muted">
+      <div data-perch="code-head" className="flex items-center gap-1 overflow-x-auto border-b border-edge px-3 py-2 font-mono text-sm whitespace-nowrap text-muted">
         {file ? (
           file.path.split('/').map((part, i, all) => (
             <span key={i} className="flex items-center gap-1">

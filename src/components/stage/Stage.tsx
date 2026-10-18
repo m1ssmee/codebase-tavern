@@ -15,7 +15,8 @@ import { reducedMotion } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
 import { actorOf, useStage, type Member } from './store';
 import { bus, lineAt, lineBox } from './bus';
-import { anchorPoint, codeRect, cursor, placed, sizeOf, updateAim } from './geo';
+import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
+import { perchNear, tickPerches, typed } from './perches';
 import * as scenes from './scenes';
 
 const Stage3D = dynamic(() => import('./Stage3D'), { ssr: false });
@@ -27,7 +28,8 @@ const potatoEl = { current: null as HTMLElement | null };
 const menuEl = { current: null as HTMLElement | null };
 const flights = new Map<string, { vx: number; vy: number; bounces: number }>();
 const scoots = new Map<string, { x: number; until: number; next: number }>();
-const moving = new Set<string>();
+/** Getting somewhere: a short crouch (takeoff), the character's float style on the way, a squash on landing. */
+const travel = new Map<string, { phase: 'still' | 'takeoff' | 'fly'; t0: number }>();
 const drag = { id: null as string | null, active: false, x0: 0, y0: 0, samples: [] as { x: number; y: number; t: number }[], swallow: false };
 
 const send = (text: string, moduleId: string) => sendChat(text, { moduleId });
@@ -45,12 +47,12 @@ export default function Stage() {
   // Hidden while the map is open (it has its own cast) and during the Landlord's tour (its own show).
   const show = tenants !== 'off' && view !== 'map' && !tour && !!repo;
 
-  // The cast follows the repo and the selected module.
+  // The cast follows the repo and the selected module: the speaker and its two closest neighbours.
   useEffect(() => {
     if (repo) scenes.castFor(useTavern.getState().selectedModuleId);
   }, [repo]);
   useEffect(() => {
-    if (selected && !useStage.getState().scene) scenes.speaker(selected);
+    if (selected && !useStage.getState().scene) scenes.castFor(selected);
   }, [selected]);
 
   useEffect(() => {
@@ -61,7 +63,10 @@ export default function Stage() {
     };
     // Idle for a minute: a bored gag. Every 2 s: grudges show as a sulky pose.
     let last = performance.now();
-    const touch = () => (last = performance.now());
+    const touch = (e: Event) => {
+      last = performance.now();
+      if (e.type === 'keydown') typed();
+    };
     const evs = ['pointermove', 'pointerdown', 'keydown', 'wheel'] as const;
     window.addEventListener('pointermove', move, { passive: true });
     evs.forEach((e) => window.addEventListener(e, touch, { passive: true }));
@@ -72,18 +77,23 @@ export default function Stage() {
         scenes.bored();
       }
     }, 2000);
+    // Perches follow the layout (and wandering ticks) a few times a second.
+    const perch = setInterval(() => scenes.visible() && tickPerches(), 400);
     return () => {
       window.removeEventListener('pointermove', move);
       evs.forEach((e) => window.removeEventListener(e, touch));
       clearInterval(timer);
+      clearInterval(perch);
     };
   }, []);
 
   useFrameLoop(show);
   // For the browser tests: the stage store, and what each member is playing right now.
   useEffect(() => {
-    const w = window as unknown as { __stage?: unknown; __clips?: () => Record<string, string[]> };
+    const w = window as unknown as { __stage?: unknown; __tavern?: unknown; __perches?: unknown; __clips?: () => Record<string, string[]> };
     w.__stage = useStage;
+    w.__tavern = useTavern;
+    w.__perches = perches;
     w.__clips = () =>
       Object.fromEntries(
         useStage.getState().members.map((m) => {
@@ -97,7 +107,7 @@ export default function Stage() {
   return (
     <>
       {threeD && <Stage3D />}
-      <div className="pointer-events-none fixed inset-0 z-[41]">
+      <div className="pointer-events-none fixed inset-0 z-[41]" data-stage-layer>
         {members.map((m) => (
           <Tenant key={m.id} m={m} threeD={threeD} />
         ))}
@@ -126,9 +136,14 @@ function useFrameLoop(on: boolean) {
       const r = codeRect();
       let homeRight = r ? r.right - 8 : null;
       for (const m of st.members) {
-        const size = sizeOf(m.id, threeD);
+        // Perched characters are drawn smaller; the change eases in.
+        const z0 = zooms.get(m.id) ?? zoomTarget(m);
+        const zoom = reduced ? zoomTarget(m) : z0 + (zoomTarget(m) - z0) * (1 - Math.exp(-dt * 8));
+        zooms.set(m.id, zoom);
+        const full = sizeOf(m.id, threeD);
+        const size = { w: full.w * zoom, h: full.h * zoom };
         const target = anchorPoint(m, homeRight, size);
-        if (m.anchor.k === 'home' && homeRight !== null) homeRight -= size.w + 12;
+        if (m.anchor.k === 'home' && !perches.has(m.id) && homeRight !== null) homeRight -= size.w + 12;
         let p = placed.get(m.id);
         if (!p) {
           // New members walk in from the right edge (reduced motion: they are just there).
@@ -160,24 +175,32 @@ function useFrameLoop(on: boolean) {
             }
           }
         } else if (target) {
-          const sc = scoot(m, p, now, reduced || st.tenants !== 'stage' || st.menu === m.id);
+          const sc = scoot(m, p, now, reduced || st.tenants !== 'stage' || st.menu === m.id || (m.anchor.k === 'home' && perches.has(m.id)));
           const tx = target.x + sc;
           const ty = target.y;
+          const tr = travel.get(m.id) ?? { phase: 'still', t0: 0 };
+          travel.set(m.id, tr);
+          const a = getActor(actorOf(m.id));
+          // Off somewhere: a crouch first, then it floats there in its own style, and squashes when it lands.
+          if (!reduced && tr.phase === 'still' && Math.hypot(tx - p.x, ty - p.y) > 30) {
+            Object.assign(tr, { phase: 'takeoff', t0: now });
+            void a?.play('takeoff', { priority: 0 });
+          }
+          if (tr.phase === 'takeoff' && now - tr.t0 > 200) {
+            tr.phase = 'fly';
+            void a?.play('floats', { priority: 0 });
+          }
           if (reduced) [p.x, p.y] = [tx, ty];
-          else {
+          else if (tr.phase !== 'takeoff') {
             const k = 1 - Math.exp(-dt * 6);
             const max = 1100 * dt;
             p.x += Math.max(-max, Math.min(max, (tx - p.x) * k));
             p.y += Math.max(-max, Math.min(max, (ty - p.y) * k));
           }
-          // Floating between spots plays the character's own float style.
-          const far = Math.hypot(tx - p.x, ty - p.y) > 30;
-          if (far && !moving.has(m.id)) {
-            moving.add(m.id);
-            void getActor(actorOf(m.id))?.play('floats', { priority: 0 });
-          } else if (!far && moving.has(m.id)) {
-            moving.delete(m.id);
-            getActor(actorOf(m.id))?.stopLoop('floats');
+          if (tr.phase === 'fly' && Math.hypot(tx - p.x, ty - p.y) < 12) {
+            tr.phase = 'still';
+            a?.stopLoop('floats');
+            void a?.play('land', { priority: 0 });
           }
         }
         updateAim(m);
@@ -186,9 +209,16 @@ function useFrameLoop(on: boolean) {
           el.style.transform = `translate(${p.x - p.w / 2}px,${p.y - p.h}px)`;
           el.style.width = `${p.w}px`;
           el.style.height = `${p.h}px`;
+          const face = el.firstElementChild as HTMLElement | null;
+          if (face) face.style.transform = `scale(${zoom})`;
         }
       }
-      for (const id of placed.keys()) if (!st.members.some((m) => m.id === id)) placed.delete(id);
+      for (const id of placed.keys())
+        if (!st.members.some((m) => m.id === id)) {
+          placed.delete(id);
+          zooms.delete(id);
+          travel.delete(id);
+        }
       placeBubbles(st.bubbles, r);
       placeArrows(st.arrows);
       placePotato(st.potato, now);
@@ -347,8 +377,10 @@ function Tenant({ m, threeD }: { m: Member; threeD: boolean }) {
       useTavern.getState().selectModule(m.id);
       void send(`Explain line ${line} of ${bus.path}`, m.id);
     } else if (p) {
+      // Anywhere else: it perches on the free spot nearest the drop.
       scenes.setAnchor(m.id, { k: 'at', x: p.x, y: Math.min(p.y, (codeRect()?.bottom ?? innerHeight) - 6) });
-      setTimeout(() => scenes.setAnchor(m.id, { k: 'home' }), 1200);
+      perchNear(m.id, p.x, p.y);
+      setTimeout(() => scenes.setAnchor(m.id, { k: 'home' }), 900);
     }
   };
   const click = () => {
@@ -378,16 +410,20 @@ function Tenant({ m, threeD }: { m: Member; threeD: boolean }) {
       className="pointer-events-auto absolute top-0 left-0 cursor-grab touch-none rounded-2xl outline-amber focus-visible:outline-2 active:cursor-grabbing"
       style={{ width: size.w, height: size.h, transform: 'translate(-9999px,-9999px)' }}
     >
-      {!threeD &&
-        (m.kind === 'landlord' ? (
-          <LandlordFace size={size.w} keys={keys} />
-        ) : m.kind === 'judge' ? (
-          <span className="grid h-full w-full place-items-center rounded-full bg-[#7a4a2a] text-white" aria-hidden>
-            <Gavel size={30} />
-          </span>
-        ) : (
-          mod && <CharacterFace size={size.w} name={mod.name} stats={mod.stats} color={char?.color} mood={mood} />
-        ))}
+      {!threeD && (
+        // Scaled down by the frame loop while perched.
+        <span className="block h-full w-full origin-top-left">
+          {m.kind === 'landlord' ? (
+            <LandlordFace size={size.w} keys={keys} />
+          ) : m.kind === 'judge' ? (
+            <span className="grid h-full w-full place-items-center rounded-full bg-[#7a4a2a] text-white" aria-hidden>
+              <Gavel size={30} />
+            </span>
+          ) : (
+            mod && <CharacterFace size={size.w} name={mod.name} stats={mod.stats} color={char?.color} mood={mood} />
+          )}
+        </span>
+      )}
     </button>
   );
 }
