@@ -11,7 +11,7 @@ import { graphFacts, type Graph } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
 import { entryFile } from '@/lib/analyze';
 import { parseLineRef, resolveLineRef } from '@/lib/lines';
-import { aiOffLine } from '@/lib/stageLines';
+import { aiOffLine, sulkyOpener } from '@/lib/stageLines';
 import type { Citation } from '@/lib/types';
 import demoLines from '@/data/demoLines.json';
 import CharacterFace from './CharacterFace';
@@ -73,6 +73,10 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
   s.addMessage(mod.id, { id, role: 'character', characterId: mod.id, text: '', citations: [] });
   s.setLoading(true);
   s.setMood(mod.id, 'talking');
+  // Holding a grudge: it opens with a sulky line straight away (the model is told it's said), then answers in full.
+  const grudge = grudgeOf(mod.id);
+  const opener = grudge.roasted || grudge.pestered ? sulkyOpener(grudge, spice) : '';
+  if (opener) s.appendToMessage(mod.id, id, opener + '\n\n');
   void stageDo('answer', mod.id, id, focus);
   if (s.demo) {
     await demoReply(mod.id, id, focus, char?.voicePitch ?? 1);
@@ -111,7 +115,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
         spice,
         mode,
         focus: focusBody,
-        grudge: grudgeOf(mod.id),
+        grudge: { ...grudge, opener },
         messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
       }),
     });

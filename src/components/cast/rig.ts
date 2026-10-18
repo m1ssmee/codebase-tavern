@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { C, G, INK, flat, mesh, seg, toon, tube, type V3 } from './kit';
 
 export type PupilKind = 'dot' | 'x' | 'spiral';
-export const EXPRESSIONS = ['deadpan', 'smug', 'nervous', 'furious', 'horrified', 'dead', 'dazed'] as const;
+export const EXPRESSIONS = ['deadpan', 'smug', 'nervous', 'furious', 'horrified', 'dead', 'dazed', 'sulky'] as const;
 export type Expression = (typeof EXPRESSIONS)[number];
 
 /**
@@ -299,6 +299,8 @@ export const PRESETS: Record<Exclude<Expression, 'deadpan'>, Face> = {
   dead: { brow: [-0.08, -0.15], lid: 0.95, kind: 'x', wavy: 0.5, frown: 0.25, tilt: [0.06, 0.2] },
   /** After a bang on the head: spiral eyes, heavy lids, a wobbly mouth. */
   dazed: { brow: [0.2, -0.25], lid: 0.62, kind: 'spiral', wavy: 0.7, tilt: [0.04, -0.12] },
+  /** Holding a grudge: heavy lids, brows down, eyes away, a flat frown. */
+  sulky: { brow: [-0.32, 0.26], lid: 0.5, look: [-0.42, -0.28], frown: 0.7, tilt: [0.03, -0.1] },
 };
 
 export type Traits = { shifty: boolean; dizzy: boolean };

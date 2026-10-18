@@ -31,6 +31,8 @@ const moving = new Set<string>();
 const drag = { id: null as string | null, active: false, x0: 0, y0: 0, samples: [] as { x: number; y: number; t: number }[], swallow: false };
 
 const send = (text: string, moduleId: string) => sendChat(text, { moduleId });
+// ?fasttimers (browser tests): the minute of boredom becomes 5 seconds.
+const FAST = typeof location !== 'undefined' && new URLSearchParams(location.search).has('fasttimers');
 
 export default function Stage() {
   const tenants = useStage((s) => s.tenants);
@@ -65,7 +67,7 @@ export default function Stage() {
     evs.forEach((e) => window.addEventListener(e, touch, { passive: true }));
     const timer = setInterval(() => {
       scenes.sulk();
-      if (!document.hidden && performance.now() - last > 60_000) {
+      if (!document.hidden && performance.now() - last > (FAST ? 5_000 : 60_000)) {
         last = performance.now();
         scenes.bored();
       }
@@ -78,7 +80,18 @@ export default function Stage() {
   }, []);
 
   useFrameLoop(show);
-  useEffect(() => void ((window as unknown as { __stage?: unknown }).__stage = useStage), []); // for the browser tests
+  // For the browser tests: the stage store, and what each member is playing right now.
+  useEffect(() => {
+    const w = window as unknown as { __stage?: unknown; __clips?: () => Record<string, string[]> };
+    w.__stage = useStage;
+    w.__clips = () =>
+      Object.fromEntries(
+        useStage.getState().members.map((m) => {
+          const a = getActor(actorOf(m.id));
+          return [m.id, [a?.cur?.name, a?.loop?.name, ...(a?.holds.map((h) => h.name) ?? [])].filter((x): x is string => !!x)];
+        }),
+      );
+  }, []);
 
   if (!show) return null;
   return (
@@ -489,6 +502,20 @@ function SlowNote() {
 }
 
 // ---------- the radial menu ----------
+/** Keyboard: arrows (and Home/End) move between the items, wrapping around; Escape closes and returns focus. */
+function menuKeys(e: ReactKeyboardEvent<HTMLElement>, close: () => void, id: string) {
+  if (e.key === 'Escape') {
+    close();
+    return (document.querySelector(`[data-member="${id}"]`) as HTMLElement | null)?.focus();
+  }
+  const items = [...e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+  const to = step ? (i + step + items.length) % items.length : e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1 : -1;
+  if (to < 0 || !items.length) return;
+  e.preventDefault();
+  items[to].focus();
+}
 type Item = { label: string; run: () => void };
 function RadialMenu() {
   const id = useStage((s) => s.menu);
@@ -532,7 +559,7 @@ function Menu({ id }: { id: string }) {
   const n = items.length;
   const radius = fight ? 0 : 92;
   return (
-    <div ref={(el) => void (menuEl.current = el)} data-stage-menu className="absolute top-0 left-0" role="menu" aria-label={`${characters[id]?.name ?? id}`} onKeyDown={(e) => e.key === 'Escape' && (close(), (document.querySelector(`[data-member="${id}"]`) as HTMLElement | null)?.focus())}>
+    <div ref={(el) => void (menuEl.current = el)} data-stage-menu className="absolute top-0 left-0" role="menu" aria-label={`${characters[id]?.name ?? id}`} onKeyDown={(e) => menuKeys(e, close, id)}>
       {fight ? (
         <div className="pointer-events-auto absolute -translate-x-1/2 translate-y-14 rounded-xl border border-edge bg-panel p-1 shadow-lg">
           <div className="px-2 py-1 text-[11px] font-medium text-muted">Pick a fight with</div>

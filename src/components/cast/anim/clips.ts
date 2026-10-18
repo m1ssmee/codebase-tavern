@@ -109,9 +109,15 @@ export const SHARED: Record<string, ClipFn> = {
   }),
   /** Holding a grudge: shoulders forward, head down and turned away, heavy lids (held while idle). */
   sulk: () => ({
-    dur: 0.8, beat: 0.6, hold: true,
-    tracks: { 'torso.r': [[0, z], [0.6, [7, 0, 0]]], 'head.r': [[0, z], [0.6, [12, -14, 0]]] },
-    cues: [[0.1, face({ lid: 0.55, brow: [-0.25, 0.2], look: [-0.35, -0.25], frown: 0.5 })]],
+    dur: 1.1, beat: 0.7, hold: true,
+    tracks: {
+      'torso.r': [[0, z], [0.7, [11, 0, 0], 'out']],
+      'head.r': [[0, z], [0.7, [16, -24, 0], 'out']],
+      'root.sq': one([0.35, 0.94], [0.7, 0.97]),
+    },
+    // Arms folded across the chest (each hand crosses to the other side).
+    ik: both([[0, null], [0.6, [-0.04, 0.02, 0.34], 'out']]),
+    cues: [[0.1, face({ lid: 0.5, brow: [-0.32, 0.26], look: [-0.42, -0.28], frown: 0.7 })], [0.25, snd('sigh', 0.45)]],
   }),
   /** Faint sideways and stay down until released. */
   faint: (k) => ({

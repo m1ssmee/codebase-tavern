@@ -33,7 +33,22 @@ if (typeof window !== 'undefined')
     if (r?.name === 'Canceled' || r?.message === 'Canceled') e.preventDefault();
   });
 
-const defineTheme: BeforeMount = (monaco) =>
+// A read-only viewer needs no language services. The TypeScript/JavaScript workers (diagnostics, hovers, highlights,
+// inlay hints) keep cancellable requests in flight, and swapping files mid-request rejected them with "Canceled";
+// with the services off there is nothing to cancel (and no red squiggles under imports the viewer can't resolve).
+type TsDefaults = { setModeConfiguration?: (c: Record<string, boolean>) => void; setDiagnosticsOptions?: (o: Record<string, boolean>) => void };
+const quiet: BeforeMount = (monaco) => {
+  const m = monaco as unknown as { typescript?: Record<string, TsDefaults>; languages: { typescript?: Record<string, TsDefaults> } };
+  const ts = m.typescript ?? m.languages.typescript;
+  const off = { completionItems: false, hovers: false, documentSymbols: false, definitions: false, references: false, documentHighlights: false, rename: false, diagnostics: false, documentRangeFormattingEdits: false, signatureHelp: false, onTypeFormattingEdits: false, codeActions: false, inlayHints: false };
+  for (const d of [ts?.typescriptDefaults, ts?.javascriptDefaults]) {
+    d?.setModeConfiguration?.(off);
+    d?.setDiagnosticsOptions?.({ noSemanticValidation: true, noSyntaxValidation: true, noSuggestionDiagnostics: true });
+  }
+};
+
+const defineTheme: BeforeMount = (monaco) => {
+  quiet(monaco);
   monaco.editor.defineTheme('tavern', {
     base: 'vs',
     inherit: true,
@@ -46,6 +61,7 @@ const defineTheme: BeforeMount = (monaco) =>
       'editor.selectionBackground': '#ffd60a55',
     },
   });
+};
 
 export default function CodePanel() {
   const { repo, openFilePath, highlight, tribunal, whatIf, whatIfDiff, view, setView, landlordSays } = useTavern();
@@ -54,7 +70,15 @@ export default function CodePanel() {
   const shownDiff = whatIfDiff?.[Math.min(diffIdx, whatIfDiff.length - 1)];
   // Floating "Explain this" button for a non-empty selection, positioned at the selection's end.
   const [sel, setSel] = useState<{ start: number; end: number; top: number; left: number; height: number } | null>(null);
-  const file = repo?.files.find((f) => f.path === openFilePath);
+  // The editor follows the open file a beat later: a citation tour that hops files quickly swaps the model once per
+  // stop, never mid-swap (the old file stays on screen until then).
+  const [shownPath, setShownPath] = useState(openFilePath);
+  useEffect(() => {
+    if (openFilePath === shownPath) return;
+    const t = setTimeout(() => setShownPath(openFilePath), 90);
+    return () => clearTimeout(t);
+  }, [openFilePath, shownPath]);
+  const file = repo?.files.find((f) => f.path === shownPath) ?? repo?.files.find((f) => f.path === openFilePath);
   const editorRef = useRef<Ed | null>(null);
   const [ready, setReady] = useState(false);
   const dim = useStage((s) => s.dim);
@@ -134,15 +158,17 @@ export default function CodePanel() {
     const last = ed.getModel()?.getLineCount() ?? 1;
     const start = Math.min(highlight.startLine, last);
     const end = Math.min(Math.max(highlight.endLine, start), last);
-    ed.revealLinesInCenter(start, end);
     const deco = ed.createDecorationsCollection([
       {
         range: { startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: 1 },
         options: { isWholeLine: true, className: 'tavern-hl-line', linesDecorationsClassName: 'tavern-hl-gutter' },
       },
     ]);
+    // Reveal once the new file has been laid out (the frame after the swap), so no half-drawn frame shows.
+    const raf = requestAnimationFrame(() => ed.revealLinesInCenter(start, end));
     const t = setTimeout(() => deco.clear(), 4000);
     return () => {
+      cancelAnimationFrame(raf);
       clearTimeout(t);
       deco.clear();
     };
@@ -196,6 +222,16 @@ export default function CodePanel() {
               automaticLayout: true,
               renderLineHighlight: 'none',
               padding: { top: 12 },
+              // Read-only viewer: none of the per-file helpers that run (and get cancelled) on every file swap.
+              occurrencesHighlight: 'off',
+              selectionHighlight: false,
+              links: false,
+              codeLens: false,
+              colorDecorators: false,
+              inlayHints: { enabled: 'off' },
+              quickSuggestions: false,
+              parameterHints: { enabled: false },
+              lightbulb: { enabled: 'off' as never },
             }}
           />
         ) : (

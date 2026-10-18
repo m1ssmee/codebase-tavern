@@ -39,6 +39,18 @@ export function neverMet(a: Who, b: Who, spice: SpiceLevel): { moduleId: string;
   return lines[spice].map((text, i) => ({ moduleId: i % 2 ? b.id : a.id, text }));
 }
 
+/** A character holding a grudge opens its answer with this (the AI is told it's already said). Never at the user. */
+export function sulkyOpener(g: { roasted: number; pestered: number }, spice: SpiceLevel): string {
+  const what = g.roasted ? `Roasted ${g.roasted === 1 ? 'once' : `${g.roasted} times`}` : `Pestered ${g.pestered === 1 ? 'once' : `${g.pestered} times`}`;
+  const lines: Record<SpiceLevel, string> = {
+    clean: `${what} in the last 10 minutes, and I'm still on duty. Fine.`,
+    unhinged: `${what} in the last 10 minutes and still answering. Fine, here's how my damn code works.`,
+    feral: `${what} in 10 minutes. I'm sulking like hell, but fine, here's the answer.`,
+    nuclear: `${what.toUpperCase()} IN 10 MINUTES. Fine. Here's the answer anyway.`,
+  };
+  return lines[spice];
+}
+
 /** After being flung across the screen. */
 export function flingLine(who: Who, spice: SpiceLevel, seed = ''): string {
   const n = who.stats.totalLines;

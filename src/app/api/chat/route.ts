@@ -96,7 +96,9 @@ ${foreign ? `\nCode the user pointed at (owned by ${focus?.owner || 'another mod
     : ''
 }${
   roasted || pestered
-    ? `\nMood: in the last 10 minutes you were roasted ${roasted} ${roasted === 1 ? 'time' : 'times'} and poked ${pestered} ${pestered === 1 ? 'time' : 'times'}. Stay fully helpful and accurate, but let one short sulky remark slip, about the code or your situation. Never insult the user.\n`
+    ? `\nMood: you are SULKING. In the last 10 minutes you were roasted ${roasted} ${roasted === 1 ? 'time' : 'times'} and pestered (clicked repeatedly) ${pestered} ${pestered === 1 ? 'time' : 'times'}, and you have not let it go. ${
+        str(b.grudge?.opener, 200) ? `Your reply already opens with this line, so don't repeat it: "${str(b.grudge.opener, 200)}". ` : ''
+      }Every reaction (the short comment after a step, and the end of "Why it matters") must sound sulky and put-upon, not just rude: a sigh, a grudging "fine", "since you insist", still sore about being ${roasted ? 'roasted' : 'pestered'}, or a dig at your own code. Never at the user. The answer itself stays complete, accurate and in the usual structure, with every citation.\n`
     : ''
 }
 ${levelReminder(b.spice)}

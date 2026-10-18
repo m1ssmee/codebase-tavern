@@ -92,7 +92,10 @@ export class Actor {
   talking = false;
   cur: Running | null = null;
   holds: Running[] = [];
-  private loop: Running | null = null;
+  /** Holding a grudge: the resting face is sulky instead of deadpan (talking included). */
+  sulky = false;
+  /** The looping clip (floats, dangle), if any. */
+  loop: Running | null = null;
   private fading: { action: THREE.AnimationAction; until: number }[] = [];
   private queue: { name: string; o: PlayOpts; resolve: (ok: boolean) => void }[] = [];
   private mixer: THREE.AnimationMixer | null = null;
@@ -376,7 +379,7 @@ export class Actor {
     const FACE: Partial<Record<Mood, Expression>> = { accused: 'nervous', guilty: 'horrified', happy: 'smug', horrified: 'horrified', nervous: 'nervous' };
     const CLIP: Partial<Record<Mood, string>> = { accused: 'accused', guilty: 'guilty', happy: 'happy', horrified: 'horrified', fainted: 'faint', nervous: 'nervous', shrug: 'shrug' };
     if (m === 'idle' || m === 'talking') this.release();
-    this.expression = FACE[m] ?? 'deadpan';
+    this.expression = FACE[m] ?? (this.sulky ? 'sulky' : 'deadpan');
     const clip = clips[m] ?? CLIP[m];
     if (clip) void this.play(clip, { priority: 2 });
   }

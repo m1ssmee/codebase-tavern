@@ -528,14 +528,15 @@ export function bigFile(path: string, lineCount: number) {
   setTimeout(() => void actor(id)?.play(T().spice === 'clean' ? 'groan' : 'fart', { priority: 1 }), 700);
 }
 
-let lastScroll = { top: 0, t: 0, fast: 0 };
-/** Scrolling fast: whoever owns the file (or the speaker) gets dizzy. */
+const scrolls: { top: number; t: number }[] = [];
+/** Scrolling fast (more than 1500px within a second): whoever owns the file (or the speaker) gets dizzy. */
 export function scrolled(path: string | null, top: number) {
   const now = performance.now();
-  const v = Math.abs(top - lastScroll.top) / Math.max(1, now - lastScroll.t);
-  lastScroll = { top, t: now, fast: v > 4 ? lastScroll.fast + 1 : 0 };
-  if (lastScroll.fast < 4 || !free()) return;
-  lastScroll.fast = 0;
+  scrolls.push({ top, t: now });
+  while (scrolls.length && now - scrolls[0].t > 1000) scrolls.shift();
+  const travelled = scrolls.reduce((d, s, i) => (i ? d + Math.abs(s.top - scrolls[i - 1].top) : 0), 0);
+  if (travelled < 1500 || !free()) return;
+  scrolls.length = 0;
   const id = (path && ownerOf(path) && S().members.some((m) => m.id === ownerOf(path)) ? ownerOf(path) : S().speaker) ?? null;
   if (id && !isBusy(id) && cool('dizzy', 8000)) void actor(id)?.play('dizzy', { priority: 1 });
 }
@@ -566,10 +567,17 @@ export const undo = () => visible() && void undoGag(S().members.map((m) => actor
 /** Sulking while it holds a grudge (roasted or pestered in the last 10 minutes): a sulky idle pose. */
 export function sulk() {
   for (const m of S().members) {
-    if (m.kind !== 'module' || isBusy(m.id)) continue;
+    if (m.kind !== 'module') continue;
     const g = grudgeOf(m.id);
     const a = actor(m.id);
-    if ((g.roasted || g.pestered) && a && !a.cur && !a.holds.length && (T().moods[m.id] ?? 'idle') === 'idle') void a.play('sulk', { priority: 0 });
+    if (!a) continue;
+    // The sulky face stays on while it holds the grudge, talking included; the pose only when it's idle.
+    const on = !!(g.roasted || g.pestered);
+    if (a.sulky !== on) {
+      a.sulky = on;
+      if ((T().moods[m.id] ?? 'idle') === 'idle' || T().moods[m.id] === 'talking') a.setExpression(on ? 'sulky' : 'deadpan');
+    }
+    if (on && !isBusy(m.id) && !a.cur && !a.holds.length && (T().moods[m.id] ?? 'idle') === 'idle') void a.play('sulk', { priority: 0 });
   }
 }
 
