@@ -10,14 +10,16 @@ import { blipText, unlockAudio } from '@/lib/blips';
 import type { Mood } from '@/lib/types';
 import demoWhatIf from '@/data/demoWhatIf.json';
 import CitationChip from './CitationChip';
-import { think, useStage } from './stage/store';
+import { bubbleFor, recentBubbles, think, useStage } from './stage/store';
 import { Cue } from './Thinking';
 import { stageDo } from './stage/api';
 import Rich from './Rich';
 import { LandlordPortrait, ModuleFace } from './Portrait';
+import { deflection } from '@/lib/stageLines';
+import { archetypeOf } from './Portrait';
 
 type Verdict = 'breaks' | 'at risk' | 'fine' | 'relieved';
-type Result = { moduleId: string; verdict: Verdict; reason: string; reaction: string };
+type Result = { moduleId: string; verdict: Verdict; reason: string; reaction: string; bubble?: string; bubbleClean?: string };
 type FollowUp = { moduleId: string; path: string; description: string };
 type Summary = { update: string; check: string; followUps?: FollowUp[] };
 // A saved follow-up run also keeps its parent's title and the patch it applied on top of it.
@@ -27,8 +29,6 @@ type Phase = 'writing' | 'assessing' | 'done' | 'error';
 
 const SAVED = (demoWhatIf as { runs: Run[] }).runs;
 const LIVE_LIMIT_MS = 20_000;
-const SLOW_NOTE = 'Replaying a saved preview (live AI is slow right now).';
-const DOWN_NOTE = 'Replaying a saved preview (live AI is unavailable right now).';
 const MOOD: Record<Verdict, Mood> = { breaks: 'horrified', 'at risk': 'nervous', fine: 'shrug', relieved: 'happy' };
 const BADGE: Record<Verdict, string> = {
   breaks: 'bg-tomato text-white',
@@ -87,14 +87,16 @@ export default function WhatIfPanel() {
     if (r.verdict === 'breaks') later(900, () => useTavern.getState().setMood(id, 'fainted')); // horrified, then faints
     speak(id);
   };
+  /** Its bubble once the change reaches it: the verdict's own (the AI's, checked; the reaction stays in the panel), ~5 s. */
   const speak = (id: string) => {
     const r = landed.current.get(id);
-    if (!r?.reaction || !reached.current.has(id) || spoken.current.has(id)) return;
+    if (!(r?.bubble || r?.reaction) || !reached.current.has(id) || spoken.current.has(id)) return;
     spoken.current.add(id);
     const s = useTavern.getState();
-    s.setBubble(id, r.reaction);
-    blipText(r.reaction, s.characters[id]?.voicePitch ?? 1, s.muted);
-    later(5000, () => useTavern.getState().bubbles[id] === r.reaction && useTavern.getState().setBubble(id, null)); // its quip, ~5 s
+    const said = bubbleFor(s.spice === 'clean' ? (r.bubbleClean ?? r.bubble) : r.bubble, r.reason);
+    s.setBubble(id, said);
+    blipText(said, s.characters[id]?.voicePitch ?? 1, s.muted);
+    later(5000, () => useTavern.getState().bubbles[id] === said && useTavern.getState().setBubble(id, null));
   };
   /** Live runs: the reactions come after the verdicts, once the comedy editor has picked them; they play in turn. */
   const voice = (reactions: Record<string, string>) =>
@@ -259,10 +261,10 @@ export default function WhatIfPanel() {
     if (!applied || 'error' in applied) {
       restore({ title, impact, results, summary, note });
       setHistory((h) => h.slice(0, -1));
-      setError(s.demo ? 'The demo route makes no AI calls, and there is no saved version of that follow-up.' : "Couldn't write that follow-up against the file. Try again in a minute.");
+      setError("Couldn't write that follow-up against the file. Try again in a minute.");
       return;
     }
-    if (!patch && savedRun) setNote(s.demo ? null : SLOW_NOTE);
+    if (!patch && savedRun) setNote(null);
     current.set(path, applied.text);
     const combined = [...current].map(([p, after]) => makeDiff(p, original(p), after)).filter(Boolean).join('\n');
     const imp = computeImpact(repo.files, repo.modules, graph, combined);
@@ -283,7 +285,9 @@ export default function WhatIfPanel() {
     if (change.kind === 'describe') {
       if (s.demo) {
         setPhase('error');
-        setError('The demo route makes no AI calls, so it cannot write a new change. Try one of the suggested changes below.');
+        // No new changes written here: the module whose code it is deflects, and points at the ready-made ones.
+        const owner = ownerOf(change.path);
+        setError(`${owner ? deflection(archetypeOf(repo.modules, owner)).text : "That's not covered by the lease."} Try one of the suggested changes below.`);
         return;
       }
       setPhase('writing');
@@ -340,7 +344,7 @@ export default function WhatIfPanel() {
       setNote(why);
       setPhase('done');
     };
-    if (s.demo) return saved ? replay(saved, null, dead, imp, depth) : graphOnly('The demo route makes no AI calls, so this preview shows the import graph only.');
+    if (s.demo) return saved ? replay(saved, null, dead, imp, depth) : graphOnly('This preview shows the import graph only.');
 
     // Live. On quickcart, nothing within 20s (or a failure) replays the saved run of the same change.
     const isDemoRepo = !!repo.url?.includes('/quickcart');
@@ -371,6 +375,7 @@ export default function WhatIfPanel() {
         signal: ac.signal,
         body: JSON.stringify({
           stage: 'assess',
+          recentBubbles: recentBubbles(5),
           spice: s.spice,
           mode: s.mode,
           repoName: repo.name,
@@ -409,7 +414,7 @@ export default function WhatIfPanel() {
       clearTimeout(limit);
       if (dead()) return unwait();
       console.warn('[whatif]', err);
-      if (isDemoRepo && saved) return replay(saved, ac.signal.aborted ? SLOW_NOTE : DOWN_NOTE, dead, imp, depth);
+      if (isDemoRepo && saved) return replay(saved, null, dead, imp, depth);
       graphOnly(ac.signal.aborted ? 'Live AI is slow right now. The impact list comes from the import graph and is still accurate.' : 'The AI is busy right now. The impact list comes from the import graph and is still accurate.');
     }
   };

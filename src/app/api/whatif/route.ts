@@ -6,6 +6,7 @@ import { editLines } from '@/lib/editor';
 import { codeFacts, knownNumbers, numbersIn, unswear } from '@/lib/guards';
 import { applyDiff, makeDiff, parseDiff } from '@/lib/diff';
 import { TurnScanner } from '@/lib/verdict';
+import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -21,7 +22,7 @@ const S = { type: 'string' };
 const VERDICTS = ['breaks', 'at risk', 'fine', 'relieved'] as const;
 const DIFF_SCHEMA = obj({ title: S, diff: { type: 'string', description: 'Unified diff: ---/+++ headers, @@ hunks, then " "/-/+ lines.' } });
 const ASSESS_SCHEMA = obj({
-  items: { type: 'array', items: obj({ moduleId: S, verdict: { type: 'string', enum: [...VERDICTS] }, reason: S, reaction: { type: 'array', items: S, description: '3 variants of the reaction' } }) },
+  items: { type: 'array', items: obj({ moduleId: S, verdict: { type: 'string', enum: [...VERDICTS] }, reason: S, reaction: { type: 'array', items: S, description: '3 variants of the reaction' }, bubble: S }) },
   summary: obj({
     update: S,
     check: S,
@@ -166,6 +167,7 @@ Rules:
   - A module whose problem is only made rarer, not removed, is "at risk", never "relieved".
 - reason: 1-2 plain sentences (the mode rules at the end say how plain), citing [path:line] or [path:start-end] from the numbered code below. Use the lines listed for that module where they apply. Never invent code.
 - reaction: 3 variants of one line in that module's own voice, first person, under 25 words, at the active spice level, each built on a real fact (a number, a name, a line) and each a different joke; an editor picks the best. No citations in the reaction.
+- bubble: the speech bubble shown over that module when the change reaches it, about its verdict: ${BUBBLE_RULE}. Not one of the reactions, and no two bubbles open the same way.
 - If the change makes a failure rarer without removing its cause (for example a longer timeout while a retry without an idempotency key still exists), say it hides the problem rather than fixing it, and name the failure that remains and when it still happens (e.g. "a charge slower than 5000ms is still sent twice"). Say this in the affected modules' reasons, in at least one reaction, and in the first sentence of summary.update. Check the numbers in the code (timeouts, typical and worst-case times) before saying a change makes something more or less likely.
 - Remember how timeouts work across services: when a caller stops waiting, the service it called may still finish the work. A caller that then retries without an idempotency key (a unique ID that lets the receiver spot a repeat) can make the work happen twice, e.g. a second charge. Use this when a change touches timeouts or retries.
 - summary.update: 1-3 sentences: what else must change for this to be complete (files and functions), with citations.
@@ -181,6 +183,7 @@ ${codeText}`;
 Mode rules:
 - reason: ${beginner ? `a beginner can follow it: define technical terms in parentheses on first use, never square brackets. ${PLAIN_WORDS}` : 'standard technical terms are fine.'}
 
+${recentBlock(b.recentBubbles)}
 Reminder: ACTIVE SPICE LEVEL: ${level.toUpperCase()}. ${level === 'clean' ? 'No swearing anywhere.' : 'Swear only in the reactions, at this level; the reason and summary sentences stay plain, with no swearing.'} Cite every claim in reasons and summary. Aim it at the code, never at people.`;
 
   const prompt = `Repo: ${str(b.repoName, 200)}
@@ -212,7 +215,7 @@ ${items
         let full = '';
         let firstItemMs: number | undefined;
         const emit = (raw: unknown) => {
-          const x = raw as { moduleId?: string; verdict?: string; reason?: string; reaction?: unknown };
+          const x = raw as { moduleId?: string; verdict?: string; reason?: string; reaction?: unknown; bubble?: unknown };
           const id = alias.get(str(x?.moduleId, 200).trim().toLowerCase()) ?? '';
           if (!ids.includes(id) || seen.has(id)) return; // only modules in the deterministic list, once each
           seen.add(id);
@@ -220,7 +223,7 @@ ${items
           const verdict = (VERDICTS as readonly string[]).includes(x.verdict ?? '') ? x.verdict! : 'at risk';
           reactions.set(id, { variants: x.reaction, verdict });
           // The reaction follows once the comedy editor has picked it (type 'reactions', below).
-          send({ type: 'item', item: { moduleId: id, verdict, reason: unswear(clean(str(x.reason, 600))), reaction: '' } }); // reasons stay plain
+          send({ type: 'item', item: { moduleId: id, verdict, reason: unswear(clean(str(x.reason, 600))), reaction: '', bubble: cleanBubble(x.bubble).slice(0, 200) } }); // reasons stay plain
         };
         try {
           const reader = llm.getReader();

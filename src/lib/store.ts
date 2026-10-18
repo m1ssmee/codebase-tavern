@@ -61,7 +61,7 @@ type TavernState = {
    * /api/gossip (3 variants, filter, comedy editor). Fills characters[id].gossip and returns it; on failure, the
    * template lines it already has. ?demo=1: the saved gossip, no call.
    */
-  getGossip: (moduleId: string) => Promise<string[]>;
+  getGossip: (moduleId: string, recentBubbles?: string[]) => Promise<string[]>;
   selectModule: (moduleId: string | null) => void;
   openFile: (path: string) => void;
   highlightCitation: (c: Citation) => void;
@@ -176,7 +176,7 @@ export const useTavern = create<TavernState>()((set, get) => {
           if (old && thread?.length === 1 && thread[0].role === 'character' && thread[0].text === old.greeting) chats[c.moduleId] = [{ ...thread[0], text: c.greeting }];
           // Gossip someone already asked for outlives the persona swap (personas come without it).
           const asked = gossipLines.get(gossipKey(get(), c.moduleId));
-          characters[c.moduleId] = asked ? { ...c, gossip: asked } : c;
+          characters[c.moduleId] = asked ? { ...c, gossip: asked.lines, gossipBubbles: asked.bubbles } : c;
           arrivals[c.moduleId] = now;
         }
         return { characters, chats, arrivals };
@@ -247,16 +247,16 @@ export const useTavern = create<TavernState>()((set, get) => {
     openWhatIf: (change) => set({ whatIf: { id: Date.now(), change }, tribunal: false, whatIfDiff: null, bubbles: {} }),
     closeWhatIf: () => set((s) => ({ whatIf: null, whatIfDiff: null, bubbles: {}, rippleFrom: null, landlordSays: null, view: s.view === 'diff' ? 'code' : s.view })),
     setWhatIfDiff: (whatIfDiff) => set({ whatIfDiff }),
-    getGossip: async (id) => {
+    getGossip: async (id, recentBubbles = []) => {
       const s = get();
       const have = s.characters[id]?.gossip ?? [];
       if (!s.repo || !s.characters[id] || s.demo) return have; // the demo's saved gossip: zero AI calls
       const key = gossipKey(s, id);
-      const keep = (lines: string[]) => {
+      const keep = ({ lines, bubbles }: Gossip) => {
         const now = get();
         if (now.repo !== s.repo || !now.characters[id] || !lines.length) return now.characters[id]?.gossip ?? have;
-        gossipLines.set(key, lines);
-        set({ characters: { ...now.characters, [id]: { ...now.characters[id], gossip: lines } } });
+        gossipLines.set(key, { lines, bubbles });
+        set({ characters: { ...now.characters, [id]: { ...now.characters[id], gossip: lines, gossipBubbles: bubbles } } });
         return lines;
       };
       const ready = gossipLines.get(key);
@@ -265,12 +265,14 @@ export const useTavern = create<TavernState>()((set, get) => {
       if (!p) {
         const repo = s.repo;
         p = (async (): Promise<string[]> => {
-          const saved = repo.key ? await idbGet<string[]>(`gossip:${key}`) : undefined;
-          if (saved?.length) return keep(saved);
-          const lines = await fetchGossip(repo, id);
-          if (!lines) return get().characters[id]?.gossip ?? have; // templates stay, and it can ask again
-          if (repo.key) void idbSet(repo.key.split('@')[0], `gossip:${key}`, lines);
-          return keep(lines);
+          // Saved before bubbles came with gossip: a plain list (the bubbles are then made from the lines).
+          const saved = repo.key ? await idbGet<Gossip | string[]>(`gossip:${key}`) : undefined;
+          const was = Array.isArray(saved) ? { lines: saved, bubbles: [] } : saved;
+          if (was?.lines?.length) return keep(was);
+          const got = await fetchGossip(repo, id, recentBubbles);
+          if (!got) return get().characters[id]?.gossip ?? have; // templates stay, and it can ask again
+          if (repo.key) void idbSet(repo.key.split('@')[0], `gossip:${key}`, got);
+          return keep(got);
         })().finally(() => gossipAsks.delete(key));
         gossipAsks.set(key, p);
       }
@@ -289,7 +291,8 @@ export const useTavern = create<TavernState>()((set, get) => {
 export const RIPPLE_HOP_MS = 400;
 
 // Gossip written on request, per repo@commit, module, spice and mode (getGossip), and the requests in flight.
-const gossipLines = new Map<string, string[]>();
+type Gossip = { lines: string[]; bubbles: string[] };
+const gossipLines = new Map<string, Gossip>();
 const gossipAsks = new Map<string, Promise<string[]>>();
 const gossipKey = (s: Pick<TavernState, 'repo' | 'spice' | 'mode'>, id: string) => `${s.repo?.key ?? s.repo?.name ?? ''}|${id}|${s.spice}|${s.mode}`;
 
@@ -498,17 +501,20 @@ async function streamPersonas(repo: Repo) {
 }
 
 /** One character's gossip from /api/gossip; null when the server fell back to templates or couldn't be reached. */
-async function fetchGossip(repo: Repo, id: string): Promise<string[] | null> {
+async function fetchGossip(repo: Repo, id: string, recentBubbles: string[]): Promise<Gossip | null> {
   const req = personaRequest(repo);
   const res = await fetch('/api/gossip', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ repoName: req.repoName, module: req.modules.find((m) => m.id === id), others: req.modules.filter((m) => m.id !== id), spice: req.spice, mode: req.mode }),
+    body: JSON.stringify({ repoName: req.repoName, module: req.modules.find((m) => m.id === id), others: req.modules.filter((m) => m.id !== id), spice: req.spice, mode: req.mode, recentBubbles }),
     signal: AbortSignal.timeout(30_000),
   }).catch(() => null);
-  const data: { lines?: unknown; source?: string } | null = await res?.json().catch(() => null);
-  const lines = Array.isArray(data?.lines) ? data.lines.filter((l): l is string => typeof l === 'string' && !!l.trim()) : [];
-  return data?.source === 'llm' && lines.length ? lines : null;
+  const data: { lines?: unknown; bubbles?: unknown; source?: string } | null = await res?.json().catch(() => null);
+  const raw = Array.isArray(data?.lines) ? (data.lines as unknown[]) : [];
+  const bubbles = Array.isArray(data?.bubbles) ? (data.bubbles as unknown[]) : [];
+  const keepAt = raw.map((l, i) => (typeof l === 'string' && l.trim() ? i : -1)).filter((i) => i >= 0);
+  const lines = keepAt.map((i) => raw[i] as string);
+  return data?.source === 'llm' && lines.length ? { lines, bubbles: keepAt.map((i) => (typeof bubbles[i] === 'string' ? (bubbles[i] as string) : '')) } : null;
 }
 
 /** Opens the tavern now: template placeholders from real stats, so the tour, map and chat work at once; the AI personas follow. */

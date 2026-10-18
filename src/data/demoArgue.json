@@ -6,19 +6,27 @@
       "turns": [
         {
           "moduleId": "orders",
-          "text": "I call payments once per checkout through `forward<ChargeResponse>` with `order_id`, `amount`, `currency`, and `payment_method_id` at [orders/checkout.ts:20-30]. That damn network hop is the whole price of my existence."
+          "text": "I call payments once per checkout through `forward<ChargeResponse>` with `order_id`, `amount`, `currency`, and `payment_method_id` at [orders/checkout.ts:20-30]. That damn network hop is the whole price of my existence.",
+          "bubble": "That payment call is the whole damn cost of this checkout path.",
+          "bubbleClean": "That payment call is the whole cost of this checkout path."
         },
         {
           "moduleId": "payments",
-          "text": "I receive that POST at `handleChargeRequest`, then `processCharge` validates `amount` and `currency` before `authorizeAndCapture` at [payments/processor.ts:52-64] and [payments/processor.ts:29-49]. Your retry bullshit can make me record the same charge twice if the network lies."
+          "text": "I receive that POST at `handleChargeRequest`, then `processCharge` validates `amount` and `currency` before `authorizeAndCapture` at [payments/processor.ts:52-64] and [payments/processor.ts:29-49]. Your retry bullshit can make me record the same charge twice if the network lies.",
+          "bubble": "I can record the same charge twice if the network lies to me.",
+          "bubbleClean": "I can record the same charge twice if the network lies to me."
         },
         {
           "moduleId": "orders",
-          "text": "I make at most `MAX_PAYMENT_ATTEMPTS = 2` attempts [orders/checkout.ts:18], so an `UpstreamTimeoutError` buys exactly one retry [orders/checkout.ts:44-52]; then I release stock and mark `payment_failed`, or set `paid` with the `chargeId` [orders/checkout.ts:54-67]. This damn loop is a tiny chimney for flaky shit and duplicate pressure."
+          "text": "I make at most `MAX_PAYMENT_ATTEMPTS = 2` attempts [orders/checkout.ts:18], so an `UpstreamTimeoutError` buys exactly one retry [orders/checkout.ts:44-52]; then I release stock and mark `payment_failed`, or set `paid` with the `chargeId` [orders/checkout.ts:54-67]. This damn loop is a tiny chimney for flaky shit and duplicate pressure.",
+          "bubble": "Two attempts max still leaves a neat little duplicate-charge trap.",
+          "bubbleClean": "Two attempts max still leaves a neat little duplicate-charge trap."
         },
         {
           "moduleId": "payments",
-          "text": "I charge in cents, only `EUR`, `USD`, or `GBP`, and then `recordCharge` the result at [payments/processor.ts:21-49]. Clean input, dirty pipeline; your retries still make this damn ledger sweat."
+          "text": "I charge in cents, only `EUR`, `USD`, or `GBP`, and then `recordCharge` the result at [payments/processor.ts:21-49]. Clean input, dirty pipeline; your retries still make this damn ledger sweat.",
+          "bubble": "Clean inputs do not save this ledger from a retry loop.",
+          "bubbleClean": "Clean inputs do not save this ledger from a retry loop."
         }
       ]
     }

@@ -11,16 +11,17 @@ import { graphFacts, type Graph } from '@/lib/graph';
 import { blipText, unlockAudio } from '@/lib/blips';
 import { entryFile } from '@/lib/analyze';
 import { parseLineRef, resolveLineRef } from '@/lib/lines';
-import { aiOffLine, sulkyOpener } from '@/lib/stageLines';
+import { deflection, sulkyOpener } from '@/lib/stageLines';
+import { BUBBLE_SEP } from '@/lib/bubbleMarker';
 import type { Citation } from '@/lib/types';
 import demoLines from '@/data/demoLines.json';
 import CharacterFace from './CharacterFace';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
-import { grudgeOf, think, useStage } from './stage/store';
+import { grudgeOf, recentBubbles, think, useStage } from './stage/store';
 import { ThinkingText } from './Thinking';
 import { stageDo } from './stage/api';
-import { ModuleFace } from './Portrait';
+import { archetypeOf, ModuleFace } from './Portrait';
 
 // three.js loads only when the 3D cast is on.
 const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.CharacterStage), { ssr: false, loading: () => <div className="h-24 w-24 shrink-0" /> });
@@ -28,7 +29,7 @@ const CharacterStage = dynamic(() => import('./cast/Character3D').then((m) => m.
 const BUSY = 'Gemini is rate-limiting us. Try again in a minute.';
 const UNAVAILABLE = 'The AI is unavailable right now. Try again in a minute.'; // server sends 503 when a key is missing
 
-type Saved = { moduleId: string; path: string; startLine: number; endLine: number; text: string };
+type Saved = { moduleId: string; path: string; startLine: number; endLine: number; text: string; bubble?: string; bubbleClean?: string };
 const SAVED_LINES = (demoLines as { items: Saved[] }).items;
 
 /** How the speaker relates to another module's code, from the import graph ("You import it 2 times"). */
@@ -45,15 +46,18 @@ async function demoReply(modId: string, id: string, focus: Citation | null, pitc
   // A short pause with the thinking cue, as a live answer would have.
   const end = think([modId]);
   await new Promise((r) => setTimeout(r, 900));
-  end();
   const hit = focus && SAVED_LINES.find((x) => x.moduleId === modId && x.path === focus.path && focus.startLine <= x.endLine && focus.endLine >= x.startLine);
-  const text = hit?.text ?? aiOffLine(s.spice, modId);
+  // No saved answer: the character deflects, in turn, and says which line it will talk about.
+  const no = hit ? null : deflection(archetypeOf(s.repo?.modules ?? [], modId));
+  const text = hit?.text ?? `${no!.text} ${modId === 'orders' ? 'Ask me' : 'Ask orders'} about line 50 of orders/checkout.ts.`;
+  const bubble = hit ? (s.spice === 'clean' ? hit.bubbleClean : hit.bubble) : no!.bubble;
   for (let i = 0; i < text.length; i += 4) {
     s.appendToMessage(modId, id, text.slice(i, i + 4));
     blipText(text.slice(i, i + 4), pitch, useTavern.getState().muted);
     await new Promise((r) => setTimeout(r, 30));
   }
-  s.updateMessage(modId, id, { citations: extractCitations(text).filter((c) => isValidCitation(c, s.repo?.files ?? [])) });
+  s.updateMessage(modId, id, { citations: extractCitations(text).filter((c) => isValidCitation(c, s.repo?.files ?? [])), bubble });
+  end(); // the cue holds until the answer is in
 }
 
 /**
@@ -124,16 +128,26 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
         mode,
         focus: focusBody,
         grudge: { ...grudge, opener },
+        recentBubbles: recentBubbles(5),
         messages: [...history, { role: 'user', text }].map((m) => ({ role: m.role, text: m.text })),
       }),
     });
     if (!res.ok || !res.body) throw new Error(`chat ${res.status}`, { cause: res.status });
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    // After BUBBLE_SEP comes the bubble (the route has already cut the "@@bubble:" line out of the answer).
+    let bubble: string | null = null;
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value: chunk } = await reader.read();
       if (done) break;
+      if (bubble !== null) {
+        bubble += chunk;
+        continue;
+      }
+      const sep = chunk.indexOf(BUBBLE_SEP);
+      const value = sep < 0 ? chunk : chunk.slice(0, sep);
+      if (sep >= 0) bubble = chunk.slice(sep + 1);
+      if (!value) continue;
       full += value;
-      if (full.trim()) thought();
       useTavern.getState().appendToMessage(mod.id, id, value);
       blipText(value, char?.voicePitch ?? 1, useTavern.getState().muted);
       // Light up the code the moment the first valid citation completes, while it's still talking.
@@ -146,7 +160,7 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
       }
     }
     if (!full.trim()) throw new Error('empty reply');
-    s.updateMessage(mod.id, id, { citations: extractCitations(full).filter((c) => isValidCitation(c, repo.files)) });
+    s.updateMessage(mod.id, id, { citations: extractCitations(full).filter((c) => isValidCitation(c, repo.files)), bubble: bubble?.trim() || undefined });
   } catch (err) {
     console.warn('[chat]', err);
     s.updateMessage(mod.id, id, { role: 'system', text: (err as Error).cause === 503 ? UNAVAILABLE : BUSY });

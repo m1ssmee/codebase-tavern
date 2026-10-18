@@ -6,6 +6,7 @@ import { fallbackGossip } from '@/lib/characters';
 import { editLines, type Candidate } from '@/lib/editor';
 import { codeFacts, knownNumbers } from '@/lib/guards';
 import { cleanModule, clip, neighbour, promptModule, type InModule } from '@/lib/personaInput';
+import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -25,6 +26,7 @@ Rules:
 - At least one line is about a module it uses or that uses it (links), when it has any. links.usedBy = modules that depend on it; links.uses = modules it depends on; never swap them.
 - If the code shown has a suspicious detail (a timeout shorter than another module's processing time, a retry with no safety check), one line may hint at it without naming a bug.
 - Every line comes as 3 variants: three different jokes on the same fact, each a complete sentence. An editor picks the best one, so make them really different.
+- Every line also gets a bubble: the speech bubble shown over the speaker when it says that line, ${BUBBLE_RULE}. Not one of the variants word for word; the four bubbles open differently.
 - Gossip is about code, never about people. Never reuse the voice guide's example jokes (no "landfill with exports").`;
 
 const S = { type: 'string' };
@@ -32,11 +34,17 @@ const SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['gossip'],
-  properties: { gossip: { type: 'array', description: '4 lines, each as 3 variants', items: { type: 'array', items: S, description: '3 variants of one gossip line' } } },
+  properties: {
+    gossip: {
+      type: 'array',
+      description: '4 lines, each as 3 variants with its bubble',
+      items: { type: 'object', additionalProperties: false, required: ['variants', 'bubble'], properties: { variants: { type: 'array', items: S, description: '3 variants of one gossip line' }, bubble: S } },
+    },
+  },
 };
 
 // ponytail: in memory per server instance, lost on a cold start; keyed by the exact cleaned input, so a client can't fill another request's entry.
-const done = new Map<string, { lines: string[]; source: 'llm' }>();
+const done = new Map<string, { lines: string[]; bubbles: string[]; source: 'llm' }>();
 const CACHE_MAX = 500;
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1);
 
@@ -64,7 +72,7 @@ export async function POST(req: Request) {
   try {
     const out = await llmJSON<{ gossip?: unknown[] }>('gossip', {
       system: SYSTEM,
-      dynamic: `${levelBlock(spice)}\n- ${mode === 'expert' ? 'MODE: EXPERT: standard technical terms are fine.' : `MODE: BEGINNER: no jargon without a plain definition in parentheses. ${PLAIN_WORDS}`}\n${levelReminder(spice)}`,
+      dynamic: `${levelBlock(spice)}\n- ${mode === 'expert' ? 'MODE: EXPERT: standard technical terms are fine.' : `MODE: BEGINNER: no jargon without a plain definition in parentheses. ${PLAIN_WORDS}`}\n${recentBlock(body.recentBubbles)}\n${levelReminder(spice)}`,
       prompt,
       schema: SCHEMA,
       timeoutMs: 20_000,
@@ -74,9 +82,10 @@ export async function POST(req: Request) {
     const known = knownNumbers(prompt);
     const statNums = (m: (typeof all)[number]) => [m.stats.totalLines, m.stats.fileCount, m.stats.todoCount, m.stats.biggestFile.lines, m.stats.maxNesting, m.testFiles].filter((n) => n > 0).map(String);
     const needs = all.flatMap((m) => [m.name, ...m.filePaths.map(base), ...statNums(m)]);
-    const lines: Candidate[] = (Array.isArray(out?.gossip) ? out.gossip : []).slice(0, 4).map((variants, i) => ({
+    const raw = (Array.isArray(out?.gossip) ? out.gossip : []).slice(0, 4) as { variants?: unknown; bubble?: unknown }[];
+    const lines: Candidate[] = raw.map((g, i) => ({
       id: `g${i}`,
-      variants,
+      variants: g?.variants,
       rules: { needs, facts: codeFacts(prompt), source: prompt, known, clean: spice === 'clean', maxWords: 18 },
       about: `gossip by ${speaker.name}`,
     }));
@@ -84,7 +93,9 @@ export async function POST(req: Request) {
     const fb = fallback();
     const chosen = lines.map((l, i) => picked.get(l.id) ?? fb[i % fb.length]).filter(Boolean);
     if (!picked.size) throw new Error('no gossip line survived the filter');
-    const result = { lines: chosen, source: 'llm' as const };
+    // A line that fell back to its template has no bubble (the client makes one from the line).
+    const bubbles = lines.map((l, i) => (picked.get(l.id) ? cleanBubble(raw[i]?.bubble).slice(0, 200) : '')).filter((_, i) => !!(picked.get(lines[i].id) ?? fb[i % fb.length]));
+    const result = { lines: chosen, bubbles, source: 'llm' as const };
     done.set(key, result);
     if (done.size > CACHE_MAX) done.delete(done.keys().next().value!);
     return Response.json({ ...result, cached: false });

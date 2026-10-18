@@ -8,30 +8,42 @@
     {
       "moduleId": "orders",
       "text": "I retry a payment once after `UpstreamTimeoutError` because the checkout path is trying to paper over a timeout with a second charge request. That is damn reckless when I already marked the order `pending` and forwarded `order_id`, `amount`, and `currency` with no idempotency key. [orders/checkout.ts:20-30] [orders/checkout.ts:44-57]",
-      "accuses": "payments"
+      "accuses": "payments",
+      "bubble": "A timeout retry without an idempotency key is damn reckless here.",
+      "bubbleClean": "A timeout retry without an idempotency key is reckless here."
     },
     {
       "moduleId": "payments",
       "text": "I accept every `order_id` as a fresh charge, call `authorizeAndCapture`, then `recordCharge` a new `chargeId` with no duplicate check. The sample log shows the same order charged twice, 4650 EUR twice, which is the sort of shit a retry loop summons when the clerk has no memory. [payments/processor.ts:29-49] [payments/logs/sample-charges.log:6-7]",
-      "accuses": "orders"
+      "accuses": "orders",
+      "bubble": "No duplicate check means the same order can be charged twice.",
+      "bubbleClean": "No duplicate check means the same order can be charged twice."
     },
     {
       "moduleId": "utils",
-      "text": "I am not in the payment path, and my money helpers only round cents and format amounts. The 417-line validation landfill is ugly as hell, but it is not the reason the checkout fires two charge requests. [utils/money.ts:1-5] [utils/money.ts:11-17]"
+      "text": "I am not in the payment path, and my money helpers only round cents and format amounts. The 417-line validation landfill is ugly as hell, but it is not the reason the checkout fires two charge requests. [utils/money.ts:1-5] [utils/money.ts:11-17]",
+      "bubble": "That giant validation file is ugly, but it is not this bug.",
+      "bubbleClean": "That giant validation file is ugly, but it is not this bug."
     },
     {
       "moduleId": "orders",
       "text": "I only start the second attempt because the first one timed out, and I bail out cleanly on the final failure. The bug lives in the payment flow: a retry without a unique key means the same checkout can become two captures, which is damn bad engineering. [orders/checkout.ts:44-57]",
-      "accuses": "payments"
+      "accuses": "payments",
+      "bubble": "The bug is the retry plus no unique request ID, plain and ugly.",
+      "bubbleClean": "The bug is the retry plus no unique request ID, plain and ugly."
     },
     {
       "moduleId": "payments",
       "text": "I never collapse concurrent requests for the same order, so two calls can both reach `authorizeAndCapture` before anything is recorded. My ledger only appends entries after the network round trip, which is too late to stop a duplicated charge. [payments/processor.ts:33-49] [payments/ledger.ts:11-19]",
-      "accuses": "orders"
+      "accuses": "orders",
+      "bubble": "Recording after the network call is too late to block duplicates.",
+      "bubbleClean": "Recording after the network call is too late to block duplicates."
     },
     {
       "moduleId": "utils",
-      "text": "My validators already reject bad amounts and currencies, so this is not a bad input problem. The checkout is charging twice because the retry policy and the charge processor never agree on a single request identity, and that is the real shit. [utils/validation.ts:181-195] [utils/validation.ts:357-372]"
+      "text": "My validators already reject bad amounts and currencies, so this is not a bad input problem. The checkout is charging twice because the retry policy and the charge processor never agree on a single request identity, and that is the real shit. [utils/validation.ts:181-195] [utils/validation.ts:357-372]",
+      "bubble": "Bad input is innocent; the missing request identity is not.",
+      "bubbleClean": "Bad input is innocent; the missing request identity is not."
     }
   ],
   "verdict": {

@@ -6,7 +6,6 @@ import { useEffect, useState } from 'react';
 import { useTavern } from '@/lib/store';
 import { hash } from '@/lib/characters';
 import { thinkingLine } from '@/lib/thinkingLines';
-import { quip } from '@/lib/quip';
 import { archetypeOf, ModuleFace } from './Portrait';
 import { useStage, type Bubble } from './stage/store';
 
@@ -36,14 +35,12 @@ export function ThinkingText({ id, className = '' }: { id: string; className?: s
 }
 
 /**
- * A character's speech bubble off the stage (the Neighbourhood, the Blueprint), like the stage's: a chat answer or a
- * What-if reaction as its quip (the full text is in the chat or the panel; a click scrolls there), a line as said,
- * or its thinking cue. Fades out at the end.
+ * A character's speech bubble off the stage (the Neighbourhood, the Blueprint), like the stage's: an answer's bubble
+ * once it's in (a click scrolls to the full text in the chat or the panel), a line as said, or its thinking cue.
+ * Fades out at the end.
  */
 export function SpeechBubble({ id, b, reaction }: { id: string; b?: Bubble; reaction?: string }) {
   const live = useTavern((s) => (b?.msg ? s.chats[b.msg.mod]?.find((x) => x.id === b.msg!.id) : undefined));
-  const streaming = useTavern((s) => s.isLoading);
-  const spice = useTavern((s) => s.spice);
   const name = useTavern((s) => (id === 'judge' ? 'The Judge' : id === 'landlord' ? 'The Landlord' : (s.characters[id]?.name ?? id)));
   const thinking = useThinking(id);
   const [now, setNow] = useState(() => Date.now());
@@ -52,7 +49,8 @@ export function SpeechBubble({ id, b, reaction }: { id: string; b?: Bubble; reac
     return () => clearInterval(t);
   }, []);
   if (live?.role === 'system') return null;
-  const body = live ? quip(live.text, spice, { partial: streaming }) : b ? b.text : reaction ? quip(reaction, spice) : '';
+  const body = b ? b.text : (reaction ?? ''); // set once the answer is in; the cue shows until then
+  if (b?.msg && !body && !thinking) return null;
   const link = b?.msg ? `msg-${b.msg.id}` : (b?.link ?? (reaction && !b ? `whatif-${id}` : undefined));
   const fading = !!b?.until && b.until - now < 700;
   return (

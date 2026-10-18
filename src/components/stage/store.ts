@@ -3,6 +3,8 @@
 // bar and the code panel can read and write it; the overlay (Stage.tsx, lazy) and scenes.ts act on it.
 import { create } from 'zustand';
 import type { Citation } from '@/lib/types';
+import { useTavern } from '@/lib/store';
+import { chooseBubble } from '@/lib/quip';
 
 /** on stage: they walk and point; parked: they stand at home and only talk; off: no characters at all. */
 export type Tenants = 'stage' | 'parked' | 'off';
@@ -148,6 +150,19 @@ export async function thinkWhile<T>(ids: string[], p: Promise<T>): Promise<T> {
   } finally {
     end();
   }
+}
+
+// The bubbles shown this session (any character), oldest first: the repetition guard, and "don't reuse" in prompts.
+const shown: string[] = [];
+export const recentBubbles = (n = 5) => shown.slice(-n);
+/** The bubble to show for an answer: the AI's (`ai`) unless it breaks the rules or repeats a recent one, else the fallback from `full`. */
+export function bubbleFor(ai: unknown, full: string): string {
+  const t = chooseBubble(ai, full, useTavern.getState().spice, shown.slice(-10));
+  if (t) {
+    shown.push(t);
+    if (shown.length > 10) shown.shift();
+  }
+  return t;
 }
 
 const MIN10 = 10 * 60_000;

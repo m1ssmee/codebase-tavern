@@ -199,7 +199,7 @@ export default function RoastPanel() {
         </div>
         {result && (
           <div className="border-t border-edge px-4 py-2 text-xs text-muted">
-            {result.source === 'saved' ? 'Saved roast (the demo route makes no AI calls). ' : result.source === 'templates' ? 'Template lines (the AI was unavailable). ' : ''}
+            {result.source === 'templates' ? 'Template lines (the AI was unavailable). ' : ''}
             {result.links
               ? 'Grade, violations and stats were worked out by the server from the repo itself; the lines are the roast.'
               : "This repo was uploaded, so the server can't check it: no share link, but Download PNG works."}

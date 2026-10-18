@@ -666,7 +666,7 @@ console.log('judge template checks ok');
 }
 {
   // Stage lines with no AI: every level states real numbers; swearing only at the swearing levels.
-  const { neverMet, flingLine, aiOffLine, needsLine, needsSummary } = await import('../src/lib/stageLines.ts');
+  const { neverMet, flingLine, needsLine, needsSummary } = await import('../src/lib/stageLines.ts');
   const st = (n, f, t) => ({ totalLines: n, fileCount: f, todoCount: t, maxNesting: 2, hasTests: false, biggestFile: { path: 'x', lines: 1 } });
   const a = { id: 'misc', name: 'misc', stats: st(57, 1, 0) }, b = { id: 'auth', name: 'auth', stats: st(149, 3, 2) };
   const SWEAR = /\b(damn|hell|shit|fuck\w*)\b/i;
@@ -675,7 +675,7 @@ console.log('judge template checks ok');
     assert.deepEqual(t.map((x) => x.moduleId), ['misc', 'auth', 'misc', 'auth']);
     assert.match(t[0].text, /never even met/i);
     assert.ok(t.some((x) => x.text.includes('149 lines')) && t.some((x) => x.text.includes('57 lines')), sp);
-    const all = [...t.map((x) => x.text), flingLine(a, sp, 's'), aiOffLine(sp), needsLine(a, 'auth', { path: 'misc/x.ts', startLine: 3, endLine: 3, kind: 'imports' }, 2, sp)].join(' ');
+    const all = [...t.map((x) => x.text), flingLine(a, sp, 's'), needsLine(a, 'auth', { path: 'misc/x.ts', startLine: 3, endLine: 3, kind: 'imports' }, 2, sp)].join(' ');
     assert.equal(SWEAR.test(all), sp !== 'clean', sp);
     assert.doesNotMatch(all, /!|\p{Extended_Pictographic}/u);
   }
@@ -991,49 +991,79 @@ console.log('judge template checks ok');
   console.log('thinking cue checks ok');
 }
 
-// ---- quips: the bubble's short line when the full text is in the chat or a panel. For every saved demo text (the
-// line explanation, the argument, the hearing, the What-if reactions, the gossip), the stage's template lines and the
-// voice guide's example, at every spice level: at most two lines (90 characters), no citation, no code, past the filter.
+// ---- speech bubbles: the AI writes each one in the same call (chat: a final "@@bubble:" line the route cuts out;
+// arguments, Tribunal turns, What-if verdicts, gossip: a bubble field). Every saved demo text carries its bubble and a
+// clean version: short, no citation, no code, past the filter at every spice level, all different. The demo data
+// and the deflections never mention a demo or the AI being off. The marker never reaches the chat, however the
+// stream is chunked. The repetition guard and the fallback behave.
 {
-  const { quip, hasCode, QUIP_MAX } = await import('../src/lib/quip.ts');
-  const { lineProblem, SWEARING } = await import('../src/lib/guards.ts');
-  const { neverMet, needsLine, needsSummary, aiOffLine, sulkyOpener } = await import('../src/lib/stageLines.ts');
+  const { quip, hasCode, bubbleOk, repeats, chooseBubble, cleanBubble, BUBBLE_MAX } = await import('../src/lib/quip.ts');
+  const { BubbleSplitter, BUBBLE_SEP } = await import('../src/lib/bubbleMarker.ts');
+  const { DEFLECTIONS, deflection } = await import('../src/lib/stageLines.ts');
+  const { ARCHETYPES } = await import('../src/lib/cast.ts');
+  const { SWEARING } = await import('../src/lib/guards.ts');
   const json = (f) => import(`../src/data/${f}`, { with: { type: 'json' } }).then((m) => m.default);
   const [lines, argue, hearing, whatIf, cast] = await Promise.all(['demoLines.json', 'demoArgue.json', 'demoTribunal.json', 'demoWhatIf.json', 'demoCharacters.json'].map(json));
   const saved = [
-    ...lines.items.map((i) => i.text),
-    ...argue.pairs.flatMap((p) => p.turns.map((t) => t.text)),
-    ...hearing.turns.map((t) => t.text),
-    ...whatIf.runs.flatMap((r) => r.items.map((i) => i.reaction).filter(Boolean)),
-    ...(cast.characters ?? cast).flatMap((c) => c.gossip ?? []),
+    ...lines.items.map((x) => ({ at: 'line', text: x.text, bubble: x.bubble, clean: x.bubbleClean })),
+    ...argue.pairs.flatMap((p) => p.turns.map((x) => ({ at: 'argue', text: x.text, bubble: x.bubble, clean: x.bubbleClean }))),
+    ...hearing.turns.map((x) => ({ at: 'tribunal', text: x.text, bubble: x.bubble, clean: x.bubbleClean })),
+    ...whatIf.runs.flatMap((r) => r.items.map((x) => ({ at: 'what-if', text: x.reason, bubble: x.bubble, clean: x.bubbleClean }))),
+    ...cast.characters.flatMap((c) => (c.gossip ?? []).map((g, i) => ({ at: `gossip ${c.moduleId}`, text: g, bubble: c.gossipBubbles?.[i], clean: c.gossipBubblesClean?.[i] }))),
   ];
-  const who = (id, name, lines) => ({ id, name, stats: { totalLines: lines, fileCount: 3, todoCount: 1, biggestFile: { path: '', lines }, maxNesting: 3, hasTests: false } });
-  const ref = { path: 'orders/checkout.ts', startLine: 20, endLine: 31, kind: 'imports' };
-  const EXAMPLE = "I turn a customer's basket into a paid order by asking payments to charge their card.\n1. A customer clicks Pay and `checkout()` starts [orders/checkout.ts:33].\n2. I send payments a charge request with `order_id` and `amount` [orders/checkout.ts:20-31].\n3. If the gateway stops waiting after 2000ms, I get an `UpstreamTimeoutError` and fire the same damn charge again, up to `MAX_PAYMENT_ATTEMPTS = 2` [orders/checkout.ts:44-52].\nWhy it matters: payments takes about 2400ms under load [payments/processor.ts:26], so my retry bills the card twice. No idempotency key (a unique ID that lets payments recognise a repeated request), so that retry is a fucking landmine.";
-  let n = 0;
-  for (const spice of ['clean', 'unhinged', 'feral', 'nuclear']) {
-    const texts = [
-      ...saved,
-      EXAMPLE,
-      ...neverMet(who('orders', 'orders', 169), who('utils', 'utils', 503), spice).map((t) => t.text),
-      needsLine(who('orders', 'orders', 169), 'utils', ref, 2, spice),
-      needsSummary('utils', [{ name: 'orders', weight: 2, kind: 'imports', ref }], spice),
-      aiOffLine(spice, 'orders'),
-      sulkyOpener({ roasted: 1, pestered: 0 }, spice) + '\n\n' + EXAMPLE,
-    ];
-    for (const t of texts) {
-      const q = quip(t, spice);
-      n++;
-      assert.ok(q && q.length <= QUIP_MAX, `${spice}: quip within two lines: ${q}`);
-      assert.ok(!/\[[^\]\n]*:[^\]\n]*\]/.test(q) && !hasCode(q), `${spice}: no citation or code: ${q}`);
-      assert.equal(lineProblem(q, { clean: spice === 'clean' }), null, `${spice}: ${q}`);
-      if (spice === 'clean') assert.ok(!SWEARING.test(q), `clean quip: ${q}`);
-    }
+  const cite = /\[[^\]\n]*:[^\]\n]*\]/;
+  for (const x of saved) {
+    for (const [b, levels] of [[x.bubble, ['unhinged', 'feral', 'nuclear']], [x.clean, ['clean']]])
+      for (const sp of levels) {
+        assert.ok(typeof b === 'string' && b.length <= BUBBLE_MAX && !cite.test(b) && !hasCode(b), `${x.at}: bubble ${b}`);
+        assert.ok(bubbleOk(b, sp), `${x.at} at ${sp}: ${b}`);
+      }
+    assert.ok(!SWEARING.test(x.clean), `${x.at}: clean bubble ${x.clean}`);
+    assert.notEqual(x.bubble, x.text.trim(), `${x.at}: the bubble isn't the text`);
   }
-  // The curse, never the technical step; a reply still streaming quips only finished sentences.
-  assert.equal(quip(EXAMPLE, 'unhinged'), 'That retry is a fucking landmine.');
-  assert.equal(quip(EXAMPLE, 'clean'), "I turn a customer's basket into a paid order by asking payments to charge their card.");
-  assert.equal(quip('I retry once. That is damn reckless when the gate', 'unhinged', { partial: true }), 'I retry once.');
+  assert.equal(new Set(saved.map((x) => x.bubble)).size, saved.length, 'no two saved bubbles are the same');
+  // Nothing on the demo route talks about a demo, the AI being off, or a saved answer.
+  const deflects = Object.values(DEFLECTIONS).flat();
+  const demoText = JSON.stringify([lines, argue, hearing, whatIf, cast, deflects]);
+  assert.doesNotMatch(demoText, /\bdemo\b|AI is (off|out)|live AI|saved (answer|roast|hearing|version)/i);
+  for (const a of ARCHETYPES) {
+    assert.equal(DEFLECTIONS[a]?.length, 4, `${a}: four deflections`);
+    for (const d of DEFLECTIONS[a]) for (const sp of ['clean', 'unhinged', 'feral', 'nuclear']) assert.ok(bubbleOk(d.bubble, sp) && d.bubble !== d.text, `${a}: ${d.bubble}`);
+    const seen = [0, 1, 2, 3, 4].map(() => deflection(a).text);
+    assert.equal(new Set(seen.slice(0, 4)).size, 4, `${a}: deflections rotate`);
+    assert.equal(seen[4], seen[0]);
+  }
+  // The marker never reaches the chat, wherever the chunks split; the bubble survives intact.
+  const answer = 'I retry once when the gateway gives up at **2000ms** [orders/checkout.ts:44-52]. Email ops@example.com.\n\n';
+  for (const tail of ['@@bubble: One retry, and the card pays twice.', '**@@bubble:** One retry, and the card pays twice.', '@@Bubble: One retry, and the card pays twice.']) {
+    const all = answer + tail;
+    for (let i = 1; i < all.length; i++)
+      for (const j of [i + 1, i + 7, all.length]) {
+        const sp = new BubbleSplitter();
+        const shown = [all.slice(0, i), all.slice(i, j), all.slice(j)].map((c) => sp.push(c));
+        const end = sp.end();
+        const chat = shown.join('') + end.rest;
+        assert.ok(shown.every((c) => !/@@b|@@$/i.test(c)) && !/@@/.test(chat), `marker leaked at ${i}/${j}: ${JSON.stringify(shown)}`);
+        assert.equal(chat, answer.trimEnd(), `answer intact at ${i}/${j}`);
+        assert.equal(cleanBubble(end.bubble), 'One retry, and the card pays twice.');
+      }
+  }
+  const plain = new BubbleSplitter();
+  assert.equal(plain.push('No marker here, ') + plain.push('just text **bold**') + plain.end().rest, 'No marker here, just text **bold**');
+  assert.equal(plain.end().bubble, '');
+  assert.equal(BUBBLE_SEP.length, 1);
+  // The repetition guard: the same first three words as one of the last 5, the same swear as the previous, >60% shared.
+  const recent = ['The retry loop bills the card twice.', 'Two thousand ms is the whole damn timeout.'];
+  assert.ok(repeats('The retry loop is a liability.', recent));
+  assert.ok(repeats('This damn ledger never dedupes.', recent));
+  assert.ok(repeats('Retry loop bills the card twice, again.', recent));
+  assert.ok(!repeats('Payments keeps no receipts for duplicates.', recent));
+  // A bubble that breaks the rules or repeats falls back to the answer's first plain sentence, cut at a clause end.
+  const full = "I turn a customer's basket into a paid order by asking payments to charge their card, then I mark it paid and move on.\n1. `checkout()` starts [orders/checkout.ts:33].";
+  assert.equal(chooseBubble('Payments charges the basket once.', full, 'unhinged', recent), 'Payments charges the basket once.');
+  assert.equal(chooseBubble('`checkout()` charges the basket.', full, 'unhinged', recent), "I turn a customer's basket into a paid order by asking payments to charge their card.");
+  assert.equal(chooseBubble('The retry loop again, damn.', full, 'unhinged', recent), quip(full));
+  assert.equal(chooseBubble('Fucking retries, damn it.', full, 'unhinged', []), quip(full)); // two swear words
   assert.equal(quip(''), '');
-  console.log(`quip checks ok (${n} texts)`);
+  console.log(`speech bubble checks ok (${saved.length} saved bubbles)`);
 }

@@ -3,6 +3,8 @@ import { llmStream, type Msg } from '@/lib/llm';
 import { levelBlock, levelReminder, modeBlock, modeReminder, VOICE_GUIDE } from '@/lib/voice';
 import { CHAT_BUDGET } from '@/lib/context';
 import { CiteChecker, CiteStream } from '@/lib/citations';
+import { BUBBLE_SEP, BubbleSplitter } from '@/lib/bubbleMarker';
+import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -67,6 +69,7 @@ Rules:
 - Never invent code, files or behaviour. Only use the code below.
 - If the question is about code outside your files, reply "Not mine. Ask <title>." using the title of the module that owns it, from the list below, unless the user points at lines of it (the instructions at the end say how to answer then).
 - If the answer is in a file marked [left out] or [truncated], say that file was left out of what you can see.
+- End every answer with one final line: \`@@bubble: <text>\`. It is cut out before the user sees the answer and shown in a speech bubble over your head. <text> is THIS answer's bubble: ${BUBBLE_RULE}.
 
 Other modules:
 ${others || '- none'}
@@ -101,8 +104,10 @@ ${foreign ? `\nCode the user pointed at (owned by ${focus?.owner || 'another mod
       }Every reaction (the short comment after a step, and the end of "Why it matters") must sound sulky and put-upon, not just rude: a sigh, a grudging "fine", "since you insist", still sore about being ${roasted ? 'roasted' : 'pestered'}, or a dig at your own code. Never at the user. The answer itself stays complete, accurate and in the usual structure, with every citation.\n`
     : ''
 }
+${recentBlock(b.recentBubbles)}
 ${levelReminder(b.spice)}
-${modeReminder(b.mode)}`;
+${modeReminder(b.mode)}
+Last line, always: @@bubble: <one sentence of at most 90 characters, ending with a full stop>.`;
 
   // Providers want alternating turns starting with the user: map roles, drop leading assistant turns, merge repeats.
   const messages: Msg[] = [];
@@ -122,17 +127,23 @@ ${modeReminder(b.mode)}`;
     // Every citation is checked against the code it points at on the way out (re-anchored or dropped if wrong).
     const checker = new CiteChecker(new Map(files.map((f) => [f.path, f.content.replace(/\n$/, '').split('\n')])));
     const cites = new CiteStream(checker);
+    // The "@@bubble:" line is cut out first (held back while it could still be the marker); after the answer comes
+    // BUBBLE_SEP and the bubble, which the client splits off.
+    const bubble = new BubbleSplitter();
     const [dec, enc] = [new TextDecoder(), new TextEncoder()];
     const checked = stream.pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, out) {
-          const text = cites.push(dec.decode(chunk, { stream: true }));
+          const text = cites.push(bubble.push(dec.decode(chunk, { stream: true })));
           if (text) out.enqueue(enc.encode(text));
         },
         flush(out) {
-          const text = cites.push(dec.decode()) + cites.end();
+          const tail = bubble.push(dec.decode());
+          const { rest, bubble: said } = bubble.end();
+          const text = cites.push(tail + rest) + cites.end();
           if (text) out.enqueue(enc.encode(text));
-          console.info('[cites] chat', JSON.stringify(checker.counts), checker.changes.join('; '));
+          if (said) out.enqueue(enc.encode(BUBBLE_SEP + cleanBubble(said).slice(0, 200)));
+          console.info('[cites] chat', JSON.stringify(checker.counts), checker.changes.join('; '), said ? '| bubble' : '| no bubble');
         },
       }),
     );

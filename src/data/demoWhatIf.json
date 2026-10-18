@@ -8,25 +8,33 @@
           "moduleId": "payments",
           "verdict": "relieved",
           "reason": "`processCharge()` now reuses one promise per `order_id`, so two concurrent calls for the same order share the same charge instead of opening two separate network calls [payments/processor.ts:21-49]. That hides the double-charge path when `orders/checkout.ts` retries after the gateway times out at 2000ms, although a later retry after the first charge finishes can still start a new charge [gateway/proxy.ts:25-49][orders/checkout.ts:44-57].",
-          "reaction": "`inFlightCharges` is a tiny bouncer for `ch_` IDs. The old code was a refund-shaped shitshow."
+          "reaction": "`inFlightCharges` is a tiny bouncer for `ch_` IDs. The old code was a refund-shaped shitshow.",
+          "bubble": "Shared promise reuse only helps while the first charge is still open.",
+          "bubbleClean": "Shared promise reuse only helps while the first charge is still open."
         },
         {
           "moduleId": "gateway",
           "verdict": "fine",
           "reason": "The gateway configuration and timeout rules do not change, so it still forwards to `payments` at `http://localhost:4003` and still aborts after `UPSTREAM_TIMEOUT_MS = 2000` [gateway/config.ts:8-16][gateway/proxy.ts:25-49]. This change only makes `payments` less likely to process the same order twice while the first request is still running [payments/processor.ts:33-49].",
-          "reaction": "`UPSTREAM_TIMEOUT_MS` is still 2000ms. I did not get a damn new timeout."
+          "reaction": "`UPSTREAM_TIMEOUT_MS` is still 2000ms. I did not get a damn new timeout.",
+          "bubble": "The gateway still times out at 2000ms and stays just as rude.",
+          "bubbleClean": "The gateway still times out at 2000ms and stays just as rude."
         },
         {
           "moduleId": "orders",
           "verdict": "fine",
           "reason": "`checkout()` still calls `forward()` twice at most on `UpstreamTimeoutError`, and it still sends the same `order_id`, `amount`, `currency`, and `payment_method_id` shape to payments [orders/checkout.ts:20-30][orders/checkout.ts:44-57]. The new payment-side promise reuse only reduces duplicate work during an overlapping retry; it does not change the checkout code path here [payments/processor.ts:29-49].",
-          "reaction": "`MAX_PAYMENT_ATTEMPTS` is still 2. The retry is ugly, but the charge duplication is less damn fragile now."
+          "reaction": "`MAX_PAYMENT_ATTEMPTS` is still 2. The retry is ugly, but the charge duplication is less damn fragile now.",
+          "bubble": "That payment-side fix only trims overlap; checkout still retries twice.",
+          "bubbleClean": "That payment-side fix only trims overlap; checkout still retries twice."
         },
         {
           "moduleId": "utils",
           "verdict": "fine",
           "reason": "`log()` is still called with the same events and fields from `processCharge()`: `charge processed` on success and `charge failed` on error [payments/processor.ts:38-49][payments/processor.ts:60-63]. This change only alters when `processCharge()` returns a shared result; it does not change the logger API or the shape of the log data.",
-          "reaction": "`log('info', 'charge processed',...)` stays untouched; only the duplicate charge mess got quieter."
+          "reaction": "`log('info', 'charge processed',...)` stays untouched; only the duplicate charge mess got quieter.",
+          "bubble": "The logger stays untouched; only the duplicate mess got quieter.",
+          "bubbleClean": "The logger stays untouched; only the duplicate mess got quieter."
         }
       ],
       "summary": {
@@ -43,19 +51,25 @@
           "moduleId": "orders",
           "verdict": "fine",
           "reason": "This only adds `idempotency_key: order.id` to the body sent to payments; `requestCharge()` still sends the same order data and `checkout()` still reads the same charge response [orders/checkout.ts:20-30][orders/checkout.ts:43-69]. Nothing in this module depends on the new field, so its own flow stays the same.",
-          "reaction": "I ship one extra key and keep marching. The rest of this checkout crap stays exactly where it was."
+          "reaction": "I ship one extra key and keep marching. The rest of this checkout crap stays exactly where it was.",
+          "bubble": "One extra key changes nothing here except the request body.",
+          "bubbleClean": "One extra key changes nothing here except the request body."
         },
         {
           "moduleId": "gateway",
           "verdict": "fine",
           "reason": "The gateway still just forwards the request from orders to payments; `forward()` copies `req.body` as JSON and does not care which fields are inside it [gateway/proxy.ts:29-45]. `SERVICES.payments` is unchanged, so this module's routing and timeout logic stay the same [gateway/config.ts:8-16].",
-          "reaction": "I forward the same junk with one new field. The timeout gambler stays stupid in exactly the same way."
+          "reaction": "I forward the same junk with one new field. The timeout gambler stays stupid in exactly the same way.",
+          "bubble": "I forward the same request junk and ignore the new field.",
+          "bubbleClean": "I forward the same request junk and ignore the new field."
         },
         {
           "moduleId": "payments",
           "verdict": "fine",
           "reason": "`handleChargeRequest()` only checks `order_id`, `payment_method_id`, `amount`, and `currency`, then passes the request to `processCharge()` [payments/processor.ts:52-59]. `processCharge()` reads those same fields and ignores anything extra, so `idempotency_key` is accepted but not used [payments/processor.ts:29-49].",
-          "reaction": "I see the new idempotency_key and ignore it like a professional. This damn clerk still records only the usual fields."
+          "reaction": "I see the new idempotency_key and ignore it like a professional. This damn clerk still records only the usual fields.",
+          "bubble": "Extra fields are ignored, so the new key just sits there.",
+          "bubbleClean": "Extra fields are ignored, so the new key just sits there."
         }
       ],
       "summary": {
@@ -84,19 +98,25 @@
           "moduleId": "orders",
           "verdict": "relieved",
           "reason": "`requestCharge()` now sends `idempotency_key: order.id` with the payment request, so the retry in `checkout()` no longer risks a second capture when the gateway times out and replays the same order [orders/checkout.ts:20-30][orders/checkout.ts:43-58]. That turns the existing retry from a double-charge trap into a safe repeat for this order ID [orders/checkout.ts:44-52].",
-          "reaction": "I finally stopped firing the same charge twice. Damn, that retry loop was a dumb little duplicate factory."
+          "reaction": "I finally stopped firing the same charge twice. Damn, that retry loop was a dumb little duplicate factory.",
+          "bubble": "The retry turns safe only after payments remembers the order ID.",
+          "bubbleClean": "The retry turns safe only after payments remembers the order ID."
         },
         {
           "moduleId": "payments",
           "verdict": "relieved",
           "reason": "`processCharge()` now accepts `idempotency_key` and remembers the first `ChargeResult` for that key, so a repeated request returns the earlier charge instead of calling the card network again [payments/processor.ts:5-10][payments/processor.ts:21-43]. The cache is kept only in the server's memory, so a restart still forgets old keys and can repeat a charge after a crash, but the common retry path is now safer [payments/processor.ts:21-43].",
-          "reaction": "I keep one promise per key now. Shit, that `Map` is doing the job the whole file should have done."
+          "reaction": "I keep one promise per key now. Shit, that `Map` is doing the job the whole file should have done.",
+          "bubble": "A memory cache fixes the common retry path and forgets on restart.",
+          "bubbleClean": "A memory cache fixes the common retry path and forgets on restart."
         },
         {
           "moduleId": "gateway",
           "verdict": "fine",
           "reason": "This module still only forwards requests and enforces the 2000ms upstream timeout; the new payment field passes through the gateway untouched because `forward()` already serializes whatever body it receives [gateway/config.ts:15-17][gateway/proxy.ts:29-44]. No gateway behavior changes in practice [gateway/proxy.ts:29-54].",
-          "reaction": "I still just wait 2000ms and panic politely. This timeout gambler has not learned a damn thing."
+          "reaction": "I still just wait 2000ms and panic politely. This timeout gambler has not learned a damn thing.",
+          "bubble": "This gateway still only forwards bodies and dies on the same 2000ms timeout.",
+          "bubbleClean": "This gateway still only forwards bodies and dies on the same 2000ms timeout."
         }
       ],
       "summary": {
@@ -113,13 +133,17 @@
           "moduleId": "gateway",
           "verdict": "relieved",
           "reason": "The gateway waits 5000ms instead of 2000ms before aborting a call, so it will stop cutting off the payments service at the old 2s mark [gateway/config.ts:15-16]. That fits the payments path better because `processCharge` says typical time is about 2400ms and p99 is around 4s, so fewer requests get blamed for being slow when they were just taking the long road [payments/processor.ts:23-29].",
-          "reaction": "I stop throwing a 2s tantrum and wait 5000ms now. Damn, about time."
+          "reaction": "I stop throwing a 2s tantrum and wait 5000ms now. Damn, about time.",
+          "bubble": "Waiting 5000ms stops the gateway from panicking at 2s.",
+          "bubbleClean": "Waiting 5000ms stops the gateway from panicking at 2s."
         },
         {
           "moduleId": "orders",
           "verdict": "at risk",
           "reason": "This checkout retry still catches `UpstreamTimeoutError` and sends the same charge request again with no idempotency key, so a payment slower than 5000ms can still be sent twice if the first one eventually completes [orders/checkout.ts:20-31][orders/checkout.ts:44-58]. Raising the gateway timeout makes that duplicate-charge failure rarer, but it does not remove the retry loop or the missing unique request ID [gateway/config.ts:15-16][orders/checkout.ts:49-53].",
-          "reaction": "I still retry timed-out charges with the same payload. That is some expensive bullshit."
+          "reaction": "I still retry timed-out charges with the same payload. That is some expensive bullshit.",
+          "bubble": "A longer timeout lowers the damage, but the duplicate trap stays.",
+          "bubbleClean": "A longer timeout lowers the damage, but the duplicate trap stays."
         }
       ],
       "summary": {
@@ -135,13 +159,17 @@
           "moduleId": "orders",
           "verdict": "at risk",
           "reason": "Removing the second payment attempt means any timeout from `forward` now fails checkout immediately instead of being retried once. That makes transient slow responses from the payments service more visible, and a payment that takes longer than `UPSTREAM_TIMEOUT_MS` 2000ms can still be reported as unavailable even if the charge may have gone through later [orders/checkout.ts:18-19][orders/checkout.ts:44-58][gateway/config.ts:15-16][gateway/proxy.ts:25-31][gateway/proxy.ts:45-49].",
-          "reaction": "I lost my one damn retry, so a 2001ms payment now gets me sent home empty-handed."
+          "reaction": "I lost my one damn retry, so a 2001ms payment now gets me sent home empty-handed.",
+          "bubble": "Killing the retry makes slow payments fail fast, which is honest.",
+          "bubbleClean": "Killing the retry makes slow payments fail fast, which is honest."
         },
         {
           "moduleId": "gateway",
           "verdict": "fine",
           "reason": "This change only alters how `orders/checkout.ts` retries a payment call. The gateway configuration and timeout remain the same at 2000ms, and nothing in `gateway/config.ts` or `gateway/proxy.ts` changes behavior here [gateway/config.ts:10][gateway/config.ts:15-16][gateway/proxy.ts:29-53].",
-          "reaction": "I still point at orders with my 2000ms stopwatch and watch the shit show from the hallway."
+          "reaction": "I still point at orders with my 2000ms stopwatch and watch the shit show from the hallway.",
+          "bubble": "The gateway timeout stays at 2000ms, with or without that retry.",
+          "bubbleClean": "The gateway timeout stays at 2000ms, with or without that retry."
         }
       ],
       "summary": {

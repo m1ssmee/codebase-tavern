@@ -18,6 +18,8 @@ export type Character = {
   catchphrase: string;
   greeting: string;
   gossip: string[]; // 4 short lines about other modules or itself
+  gossipBubbles?: string[]; // each line's speech bubble (same order), when the AI wrote them
+  gossipBubblesClean?: string[]; // the saved cast's clean versions, for clean spice
   voicePitch: number;
   color: string;
   about?: string; // one plain sentence on what the module does (tour, beginner mode)
@@ -35,6 +37,8 @@ export type ChatMessage = {
   characterId?: string;
   text: string;
   citations: Citation[];
+  /** The speech bubble for this answer (the AI's short in-character version), when it came with one. */
+  bubble?: string;
 };
 
 export type SpiceLevel = 'clean' | 'unhinged' | 'feral' | 'nuclear'; // clean is hidden (Ctrl+Shift+C)

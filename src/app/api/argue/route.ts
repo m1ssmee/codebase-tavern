@@ -4,6 +4,7 @@ import { levelBlock, levelReminder, PLAIN_WORDS, VOICE_GUIDE } from '@/lib/voice
 import { CiteChecker, parseCitations } from '@/lib/citations';
 import { TurnScanner } from '@/lib/verdict';
 import type { Citation } from '@/lib/types';
+import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -15,7 +16,7 @@ const str = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : 
 const arr = <T,>(v: unknown, n: number): T[] => (Array.isArray(v) ? v.slice(0, n) : []);
 const int = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : 0);
 const obj = (properties: Record<string, object>) => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
-const SCHEMA = obj({ turns: { type: 'array', items: obj({ moduleId: { type: 'string' }, text: { type: 'string' } }) } });
+const SCHEMA = obj({ turns: { type: 'array', items: obj({ moduleId: { type: 'string' }, text: { type: 'string' }, bubble: { type: 'string' } }) } });
 const numbered = (code: string) =>
   code
     .replace(/\n$/, '')
@@ -62,13 +63,14 @@ Rules:
 - Each turn cites the line it is talking about as [path:line] or [path:start-end], using the line numbers shown before "|". Never invent code.
 - Roast the code, never people.
 - The last turn is the last word: short and final.
+- bubble: the speech bubble shown over the speaker for that turn: ${BUBBLE_RULE}. The four bubbles open differently.
 
 Code:
 ${shown.map((f) => `=== ${f.path} ===\n${numbered(f.content)}`).join('\n\n')}`;
   const dynamic = `${levelBlock(b?.spice)}
 
 ${beginner ? `MODE: BEGINNER. No undefined jargon: plain words, or define a term in parentheses. ${PLAIN_WORDS}` : 'MODE: EXPERT. Standard technical terms are fine.'}
-
+${recentBlock(b?.recentBubbles)}
 ${levelReminder(b?.spice)}`;
 
   try {
@@ -95,11 +97,11 @@ ${levelReminder(b?.spice)}`;
             const { done, value } = await reader.read();
             if (done) break;
             for (const raw of scanner.push(dec.decode(value, { stream: true }))) {
-              const t = raw as { moduleId?: unknown; text?: unknown };
+              const t = raw as { moduleId?: unknown; text?: unknown; bubble?: unknown };
               const text = clean(str(t?.text, 400));
               if (!text || sent >= 4) continue;
               // Alternation is enforced here, whatever the model wrote.
-              send({ type: 'turn', turn: { moduleId: sent % 2 ? B.id : A.id, text } });
+              send({ type: 'turn', turn: { moduleId: sent % 2 ? B.id : A.id, text, bubble: cleanBubble(t?.bubble).slice(0, 200) } });
               sent++;
             }
           }

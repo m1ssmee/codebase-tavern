@@ -14,7 +14,19 @@
       ],
       "voicePitch": 0.85,
       "about": "Provides shared validation, money, and logging helpers.",
-      "landlordLine": "Utils is the most depended-on tenant: 3 other modules lean on it. At 503 lines, with `validation.ts` at 417 lines, it is the building's junk drawer with a lightbulb and a grudge."
+      "landlordLine": "Utils is the most depended-on tenant: 3 other modules lean on it. At 503 lines, with `validation.ts` at 417 lines, it is the building's junk drawer with a lightbulb and a grudge.",
+      "gossipBubbles": [
+        "That 417-line validation file hoards logic like a stubborn clerk.",
+        "This validation helper still flattens errors into one string, which is grim.",
+        "Trimming input is the only sanity check this required string gets.",
+        "No tests for 503 lines is a choice, not a feature."
+      ],
+      "gossipBubblesClean": [
+        "That 417-line validation file hoards logic like a stubborn clerk.",
+        "This validation helper still flattens errors into one string, which is grim.",
+        "Trimming input is the only sanity check this required string gets.",
+        "No tests for 503 lines is a choice, not a feature."
+      ]
     },
     {
       "moduleId": "orders",
@@ -30,7 +42,19 @@
       ],
       "voicePitch": 0.95,
       "about": "Creates orders and runs checkout.",
-      "landlordLine": "Orders has 169 lines and 1 test file, and gateway depends on it over the network. It also depends on gateway, inventory, payments, and utils, which is a lot of lease paperwork for one tenant."
+      "landlordLine": "Orders has 169 lines and 1 test file, and gateway depends on it over the network. It also depends on gateway, inventory, payments, and utils, which is a lot of lease paperwork for one tenant.",
+      "gossipBubbles": [
+        "Stock gets reserved before payment, which is rare restraint.",
+        "That request forwards order ID and amount into payments.",
+        "Missing orders trigger a blunt error, as they should.",
+        "Two payment attempts is where optimism finally stopped."
+      ],
+      "gossipBubblesClean": [
+        "Stock gets reserved before payment, which is rare restraint.",
+        "That request forwards order ID and amount into payments.",
+        "Missing orders trigger a blunt error, as they should.",
+        "Two payment attempts is where optimism finally stopped."
+      ]
     },
     {
       "moduleId": "gateway",
@@ -46,7 +70,19 @@
       ],
       "voicePitch": 1.05,
       "about": "Routes requests and proxies calls to internal services.",
-      "landlordLine": "Gateway takes up 153 lines and leans on 5 other modules. It also sits in the orders <-> gateway loop, which is exactly the kind of damn rent dispute this building enjoys."
+      "landlordLine": "Gateway takes up 153 lines and leans on 5 other modules. It also sits in the orders <-> gateway loop, which is exactly the kind of damn rent dispute this building enjoys.",
+      "gossipBubbles": [
+        "JSON goes out, JSON comes back, and nobody is surprised.",
+        "The first 200 body characters are kept, because subtlety failed.",
+        "Config defines the service, then proxy trusts it immediately.",
+        "The timer gets cleared finally, sparing everyone leaked timers."
+      ],
+      "gossipBubblesClean": [
+        "JSON goes out, JSON comes back, and nobody is surprised.",
+        "The first 200 body characters are kept, because subtlety failed.",
+        "Config defines the service, then proxy trusts it immediately.",
+        "The timer gets cleared finally, sparing everyone leaked timers."
+      ]
     },
     {
       "moduleId": "auth",
@@ -62,7 +98,19 @@
       ],
       "voicePitch": 0.9,
       "about": "Issues and verifies access and refresh tokens.",
-      "landlordLine": "Auth brings 149 lines, 3 files, and 1 test file. Gateway leans on it over the network and by import, which is a tidy little shit sandwich of trust."
+      "landlordLine": "Auth brings 149 lines, 3 files, and 1 test file. Gateway leans on it over the network and by import, which is a tidy little shit sandwich of trust.",
+      "gossipBubbles": [
+        "Token signing uses HMAC over base64url claims, nothing fancy.",
+        "Wrong scope gets rejected before any claims are returned.",
+        "The dev secret fallback is fine for local noise and little else.",
+        "The refresh flow calls a read, because words still matter."
+      ],
+      "gossipBubblesClean": [
+        "Token signing uses HMAC over base64url claims, nothing fancy.",
+        "Wrong scope gets rejected before any claims are returned.",
+        "The dev secret fallback is fine for local noise and little else.",
+        "The refresh flow calls a read, because words still matter."
+      ]
     },
     {
       "moduleId": "payments",
@@ -78,7 +126,19 @@
       ],
       "voicePitch": 1,
       "about": "Charges payment cards and records each charge in its list of charges.",
-      "landlordLine": "Payments is 130 lines in 3 files and depends on utils once. Gateway and orders both call it over the network, then wait around while the card network does its damn thing."
+      "landlordLine": "Payments is 130 lines in 3 files and depends on utils once. Gateway and orders both call it over the network, then wait around while the card network does its damn thing.",
+      "gossipBubbles": [
+        "Amounts and currencies get rejected before the card network sees them.",
+        "After authorization, the ledger write gets the amount, currency, and status.",
+        "Charge IDs are random UUID scraps with a ch prefix.",
+        "The sample charge log exists, because the ledger likes souvenirs."
+      ],
+      "gossipBubblesClean": [
+        "Amounts and currencies get rejected before the card network sees them.",
+        "After authorization, the ledger write gets the amount, currency, and status.",
+        "Charge IDs are random UUID scraps with a ch prefix.",
+        "The sample charge log exists, because the ledger likes souvenirs."
+      ]
     },
     {
       "moduleId": "inventory",
@@ -94,7 +154,19 @@
       ],
       "voicePitch": 0.8,
       "about": "Tracks stock and reserves items by SKU.",
-      "landlordLine": "Inventory is 108 lines in 2 files and gets traffic from gateway over the network. Orders also imports it once, because every checkout needs the stockroom key."
+      "landlordLine": "Inventory is 108 lines in 2 files and gets traffic from gateway over the network. Orders also imports it once, because every checkout needs the stockroom key.",
+      "gossipBubbles": [
+        "Those SKUs are the usual tea, mugs, kettles, and filters.",
+        "Inventory counts are 140 tea, 32 mugs, 9 kettles, 400 filters.",
+        "Missing stock just returns zero, which is mercifully boring.",
+        "The lock vanishes only when the current promise still matches."
+      ],
+      "gossipBubblesClean": [
+        "Those SKUs are the usual tea, mugs, kettles, and filters.",
+        "Inventory counts are 140 tea, 32 mugs, 9 kettles, 400 filters.",
+        "Missing stock just returns zero, which is mercifully boring.",
+        "The lock vanishes only when the current promise still matches."
+      ]
     },
     {
       "moduleId": "(misc)",
@@ -110,7 +182,19 @@
       ],
       "voicePitch": 0.7,
       "about": "Holds the repo files that are not application modules.",
-      "landlordLine": "Misc is 57 lines in 4 files and nobody depends on it. The building keeps it around anyway, which is the sort of damn hospitality only dead files get."
+      "landlordLine": "Misc is 57 lines in 4 files and nobody depends on it. The building keeps it around anyway, which is the sort of damn hospitality only dead files get.",
+      "gossipBubbles": [
+        "That README lists the services and keeps the pile upright.",
+        "Build and test commands are the only useful part of the README.",
+        "Package and config files are doing the boring work as usual.",
+        "The README points readers at the gateway config, at least."
+      ],
+      "gossipBubblesClean": [
+        "That README lists the services and keeps the pile upright.",
+        "Build and test commands are the only useful part of the README.",
+        "Package and config files are doing the boring work as usual.",
+        "The README points readers at the gateway config, at least."
+      ]
     }
   ],
   "landlord": {

@@ -1,86 +1,114 @@
-// The bubble over a character's head when the full text is already in the chat or a panel: one short line with the
-// most personality (the joke, the insult, the curse), never the technical explanation, code or a citation. No AI:
-// the shortest sentence with a spice word (else a clause of one), else the shortest without code, else the first
-// sentence cut at a clause end; text that is all code points at the transcript instead. At most about 90 characters
-// (two bubble lines), cut at a sentence or clause end, never mid-word, no "...". File names are fine (the voice
-// guide's jokes use them); calls, identifiers and snippets are not. Pure, so scripts/check.mjs runs it directly.
+// The bubble over a character's head: a short, in-character version of THAT answer, never a repeat of the chat. The
+// AI writes it in the same call (chat: a final "@@bubble:" line the server cuts out; arguments, Tribunal turns,
+// What-if verdicts, gossip: a `bubble` field). The client checks it (one sentence, at most 90 characters, no
+// citation, no code, past the filter, at most one swear word) and guards against repeats; otherwise it falls back
+// to the answer's first plain-language sentence, cut at a clause end. Pure, so scripts/check.mjs runs it directly.
 import { lineProblem, SWEARING } from './guards.ts';
 import type { SpiceLevel } from './types.ts';
 
-export const QUIP_MAX = 90;
+export const BUBBLE_MAX = 90;
 const CITE = /\[[^\]\n]*:[^\]\n]*\]/g;
 const HAS_CITE = /\[[^\]\n]*:[^\]\n]*\]/;
-const OUTBURST = /\b[A-Z]{3,}(?:[\s,]+[A-Z]{2,})+\b/;
+const SWEARS = new RegExp(SWEARING.source, 'gi');
 
 /** Code in a sentence: backticks, calls, operators and braces, identifiers (snake_case, camelCase, CONSTANTS). */
 export const hasCode = (s: string) => /`|\b\w+\(|[{}<>=]|&&|\|\||\b[a-z][a-z0-9]*_[a-z0-9_]+\b|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/.test(s);
 const DANGLING = /\s+(?:a|an|the|to|of|and|or|but|so|for|from|with|in|on|at|by|as|into|than|that|which|when|because|after|before|if|is|are|was)$/i;
-const sentence = (c: string) => {
-  const t = c.trim().replace(/[\s,;:—-]+$/, '');
-  // Capitalise a plain first word only (never a file name like validation.ts).
-  return t && (/^[a-z]+(?![\w./])/.test(t) ? t[0].toUpperCase() + t.slice(1) : t) + '.';
-};
 
-const tidy = (s: string) =>
-  s
+/** What the model wrote as the bubble, tidied: one line, no markdown, quotes or citations. */
+export function cleanBubble(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw
+    .replace(/^\s*@@bubble:\s*/i, '')
+    .split('\n')[0]
     .replace(CITE, '')
-    .replace(/\*\*|__/g, '')
+    .replace(/\*\*|__|^[\s*_"“'‘]+|[\s*_"”'’]+$/g, '')
     .replace(/\s+([.,;:!?])/g, '$1')
     .replace(/\s{2,}/g, ' ')
-    .trim();
-
-/** Sentences of a reply, list markers and bold dropped; `partial`: the last one only once it has ended. */
-function sentences(text: string, partial: boolean): { raw: string; s: string }[] {
-  const body = partial ? text.replace(/[^.!?]*$/, '') : text;
-  return body
-    .replace(/^\s*(?:\d+\.|[-*])\s+/gm, '')
-    .split(/\n+/)
-    .flatMap((l) => l.split(/(?<=[.!?])\s+/))
-    .map((raw) => ({ raw, s: tidy(raw) }))
-    .filter((x) => x.s);
+    .trim()
+    .replace(/([^.!?…])$/, '$1.'); // models often drop the full stop
 }
 
-/** Longer than QUIP_MAX: cut at the last clause end that fits (else the last word), and end it with a full stop. */
+/** A bubble the stage can show at this spice level: short, plain, clean at clean, at most one swear word. */
+export function bubbleOk(t: string, spice: SpiceLevel = 'unhinged'): boolean {
+  const clean = spice === 'clean';
+  const swears = t.match(SWEARS)?.length ?? 0;
+  return !!t && t.length <= BUBBLE_MAX && !HAS_CITE.test(t) && !hasCode(t) && swears <= (clean ? 0 : 1) && !lineProblem(t, { clean });
+}
+
+const STOP = new Set(['the', 'and', 'but', 'for', 'with', 'that', 'this', 'its', "it's", 'was', 'are', 'not', 'you', 'your', 'from', 'into', 'than', 'then', 'just', 'still', 'only', 'have', 'has', 'all']);
+const words = (t: string) => t.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+const content = (t: string) => new Set(words(t).filter((w) => w.length >= 3 && !STOP.has(w)));
+const swearOf = (t: string) => t.match(SWEARING)?.[0].toLowerCase() ?? null;
+
+/**
+ * Too close to a bubble shown this session (`recent`, oldest first, up to 10): the same first 3 words as one of the
+ * last 5, the same swear word as the previous one, or over 60% of its words shared with one of the last 10.
+ */
+export function repeats(t: string, recent: string[]): boolean {
+  const head = words(t).slice(0, 3).join(' ');
+  if (recent.slice(-5).some((r) => words(r).slice(0, 3).join(' ') === head)) return true;
+  const swear = swearOf(t);
+  if (swear && recent.length && swearOf(recent[recent.length - 1]) === swear) return true;
+  const mine = content(t);
+  return (
+    mine.size > 0 &&
+    recent.slice(-10).some((r) => {
+      const theirs = content(r);
+      return [...mine].filter((w) => theirs.has(w)).length / mine.size > 0.6;
+    })
+  );
+}
+
+/** Longer than BUBBLE_MAX: cut at the last clause end that fits (else the last whole word), ending in a full stop. */
 function cut(s: string): string {
-  if (s.length <= QUIP_MAX) return s;
-  const head = s.slice(0, QUIP_MAX);
+  if (s.length <= BUBBLE_MAX) return s;
+  const head = s.slice(0, BUBBLE_MAX);
   const at = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '), head.lastIndexOf(': '), head.lastIndexOf(' — '));
   let keep = at > 30 ? head.slice(0, at) : head.slice(0, head.lastIndexOf(' '));
   while (DANGLING.test(keep)) keep = keep.replace(DANGLING, '');
   return keep.replace(/[\s,;:—-]+$/, '') + '.';
 }
 
-/** The clauses of a sentence as sentences of their own ("..., which is damn bad engineering." → "That is damn bad engineering."). */
-function clauses(s: string): string[] {
-  const parts = s.replace(/[.!?]+$/, '').split(/,\s+|;\s+|\s+—\s+/);
-  const out = parts.length < 2 ? [] : parts.map((p) => sentence(p.trim().replace(/^which\b/i, 'that').replace(/^(?:and|but|so|because|although|though|while|yet)\s+/i, '')));
-  // Also the head of each before a "when/because/..." clause: "That is damn reckless when I already marked..." → "That is damn reckless."
-  for (const p of [s, ...out]) {
-    const head = p.replace(/[.!?]+$/, '').split(/\s+(?:when|because|after|before|since|until|if|while)\s+/i)[0];
-    if (head.length < p.length - 2) out.push(sentence(head));
-  }
-  return out.filter((c) => c.split(/\s+/).length >= 4); // not list items ("400 filters.")
-}
-
-export function quip(text: string, spice: SpiceLevel = 'unhinged', o: { partial?: boolean } = {}): string {
-  const clean = spice === 'clean';
-  const all = sentences(text, !!o.partial);
-  const usable = (s: string) => s.length >= 12 && s.length <= QUIP_MAX && !hasCode(s) && !(clean && SWEARING.test(s)) && !lineProblem(s, { clean });
-  const whole = all.filter(({ raw, s }) => !HAS_CITE.test(raw) && usable(s)).map((x) => x.s);
-  const parts = all.flatMap(({ s }) => clauses(s)).filter(usable);
-  const spicy = (xs: string[]) => (clean ? [] : xs.filter((s) => SWEARING.test(s) || OUTBURST.test(s)));
-  const shortest = (xs: string[]) => [...xs].sort((a, b) => a.length - b.length)[0];
-  // The curse or the joke (a whole sentence, else a clause of one), else the shortest plain line without code.
-  const pick = shortest(spicy(whole)) ?? shortest(spicy(parts)) ?? shortest(whole) ?? shortest(parts);
-  if (pick) return pick;
-  // Nothing short: the first sentence without code, cut at a clause end. All code: point at the full text.
-  const first = all.find(({ s }) => !hasCode(s) && !(clean && SWEARING.test(s)))?.s;
-  if (first) return cut(first);
-  if (!all.length) return '';
-  const pointers = POINT[clean ? 'clean' : 'spicy'];
-  return pointers[[...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % pointers.length];
-}
 const POINT = {
   clean: ['The details are in the transcript.', "It's all written down in the transcript.", "Read the transcript. I'm not repeating it."],
   spicy: ['The damn details are in the transcript.', "It's all in the transcript, damn it.", "Read the transcript. I'm not repeating that shit."],
 };
+
+/**
+ * The fallback bubble: the answer's first plain-language sentence (no code, citations dropped, clean at clean), cut at
+ * a clause end. An answer that is all code points at the transcript instead.
+ */
+export function quip(text: string, spice: SpiceLevel = 'unhinged'): string {
+  const clean = spice === 'clean';
+  const sentences = text
+    .replace(/^\s*(?:\d+\.|[-*])\s+/gm, '')
+    .split(/\n+/)
+    .flatMap((l) => l.split(/(?<=[.!?])\s+/))
+    .map((s) => s.replace(CITE, '').replace(/\*\*|__/g, '').replace(/\s+([.,;:!?])/g, '$1').replace(/\s{2,}/g, ' ').trim())
+    .filter((s) => s.length >= 12);
+  const first = sentences.find((s) => !hasCode(s) && !(clean && SWEARING.test(s)) && !/^why it matters\b/i.test(s));
+  if (first) return cut(first);
+  if (!sentences.length) return '';
+  const pointers = POINT[clean ? 'clean' : 'spicy'];
+  return pointers[[...text].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % pointers.length];
+}
+
+/** The bubble to show: the AI's, if it passes and doesn't repeat a recent one; else the fallback from the full text. */
+export function chooseBubble(ai: unknown, full: string, spice: SpiceLevel, recent: string[]): string {
+  const t = cleanBubble(ai);
+  return t && bubbleOk(t, spice) && !repeats(t, recent) ? t : quip(full, spice);
+}
+
+/** The rule every route gives the model for a bubble field (or chat's "@@bubble:" line). */
+export const BUBBLE_RULE =
+  "the short form of its main point in the speaker's own voice: one sentence, at most 90 characters, no citations, no code, no backticks, no file paths, no identifiers with brackets or underscores. Name the specific thing it is about (the behaviour, the bug, the line) in plain words, so it could not fit anything else. Swearing follows the spice level: at most one swear word, never required. Don't repeat a sentence of the text word for word";
+
+/** For the dynamic part of a prompt: the last bubbles shown this session, not to be echoed. */
+export function recentBlock(v: unknown): string {
+  const recent = (Array.isArray(v) ? v : [])
+    .slice(-5)
+    .filter((r): r is string => typeof r === 'string' && !!r.trim())
+    .map((r) => r.replace(/\s+/g, ' ').slice(0, 120));
+  return recent.length ? `\nBubbles already shown in this session (don't reuse these openings or swear words):\n${recent.map((r) => `- ${r}`).join('\n')}\n` : '';
+}

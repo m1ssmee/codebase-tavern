@@ -5,12 +5,11 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import dynamic from 'next/dynamic';
 import { useTavern } from '@/lib/store';
-import { quip } from '@/lib/quip';
 import { sendChat } from '../ChatPanel';
 import { useCast3D } from '../cast/settings';
 import { reducedMotion } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
-import { actorOf, thinkWhile, useStage, type Bubble, type Member } from './store';
+import { actorOf, recentBubbles, thinkWhile, useStage, type Bubble, type Member } from './store';
 import { bus, lineAt, lineBox } from './bus';
 import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
 import { perchNear, tickPerches, typed } from './perches';
@@ -453,18 +452,19 @@ function Bubbles() {
 }
 
 /**
- * The bubble over a character. When its text is in full elsewhere (a chat answer in the transcript, a What-if
- * reaction in the panel; scenes pass quips for the rest), it shows only the quip, about 5 s, then fades; a click
- * scrolls to the full text. Thinking cues and the lines that live only here show as they are.
+ * The bubble over a character: the short, in-character version of an answer whose full text is in the transcript or
+ * a panel (the AI's bubble, checked and guarded against repeats, else the fallback; scenes and What-if choose it), set
+ * once the answer is in; about 5 s, then fades; a click scrolls to the full text. Until then, the thinking cue. Lines
+ * that live only here show as they are.
  */
 function BubbleView({ id, b, reaction, now }: { id: string; b?: Bubble; reaction?: string; now: number }) {
   const live = useTavern((s) => (b?.msg ? s.chats[b.msg.mod]?.find((m) => m.id === b.msg!.id) : undefined));
-  const streaming = useTavern((s) => s.isLoading);
-  const spice = useTavern((s) => s.spice);
   const thinking = useThinking(id);
   const name = useTavern((s) => (id === 'judge' ? 'The Judge' : id === 'landlord' ? 'The Landlord' : (s.characters[id]?.name ?? id)));
   if (live?.role === 'system') return null;
-  const body = live ? quip(live.text, spice, { partial: streaming }) : b ? b.text : reaction ? quip(reaction, spice) : '';
+  // Its bubble text, set once the answer is in (a chat answer shows the thinking cue until then), or a What-if reaction's.
+  const body = b ? b.text : (reaction ?? '');
+  if (b?.msg && !body && !thinking) return null; // the answer is in, its bubble a moment away: nothing in between
   const link = b?.msg ? `msg-${b.msg.id}` : (b?.link ?? (reaction && !b ? `whatif-${id}` : undefined));
   const fading = !!b?.until && b.until - now < 700;
   return (
@@ -595,7 +595,7 @@ export function Menu({ id }: { id: string }) {
         { label: 'Roast me', run: go(() => scenes.roastMe(id, send)) },
         { label: 'What if I change you?', run: go(() => scenes.whatIfMe(id)) },
         // Written on request (store.getGossip): the character's thinking cue while it's written.
-        { label: 'Gossip', run: go(async () => (await thinkWhile([id], useTavern.getState().getGossip(id)), scenes.gossip(id))) },
+        { label: 'Gossip', run: go(async () => (await thinkWhile([id], useTavern.getState().getGossip(id, recentBubbles(5))), scenes.gossip(id))) },
         { label: 'Pick a fight with…', run: () => setFight(true) },
       ];
   const n = items.length;
@@ -603,7 +603,8 @@ export function Menu({ id }: { id: string }) {
   return (
     <div ref={(el) => void (menuEl.current = el)} data-stage-menu className="absolute top-0 left-0" role="menu" aria-label={`${characters[id]?.name ?? id}`} onKeyDown={(e) => menuKeys(e, close, id)}>
       {fight ? (
-        <div className="pointer-events-auto absolute -translate-x-1/2 translate-y-14 rounded-xl border border-edge bg-panel p-1 shadow-lg">
+        // Centred on the character (placeMenu keeps that point inside the window), so the list never runs off-screen.
+        <div className="pointer-events-auto absolute max-h-[70vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-edge bg-panel p-1 shadow-lg">
           <div className="px-2 py-1 text-[11px] font-medium text-muted">Pick a fight with</div>
           {items.map((it, i) => (
             <button key={it.label} ref={i === 0 ? first : undefined} role="menuitem" type="button" onClick={it.run} className="block w-full rounded-lg px-2 py-1 text-left text-xs whitespace-nowrap text-cream hover:bg-wood focus-visible:bg-wood focus-visible:outline-none">

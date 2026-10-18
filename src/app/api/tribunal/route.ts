@@ -8,6 +8,7 @@ import { editLines } from '@/lib/editor';
 import { codeFacts, knownNumbers, numbersIn, unswear } from '@/lib/guards';
 import { participantId, parseSequence, sanitizeDiagram } from '@/lib/diagram';
 import type { Citation } from '@/lib/types';
+import { BUBBLE_RULE, cleanBubble, recentBlock } from '@/lib/quip';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -41,7 +42,7 @@ const VERDICT = obj({
     diagram: { type: 'string', description: 'Mermaid sequenceDiagram of how the bug happens (see the rules).' },
   });
 const TRIAL_SCHEMA = obj({
-  turns: { type: 'array', items: obj({ moduleId: S, text: S, accuses: { type: 'string', description: 'moduleId being accused, or "" if none' } }) },
+  turns: { type: 'array', items: obj({ moduleId: S, text: S, accuses: { type: 'string', description: 'moduleId being accused, or "" if none' }, bubble: { type: 'string', description: "the speech bubble over the speaker for this turn" } }) },
   verdict: VERDICT,
 });
 const VERDICT_SCHEMA = obj({ verdict: VERDICT });
@@ -189,6 +190,7 @@ Rules:
 - turns: 6-8 items in two rounds. Round 1: every suspect speaks once (defends itself or accuses another). Round 2: rebuttals. Each turn is 2-3 sentences, first person, in that module's voice.
 - In a turn, cite [path:line] or [path:start-end] ONLY from the speaker's own files, using the line numbers shown before "|". Never invent code.
 - accuses: the moduleId being accused in that turn, or "" if none.
+- bubble: the speech bubble shown over the speaker for that turn: ${BUBBLE_RULE}. No two bubbles of the hearing open the same way.
 - verdict.culprits: every moduleId whose code is needed for the bug to happen (often more than one).
 - verdict.rootCause: plain sentences, no jokes, as the mode rules at the end say. verdict.evidence: the key citations from any suspect. verdict.fix: one small unified diff to one file shown that changes executable code in at least one culprit module; a diff that only touches comments, whitespace or tests is rejected (tests may be added alongside a real code change). Context lines must match the code shown. Prefer the fix that removes the root cause over one that hides the symptom (e.g. an idempotency key over a longer timeout). If both matter, put the root-cause fix first and mention the other in one line. Never make a longer timeout the main fix when the evidence shows a retry without an idempotency key. Fix the duplicate first. verdict.judgeLine: 3 variants of one dry closing sentence from the judge, three different jokes, each naming a culprit or a real value from the case; an editor picks the best one.
 - verdict.diagram: a Mermaid sequenceDiagram showing how the bug happens, step by step, at most 10 messages:
@@ -209,6 +211,7 @@ Mode rules:
 - Turns: ${b.mode === 'expert' ? 'standard technical terms are fine.' : `no undefined jargon (plain words, or define the term in parentheses, never square brackets). ${PLAIN_WORDS}`}
 - verdict.rootCause: ${b.mode === 'expert' ? '2 plain sentences, no jokes, exact mechanism.' : '2-3 plain sentences a beginner can follow, no jokes: plain words, and every technical term defined in parentheses (not square brackets) on first use (e.g. "idempotency key (a unique ID that lets a service spot a repeated request)").'}
 
+${recentBlock(b.recentBubbles)}
 ${levelReminder(b.spice)}`;
 
     const prompt = `Bug report: ${bug}`;
@@ -221,7 +224,7 @@ ${levelReminder(b.spice)}`;
     const cleanTurn = (t: unknown) => {
       const x = t as Out['turns'][number];
       if (!x || !ids.includes(x.moduleId) || !str(x.text, 10)) return null;
-      return { moduleId: x.moduleId, text: clean(str(x.text, 600), x.moduleId), accuses: ids.includes(x.accuses) && x.accuses !== x.moduleId ? x.accuses : undefined };
+      return { moduleId: x.moduleId, text: clean(str(x.text, 600), x.moduleId), accuses: ids.includes(x.accuses) && x.accuses !== x.moduleId ? x.accuses : undefined, bubble: cleanBubble((x as { bubble?: unknown }).bubble).slice(0, 200) };
     };
 
     // NDJSON to the client: {type:'turn'} per turn the moment it closes, then {type:'verdict'}, then {type:'timings'}.

@@ -13,7 +13,7 @@ import CitationChip from './CitationChip';
 import VerdictDiagram from './VerdictDiagram';
 import Rich from './Rich';
 import { useCast3D } from './cast/settings';
-import { think, useStage } from './stage/store';
+import { recentBubbles, think, useStage } from './stage/store';
 import { Cue } from './Thinking';
 import { stageDo } from './stage/api';
 import { ModuleFace } from './Portrait';
@@ -21,7 +21,7 @@ import { ModuleFace } from './Portrait';
 // three.js loads only when the 3D cast is on and a hearing starts.
 const TribunalStage = dynamic(() => import('./cast/TribunalStage'), { ssr: false, loading: () => <div className="h-44 border-b border-edge bg-ink/40" /> });
 
-type Turn = { moduleId: string; text: string; accuses?: string };
+type Turn = { moduleId: string; text: string; accuses?: string; bubble?: string; bubbleClean?: string };
 type Verdict = { culprits: string[]; rootCause: string; evidence: Citation[]; fix: { path: string; diff: string }; judgeLine: string; diagram?: string };
 type Result = { suspects: string[]; turns: Turn[]; verdict: Verdict };
 type Phase = 'input' | 'picking' | 'hearing' | 'playing' | 'verdict' | 'error';
@@ -30,8 +30,6 @@ const SUGGESTION = 'Customers are being charged twice';
 const DEMO = demoTribunal as unknown as Result;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DEMO_FIRST_TURN_LIMIT_MS = 20_000;
-const SLOW_NOTE = 'Replaying a saved hearing (live AI is slow right now).';
-const DOWN_NOTE = 'Replaying a saved hearing (live AI is unavailable right now).';
 
 async function post<T>(body: object, signal?: AbortSignal): Promise<T> {
   const res = await fetch('/api/tribunal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
@@ -253,6 +251,7 @@ export default function TribunalPanel() {
         signal: ctrl.signal,
         body: JSON.stringify({
           stage: 'trial',
+          recentBubbles: recentBubbles(5),
           bug: text,
           spice,
           mode: useTavern.getState().mode,
@@ -316,7 +315,7 @@ export default function TribunalPanel() {
       if (stop.current) return;
       console.warn('[tribunal]', err);
       // Demo safety: on the demo repo, replay the saved hearing instead of stalling or failing on stage.
-      if (isDemoRepo && DEMO.turns?.length) await replay(DEMO, ctrl.signal.aborted ? SLOW_NOTE : DOWN_NOTE);
+      if (isDemoRepo && DEMO.turns?.length) await replay(DEMO, null);
       else setPhase('error');
     }
   };

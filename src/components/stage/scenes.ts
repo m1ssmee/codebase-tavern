@@ -7,14 +7,14 @@ import { extractCitations, isValidCitation } from '@/lib/citations';
 import { blipText } from '@/lib/blips';
 import { dependentsOf } from '@/lib/graph';
 import { entryFile, isCode } from '@/lib/analyze';
-import { aiOffLine, flingLine, needsLine, needsSummary, neverMet } from '@/lib/stageLines';
-import { quip } from '@/lib/quip';
+import { deflection, flingLine, needsLine, needsSummary, neverMet } from '@/lib/stageLines';
+import { archetypeOf } from '../Portrait';
 import type { Citation, ChatMessage } from '@/lib/types';
 import demoArgue from '@/data/demoArgue.json';
 import { getActor } from '../cast/anim/actor';
 import { bonk, bored as boredGag, click as clickActor, completeFix as fixGag, judgeVerdict, outOfScope, roast as roastGag, undo as undoGag } from '../cast/anim/director';
 import { reducedMotion } from '../cast/settings';
-import { actorOf, addGrudge, grudgeOf, think, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
+import { actorOf, addGrudge, bubbleFor, grudgeOf, recentBubbles, think, useStage, type Anchor, type Bubble, type Member, type MemberKind, type Role } from './store';
 import { bus, lineBox, reveal } from './bus';
 import { aims, anchorPoint, codeRect, leftBlocked, placed, sizeOf } from './geo';
 import { resetPerches } from './perches';
@@ -150,11 +150,21 @@ function transcript(speakerId: string, text: string, role: ChatMessage['role'] =
   t.addMessage(mod, { id, role, characterId: speakerId, text, citations: extractCitations(text).filter((c) => isValidCitation(c, t.repo?.files ?? [])) });
   return `msg-${id}`;
 }
-/** Said in the transcript in full; the bubble gets the quip (the line with the most personality) and links to it. */
-async function sayBoth(id: string, text: string, o: { keep?: number; avoid?: Citation | null } = {}) {
+/**
+ * Said in the transcript in full; the bubble gets its short version (the AI's `bubble`, checked, else the fallback),
+ * shown at once (never typed out or swapped), with the voice; about 5 s, linked to the full text.
+ */
+async function sayBoth(id: string, text: string, o: { keep?: number; avoid?: Citation | null; bubble?: string } = {}) {
   const link = transcript(id, text);
-  await typeOut(id, quip(text, T().spice), { keep: 5000, ...o, link });
+  const said = bubbleFor(o.bubble, text);
+  actor(id)?.setTalking(true);
+  say(id, { text: said, avoid: o.avoid, link, until: Date.now() + (o.keep ?? 5000) });
+  blipText(said, T().characters[id]?.voicePitch ?? 1, T().muted);
+  await sleep(Math.min(2500, 400 + said.length * 25));
+  actor(id)?.setTalking(false);
 }
+const archOf = (id: string) => (id === 'judge' || id === 'landlord' ? id : archetypeOf(T().repo?.modules ?? [], id));
+const cleanSpice = () => T().spice === 'clean';
 
 // ---------- pointing ----------
 async function until(ok: () => boolean, ms: number) {
@@ -243,17 +253,24 @@ async function tour(id: string, text: () => string, done: () => boolean) {
  */
 export async function answer(mod: string, msgId: string, focus: Citation | null) {
   const msg = () => T().chats[mod]?.find((m) => m.id === msgId);
-  // On the Neighbourhood and the Blueprint: the answer streams into a bubble over its character.
+  // The thinking cue holds until the answer is in; then its bubble shows once (never swapped mid-stream), ~5 s.
+  const land = async () => {
+    await until(() => !T().isLoading || msg()?.role === 'system', 120_000);
+    const m = msg();
+    if (!m || m.role === 'system') return; // the in-character error is in the transcript
+    const text = bubbleFor(m.bubble, m.text);
+    useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], text, until: Date.now() + 5000 } } } : {}));
+  };
+  // On the Neighbourhood and the Blueprint: the bubble over its character.
   if (onMap()) {
     say(mod, { text: '', msg: { mod, id: msgId } });
-    await until(() => !T().isLoading || msg()?.role === 'system', 60_000);
-    useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 5000 } } } : {}));
-    return;
+    return land();
   }
   if (!visible()) return;
   speaker(mod);
   busy(mod, true);
   say(mod, { text: '', msg: { mod, id: msgId }, avoid: focus });
+  void land();
   if (focus) await pointLine(mod, focus, { hold: 1.4 });
   // Somebody else's code: "Not mine." It points at the owner (who floats in if it isn't here), then the gesture.
   const owner = focus ? ownerOf(focus.path) : undefined;
@@ -266,7 +283,6 @@ export async function answer(mod: string, msgId: string, focus: Citation | null)
   }
   await tour(mod, () => msg()?.text ?? '', () => !T().isLoading || msg()?.role === 'system');
   busy(mod, false);
-  useStage.setState((s) => (s.bubbles[mod]?.msg?.id === msgId ? { bubbles: { ...s.bubbles, [mod]: { ...s.bubbles[mod], until: Date.now() + 5000 } } } : {}));
   settle(mod, 6000);
 }
 
@@ -278,7 +294,10 @@ export async function gossip(id: string) {
   if (!lines.length) return;
   speaker(id);
   const line = lines[Math.floor(Math.random() * lines.length)];
-  await sayBoth(id, line);
+  // Its bubble came with the line (the gossip call, or the saved cast, with clean versions at clean).
+  const i = (c?.gossip ?? []).indexOf(line);
+  const bubble = (cleanSpice() ? c?.gossipBubblesClean?.[i] : undefined) ?? c?.gossipBubbles?.[i];
+  await sayBoth(id, line, { bubble });
 }
 
 /** "Roast me": the character roasts itself (a chat turn), the neighbours on stage laugh; it holds a grudge after. */
@@ -353,7 +372,7 @@ export function endScene() {
 }
 
 // ---------- arguments ----------
-type Turn = { moduleId: string; text: string };
+type Turn = { moduleId: string; text: string; bubble?: string; bubbleClean?: string };
 const saved = (demoArgue as { pairs: { a: string; b: string; turns: Turn[] }[] }).pairs;
 
 /** Two modules argue about their real dependency (imports and calls between them), or find they never met. */
@@ -376,7 +395,9 @@ export async function argue(a: string, b: string) {
     ended = true;
   } else if (t.demo) {
     const pair = saved.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
-    queue.push(...(pair?.turns ?? [{ moduleId: a, text: aiOffLine(t.spice, a) }]));
+    // Saved turns carry their bubbles (clean versions at clean); a pair with none: a deflects.
+    const no = deflection(archOf(a));
+    queue.push(...(pair?.turns.map((x) => ({ ...x, bubble: cleanSpice() ? (x.bubbleClean ?? x.bubble) : x.bubble })) ?? [{ moduleId: a, text: no.text, bubble: no.bubble }]));
     ended = true;
   } else void streamArgument(a, b, refs, (turn) => queue.push(turn)).finally(() => (ended = true));
   let last: Turn | null = null;
@@ -393,7 +414,7 @@ export async function argue(a: string, b: string) {
       say(other, null);
       busy(turn.moduleId, true);
       const c = extractCitations(turn.text).find((x) => isValidCitation(x, t.repo!.files));
-      await Promise.all([sayBoth(turn.moduleId, turn.text, { avoid: c }), c ? pointLine(turn.moduleId, c, { hold: 1 }) : Promise.resolve()]);
+      await Promise.all([sayBoth(turn.moduleId, turn.text, { avoid: c, bubble: turn.bubble }), c ? pointLine(turn.moduleId, c, { hold: 1 }) : Promise.resolve()]);
       busy(turn.moduleId, false);
       setAnchor(turn.moduleId, { k: 'row', i: turn.moduleId === a ? 0 : 1, n: 2 });
       await sleep(350);
@@ -405,7 +426,7 @@ export async function argue(a: string, b: string) {
   }
   stopWaiting();
   if (!queue.length) {
-    await typeOut(a, "We're not doing this right now. The AI is out, so there's nobody to write my comebacks.", { keep: 4000 });
+    await typeOut(a, deflection(archOf(a)).text, { keep: 4000 }); // only in the bubble: said in full
   } else if (last) {
     // The last word ends with a bonk (unhinged and up); clean gets a long glare.
     const other = last.moduleId === a ? b : a;
@@ -430,6 +451,7 @@ async function streamArgument(a: string, b: string, refs: { file: string; line: 
       repoName: t.repo!.name,
       spice: t.spice,
       mode: t.mode,
+      recentBubbles: recentBubbles(5),
       a: character(a),
       b: character(b),
       refs: refs.slice(0, 12).map((r) => ({ from: r.from, to: r.to, kind: r.kind, file: r.file, line: r.line, endLine: r.endLine })),
@@ -505,11 +527,11 @@ const home = (id: string) => {
 };
 const seat = new Map<string, Anchor>();
 /** A turn starts: an accusation bonks first (accuser to accused), then the speaker walks to its evidence and points. */
-export async function courtTurn(turn: { moduleId: string; text: string; accuses?: string }) {
+export async function courtTurn(turn: { moduleId: string; text: string; accuses?: string; bubble?: string; bubbleClean?: string }) {
   if (S().scene !== 'tribunal') return;
   const id = turn.moduleId;
-  // The turn is in full in the Tribunal's transcript: the bubble types its quip out alongside.
-  said.set(id, { q: quip(turn.text, T().spice) });
+  // The turn is in full in the Tribunal's transcript: the bubble types the turn's own bubble out alongside.
+  said.set(id, { q: bubbleFor(cleanSpice() ? (turn.bubbleClean ?? turn.bubble) : turn.bubble, turn.text) });
   useStage.setState((s) => ({ bubbles: { [id]: { text: '', link: 'tribunal-end' } }, busy: { ...s.busy, [id]: true } }));
   const a = home(id);
   if (a) seat.set(id, a);
@@ -520,7 +542,7 @@ export async function courtTurn(turn: { moduleId: string; text: string; accuses?
 const said = new Map<string, { q: string }>();
 export const courtSay = (id: string, typed: string) => {
   const w = said.get(id);
-  const text = w ? w.q.slice(0, typed.length) : typed; // typed at the panel's pace, so the short quip is up at once
+  const text = w ? w.q : typed; // the turn's own bubble, whole, while the panel types the turn out
   if (S().scene === 'tribunal') useStage.setState((s) => ({ bubbles: { ...s.bubbles, [id]: { ...s.bubbles[id], text } } }));
 };
 export function courtTurnEnd(id: string) {
