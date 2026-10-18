@@ -160,6 +160,12 @@ export async function sendChat(text: string, o: { moduleId?: string } = {}) {
 export default function ChatPanel() {
   const { repo, characters, moods, selectedModuleId, openFilePath, chats, isLoading } = useTavern();
   const thinking = useStage((s) => s.thinking);
+  // Its AI persona still on the way: the selected character shows the thinking cue (here at once, and on the stage
+  // once that loads) until it arrives.
+  const personaDue = useTavern((s) => s.personas === 'pending' && !!s.selectedModuleId && !s.arrivals[s.selectedModuleId]);
+  useEffect(() => {
+    if (personaDue && selectedModuleId) return think([selectedModuleId]);
+  }, [personaDue, selectedModuleId]);
   const [input, setInput] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const mod = repo?.modules.find((m) => m.id === selectedModuleId);
@@ -230,6 +236,7 @@ export default function ChatPanel() {
           </div>
           {char && <div className="mt-0.5 text-sm text-cream/80 italic">&ldquo;{char.catchphrase}&rdquo;</div>}
           <div className="mt-1 font-mono text-xs text-muted">{statsLine(mod.stats)}</div>
+          {personaDue && <ThinkingText id={mod.id} className="mt-1 block text-sm text-muted italic" />}
         </div>
       </div>
 

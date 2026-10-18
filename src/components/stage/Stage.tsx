@@ -10,7 +10,7 @@ import { sendChat } from '../ChatPanel';
 import { useCast3D } from '../cast/settings';
 import { reducedMotion } from '../cast/settings';
 import { getActor } from '../cast/anim/actor';
-import { actorOf, think, thinkWhile, useStage, type Member } from './store';
+import { actorOf, thinkWhile, useStage, type Member } from './store';
 import { bus, lineAt, lineBox } from './bus';
 import { anchorPoint, codeRect, cursor, perches, placed, sizeOf, updateAim, zooms, zoomTarget } from './geo';
 import { perchNear, tickPerches, typed } from './perches';
@@ -53,11 +53,6 @@ export default function Stage() {
   useEffect(() => {
     if (selected && !useStage.getState().scene) scenes.castFor(selected);
   }, [selected]);
-  // Its AI persona still on the way: the selected character shows the thinking cue until it arrives.
-  const personaDue = useTavern((s) => s.personas === 'pending' && !!s.selectedModuleId && !s.arrivals[s.selectedModuleId]);
-  useEffect(() => {
-    if (personaDue && selected) return think([selected]);
-  }, [personaDue, selected]);
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
