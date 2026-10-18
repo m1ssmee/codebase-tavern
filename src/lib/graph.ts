@@ -179,8 +179,16 @@ export function buildGraph(files: RepoFile[], modules: Module[]): Graph {
       return m ? [{ mod: m[1], dir: dirOf(f.path) }] : [];
     })
     .sort((a, b) => b.mod.length - a.mod.length);
+  // A Go package is a folder: an import of it lands on the module that is that folder (the root module for the
+  // root package, even when its biggest files are tenants of their own), else on the folder's first file.
+  const modPath = new Map(modules.map((m) => [m.id, m.path]));
   const goDirs = new Map<string, string>();
-  for (const f of files) if (GO.test(f.path) && !goDirs.has(dirOf(f.path))) goDirs.set(dirOf(f.path), f.path);
+  for (const f of files) {
+    if (!GO.test(f.path)) continue;
+    const d = dirOf(f.path);
+    const own = modPath.get(owner.get(f.path) ?? '') === d;
+    if (!goDirs.has(d) || (own && modPath.get(owner.get(goDirs.get(d)!) ?? '') !== d)) goDirs.set(d, f.path);
+  }
   const resolveGo = (spec: string): string | null | undefined => {
     const m = goMods.find((g) => spec === g.mod || spec.startsWith(g.mod + '/'));
     if (!m) return undefined; // the standard library or another module

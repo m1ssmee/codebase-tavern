@@ -9,7 +9,7 @@ export type ModuleStats = {
   hasTests: boolean;
 };
 
-export type Module = { id: string; name: string; path: string; filePaths: string[]; stats: ModuleStats };
+export type Module = { id: string; name: string; path: string; filePaths: string[]; stats: ModuleStats; main?: string /* its main file: source code over docs (entryFile) */ };
 
 export type Character = {
   moduleId: string;

@@ -57,7 +57,8 @@ const py = { path: 'm/a.py', content: 'def f():\n    if x:\n        for y in z:\
 const js = { path: 'm/index.js', content: 'function a() { if (b) { c({}) } } // FIXME XXX', lineCount: 1 };
 const st = computeStats({ filePaths: ['m/a.py', 'm/index.js'] }, [py, js]);
 assert.deepEqual([st.maxNesting, st.todoCount, st.hasTests, st.biggestFile.path], [3, 3, false, 'm/a.py']);
-assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js', 'm/sub/README.md'], stats: st }), 'm/sub/README.md');
+assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js', 'm/sub/README.md'], stats: st }), 'm/index.js'); // code beats the README
+assert.equal(entryFile({ filePaths: ['m/guide.md', 'm/sub/README.md'], stats: { ...st, biggestFile: { path: 'm/guide.md', lines: 9 } } }), 'm/sub/README.md'); // no code: the README
 assert.equal(entryFile({ filePaths: ['m/z.js', 'm/index.js'], stats: st }), 'm/index.js');
 
 console.log('checks ok');
@@ -157,7 +158,7 @@ assert.equal(keywordArchetype('feedback'), null); // whole tokens only, no "db" 
 assert.equal(keywordArchetype('Payment'), 'accountant'); // case and plural folded
 const M = (id, filePaths, s = {}) => ({ id, name: id, path: id, filePaths, stats: { fileCount: 1, totalLines: 50, biggestFile: { path: '', lines: 50 }, todoCount: 0, maxNesting: 1, hasTests: false, ...s } });
 assert.deepEqual(castOf([M('core', ['core/server.ts', 'core/README.md']), M('x', ['x/a.ts']), M('y', ['y/b.ts'], { todoCount: 5 }), M('z', ['z/z.test.ts'])]), {
-  core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'clerk', // tests aren't main files
+  core: 'doorman', x: 'hoarder', y: 'junkDrawer', z: 'junkDrawer*', // tests aren't main files; untested → Junk Drawer (the alternate)
 });
 // a repeat tries its next-best match before the alternate variant
 assert.deepEqual(castOf([M('api', ['api/routes.ts']), M('handlers', ['handlers/db.ts'])]), { api: 'clerk', handlers: 'plumber' });
@@ -871,4 +872,95 @@ console.log('judge template checks ok');
   assert.equal(hits['sk-busy'], 1);
   server.close();
   console.log('retry policy checks ok');
+}
+
+// Casting and AI polish: importance ranking, the root rule, the main-file rule, Go imports into a split root.
+{
+  const { detectModules, importance, mainFile, entryFile } = await import('../src/lib/analyze.ts');
+  const { assignCast } = await import('../src/lib/cast.ts');
+  const { buildGraph } = await import('../src/lib/graph.ts');
+  const F = (path, content = 'x\nx\n') => ({ path, content, lineCount: content.split('\n').length });
+  const L = (n, head = '') => head + 'x\n'.repeat(n);
+  // importance: who depends on it beats size; the repo's own name (react, react-dom) counts
+  const pk = (name, lines, imports = []) => F(`packages/${name}/src/index.js`, imports.map((i) => `import x from '${i}';\n`).join('') + L(lines));
+  const mono = [
+    pk('big-tool', 3000), pk('tool-b', 2500), pk('tool-c', 2400), pk('tool-d', 2300), pk('tool-e', 2200), pk('tool-f', 2100), pk('tool-g', 2000), pk('tool-h', 1900),
+    pk('react', 300), pk('react-dom', 400, ['react']), pk('shared', 200), pk('scheduler', 150, ['shared']),
+    pk('reconciler', 900, ['shared', 'scheduler', 'react']), pk('art', 100, ['reconciler', 'shared', 'react']),
+  ];
+  const cast = detectModules(mono, 'facebook/react').map((m) => m.name);
+  for (const n of ['react', 'react-dom', 'shared', 'reconciler']) assert.ok(cast.includes(n), `${n} in ${cast}`);
+  assert.equal(cast.at(-1), 'misc');
+  assert.ok(!cast.includes('tool-h')); // big but nobody needs it
+  const score = importance(detectModules(mono.slice(8), 'facebook/react'), mono.slice(8), 'facebook/react');
+  assert.ok(score.get('packages/react') > score.get('packages/art')); // exact name + 3 dependents > a leaf
+  // the root: the Librarian only when it is mostly docs or config; otherwise from its content like anyone else
+  const docsRoot = detectModules([F('README.md'), F('LICENSE'), F('package.json'), F('index.js', L(5)), F('lib/a.js', L(50)), F('lib/b.js', L(40))]);
+  const codeRoot = detectModules([F('go.mod', 'module github.com/spf13/cobra\n'), F('cobra.go', L(300)), F('args.go', L(200)), F('README.md'), F('doc/man.go', L(100, 'package doc\nimport "github.com/spf13/cobra"\n'))], 'spf13/cobra');
+  const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, c.archetype]));
+  assert.equal(castOf(docsRoot)['(root)'], 'librarian');
+  assert.notEqual(castOf(codeRoot)['(root)'], 'librarian');
+  // main file: source code over the README whenever the module has code (cobra's root: a .go file)
+  assert.equal(entryFile(codeRoot.find((m) => m.id === '(root)')), 'cobra.go');
+  assert.equal(mainFile([F('m/README.md', L(80)), F('m/util.py', L(30)), F('m/core.py', L(60)), F('m/test_core.py', L(500))]), 'm/core.py');
+  assert.equal(mainFile([F('m/README.md', L(80)), F('m/index.ts', L(5)), F('m/big.ts', L(600))]), 'm/index.ts');
+  assert.equal(mainFile([F('d/guide.md', L(80)), F('d/README.md', L(10))]), 'd/README.md');
+  // Go: importing the root package lands on the root module even when its biggest files are tenants
+  const goFiles = [F('go.mod', 'module github.com/spf13/cobra\n'), F('command.go', L(900)), F('completions.go', L(700)), F('flags.go', L(400)), F('args.go', L(200)), F('cobra.go', L(150)), F('util.go', L(50)), F('doc/man.go', L(300, 'package doc\nimport "github.com/spf13/cobra"\n'))];
+  const gm = detectModules(goFiles, 'spf13/cobra');
+  assert.deepEqual(buildGraph(goFiles, gm).edges.map((e) => `${e.from}>${e.to}`), ['doc>(root)']);
+  // the saved argument counts the retry right: MAX_PAYMENT_ATTEMPTS = 2 is one retry, not two
+  const { default: argue } = await import('../src/data/demoArgue.json', { with: { type: 'json' } });
+  const ordersTurn = argue.pairs[0].turns[2].text;
+  assert.ok(!/exactly twice|retry twice|two retries/i.test(ordersTurn) && /one retry/.test(ordersTurn) && /\[orders\/checkout\.ts:18\]/.test(ordersTurn), ordersTurn);
+  console.log('casting polish checks ok');
+}
+// Casting fixes: quickcart's cast frozen, at most two of an archetype, specialists only for real matches, stem groups.
+{
+  const { buildRepo, detectModules, rootUnits, entryFile } = await import('../src/lib/analyze.ts');
+  const { assignCast, GENERAL } = await import('../src/lib/cast.ts');
+  const { readFileSync } = await import('node:fs');
+  const castOf = (mods) => Object.fromEntries(assignCast(mods).map((c, i) => [mods[i].id, `${c.archetype}${c.variant ? '*' : ''}`]));
+  // the saved demo depends on this exact cast
+  const qc = JSON.parse(readFileSync(new URL('../src/data/demoRepo.json', import.meta.url), 'utf8'));
+  assert.deepEqual(castOf(buildRepo(qc.name, qc.files, qc.url).modules), { utils: 'junkDrawer', payments: 'accountant', inventory: 'hoarder', orders: 'clerk', gateway: 'doorman', auth: 'bouncer', '(misc)': 'librarian' });
+  const st = (o = {}) => ({ fileCount: 1, totalLines: 100, biggestFile: { path: '', lines: 100 }, todoCount: 0, maxNesting: 1, hasTests: true, ...o });
+  const M = (id, filePaths, s) => ({ id, name: id, path: id, filePaths, stats: st(s) });
+  const tally = (c) => Object.values(c).reduce((n, a) => ((n[a.replace('*', '')] = (n[a.replace('*', '')] ?? 0) + 1), n), {});
+  // five modules that all want the Doorman (an index file each): two get it, the rest go to stats, then the least-used general
+  const doors = castOf(['p1', 'p2', 'p3', 'p4', 'p5'].map((id, i) => M(id, [`${id}/index.js`], { totalLines: 500 - i * 50 })));
+  assert.equal(tally(doors).doorman, 2);
+  assert.deepEqual(doors, { p1: 'doorman', p2: 'doorman*', p3: 'hoarder', p4: 'clerk', p5: 'clerk*' });
+  // nothing over two while there is room: 8 modules, every archetype count <= 2
+  const eight = castOf(Array.from({ length: 8 }, (_, i) => M(`m${i}`, [`m${i}/index.js`], { totalLines: 900 - i * 10, hasTests: i % 2 === 0 })));
+  assert.ok(Object.values(tally(eight)).every((n) => n <= 2), JSON.stringify(eight));
+  // specialists only for a real match: unmatched modules never become the Inspector, Librarian, Accountant, Bouncer, Star or Plumber
+  const plain = castOf(Array.from({ length: 8 }, (_, i) => M(`box${i}`, [`box${i}/thing${i}.js`], { totalLines: 900 - i * 10 })));
+  assert.ok(Object.values(plain).every((a) => GENERAL.includes(a.replace('*', ''))), JSON.stringify(plain));
+  assert.ok(Object.values(tally(plain)).every((n) => n <= 2));
+  // ...and a code module named "docs" or "config" is not the Librarian unless it is docs-heavy
+  assert.notEqual(castOf([M('config', ['config/loader.go', 'config/env.go'])]).config, 'librarian');
+  assert.equal(castOf([M('docs', ['docs/a.md', 'docs/b.md', 'docs/c.md'])]).docs, 'librarian');
+  // a real match still wins over variety: the second payments-like module is the alternate Accountant
+  assert.deepEqual(castOf([M('payments', ['payments/a.ts']), M('billing', ['billing/b.ts'])]), { payments: 'accountant', billing: 'accountant*' });
+  // stem grouping: the completions files are one tenant, args.go keeps its test, cobra.go stays with the root
+  const F = (path, n = 10) => ({ path, content: 'x\n'.repeat(n - 1) + 'x', lineCount: n });
+  const cobra = [F('go.mod'), F('cobra.go', 200), F('command.go', 900), F('command_test.go', 800), F('command_win.go', 20), F('args.go', 150), F('args_test.go', 300), F('bash_completions.go', 500), F('bash_completionsV2.go', 400), F('powershell_completions.go', 300), F('zsh_completions.go', 250), F('fish_completions.go', 200), F('completions.go', 600), F('completions_test.go', 700), F('flag_groups.go', 250), F('active_help.go', 60), F('doc/man_docs.go', 300)];
+  const units = rootUnits(cobra.filter((f) => f.path.endsWith('.go') && !f.path.includes('/')), 'cobra');
+  const unit = (n) => units.find((u) => u.name === n)?.files.map((f) => f.path).sort();
+  assert.deepEqual(unit('completions'), ['bash_completions.go', 'bash_completionsV2.go', 'completions.go', 'completions_test.go', 'fish_completions.go', 'powershell_completions.go', 'zsh_completions.go']);
+  assert.deepEqual(unit('args'), ['args.go', 'args_test.go']);
+  assert.deepEqual(unit('command'), ['command.go', 'command_test.go', 'command_win.go']);
+  assert.ok(!units.some((u) => u.files.some((f) => f.path === 'cobra.go')));
+  const mods = detectModules(cobra, 'spf13/cobra');
+  const comp = mods.find((m) => m.name === 'completions');
+  assert.ok(comp && comp.id === '(root):completions' && entryFile(comp) === 'completions.go');
+  assert.equal(entryFile(mods.find((m) => m.id === '(root)')), 'cobra.go');
+  assert.deepEqual(unit('flag_groups.go'), ['flag_groups.go']); // one source file, no test here: stays a single file
+  const fg = rootUnits([F('flag_groups.go', 200), F('flag_groups_test.go', 300), F('x.go')], 'cobra');
+  assert.deepEqual(fg.map((u) => u.name).sort(), ['flag_groups', 'x.go']); // the shared stem names it, not "groups"
+  // the demo's saved line explanation is orders/checkout.ts:50: orders' main file must stay checkout.ts
+  const qcRepo = buildRepo(qc.name, qc.files, qc.url);
+  assert.equal(entryFile(qcRepo.modules.find((m) => m.id === 'orders')), 'orders/checkout.ts');
+  console.log('casting diversity and grouping checks ok');
 }

@@ -14,7 +14,7 @@
         },
         {
           "moduleId": "orders",
-          "text": "I retry exactly twice on `UpstreamTimeoutError` and then release stock, mark `payment_failed`, or set `paid` with `chargeId` at [orders/checkout.ts:44-68]. This damn loop is a tiny chimney for flaky shit and duplicate pressure."
+          "text": "I make at most `MAX_PAYMENT_ATTEMPTS = 2` attempts [orders/checkout.ts:18], so an `UpstreamTimeoutError` buys exactly one retry [orders/checkout.ts:44-52]; then I release stock and mark `payment_failed`, or set `paid` with the `chargeId` [orders/checkout.ts:54-67]. This damn loop is a tiny chimney for flaky shit and duplicate pressure."
         },
         {
           "moduleId": "payments",

@@ -20,7 +20,7 @@ export const CAST: Record<Archetype, { name: string; joke: string; keywords: str
   junkDrawer: { name: 'The Junk Drawer', joke: 'Everything nobody knew where to put ends up here.', keywords: ['utils', 'helpers', 'lib', 'common', 'shared', 'misc'] },
   plumber: { name: 'The Plumber', joke: "Everything flows through it, and it's held together with tape.", keywords: ['db', 'database', 'models', 'data', 'repository', 'migrations', 'store', 'schema'] },
   star: { name: 'The Star', joke: 'Flawless from the front, held together with clamps from behind.', keywords: ['ui', 'components', 'views', 'pages', 'styles', 'frontend', 'client'] },
-  librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: ['docs', 'readme', 'root', 'config', 'settings', '.github'] },
+  librarian: { name: 'The Librarian', joke: 'Knows everything; nobody has asked it anything in years.', keywords: [] }, // docs-heavy modules only (isDocsModule), never by name
   landlord: { name: 'The Landlord', joke: 'Owns the building, fixes nothing, and is tired of every tenant.', keywords: [] },
   judge: { name: 'The Judge', joke: 'Its head is a gavel: the final word, applied with blunt force.', keywords: [] },
 };
@@ -49,33 +49,54 @@ export const mainFiles = (m: Pick<Module, 'path' | 'filePaths'>) =>
   );
 
 const CONFIG_JSON = /^(\.|package|tsconfig|jsconfig|composer|vercel|netlify|turbo|lerna|nx|renovate|app\.json$)|(config|settings|rc)\.json$/i;
+// Dotfiles (.gitignore, .editorconfig, .npmrc, .eslintrc) are config too.
 const isDocOrConfig = (p: string) =>
-  /(^|\/)\.github\//.test(p) || /\.(md|mdx|txt|rst|adoc|ya?ml)$/i.test(p) || /^licen[cs]e(\.[a-z]+)?$/i.test(base(p)) || (/\.json$/i.test(p) && CONFIG_JSON.test(base(p)));
-/** At least 60% of its files are docs or config: the Librarian's territory, like root. */
+  /(^|\/)\.github\//.test(p) || /^\.[^/]+$/.test(base(p)) || /\.(md|mdx|txt|rst|adoc|ya?ml)$/i.test(p) || /^licen[cs]e(\.[a-z]+)?$/i.test(base(p)) || (/\.json$/i.test(p) && CONFIG_JSON.test(base(p)));
+/** At least 60% of its files are docs or config: the Librarian's territory (a root that is mostly README and config, too). */
 export const isDocsModule = (m: Pick<Module, 'filePaths'>) => m.filePaths.length > 0 && m.filePaths.filter(isDocOrConfig).length / m.filePaths.length >= 0.6;
 
-/** Every archetype a module could be, best first: root or docs/config, then its folder name, then its main file names. */
+/**
+ * Every archetype a module could be, best first: docs/config, then its folder name, then its main file names. The root
+ * is the Librarian only when it is mostly docs or config; otherwise its files decide, like any module ("root" says nothing).
+ */
 export function candidates(m: Module): Archetype[] {
   const fileHits = mainFiles(m).flatMap((p) => keywordArchetypes(base(p).replace(/\.[^.]+$/, '')));
-  return [...new Set<Archetype>([...(m.id === '(root)' || isDocsModule(m) ? ['librarian' as const] : []), ...keywordArchetypes(m.name), ...fileHits])];
+  return [...new Set<Archetype>([...(isDocsModule(m) ? ['librarian' as const] : []), ...(m.id === '(root)' ? [] : keywordArchetypes(m.name)), ...fileHits])];
 }
 
+/** Archetypes any module can be. The rest are specialists, only ever given for a real match: the Inspector for tests,
+ * the Librarian for docs-heavy modules, the Accountant for payments, the Bouncer for auth, the Star for UI, the Plumber for data. */
+export const GENERAL: Archetype[] = ['clerk', 'hoarder', 'junkDrawer', 'doorman'];
+const CAP = 2; // the original and its alternate variant
+
 /**
- * Each module takes its best archetype nobody has yet; if all its matches are taken, it reuses its
- * best one as the alternate variant. No match at all: the largest unmatched module is the Hoarder,
- * else 5+ TODOs and no tests is the Junk Drawer, else the Clerk. Modules are taken in the given order
- * (largest first from detectModules), so bigger modules get first pick.
+ * At most two of any archetype per cast. Modules are taken in the given order (most important first, from
+ * detectModules). First pass, real matches: an archetype nobody has yet, else one of its matches with room for the
+ * alternate variant. Everyone left (no match, or every match taken twice) gets, in order: stats (the largest of them
+ * the Hoarder; TODO-heavy or untested the Junk Drawer; else the Clerk), then the least-used general archetype; only
+ * when all of those are taken twice, a third copy of its own best match. Deterministic.
  */
 export function assignCast(modules: Module[]): { archetype: Archetype; variant: Variant }[] {
   const options = modules.map(candidates);
-  const unmatched = modules.filter((_, i) => !options[i].length);
-  const hoard = unmatched.reduce<Module | null>((a, m) => (!a || m.stats.totalLines > a.stats.totalLines ? m : a), null);
-  const seen: Partial<Record<Archetype, number>> = {};
-  return modules.map((m, i) => {
-    const fallback: Archetype = m === hoard ? 'hoarder' : m.stats.todoCount >= 5 && !m.stats.hasTests ? 'junkDrawer' : 'clerk';
-    const list = options[i].length ? options[i] : [fallback];
-    const archetype = list.find((a) => !seen[a]) ?? list[0];
-    const n = (seen[archetype] = (seen[archetype] ?? 0) + 1);
-    return { archetype, variant: ((n - 1) % 2) as Variant };
+  const count: Partial<Record<Archetype, number>> = {};
+  const used = (a: Archetype) => count[a] ?? 0;
+  const out: { archetype: Archetype; variant: Variant }[] = new Array(modules.length);
+  const take = (i: number, a: Archetype) => {
+    const n = (count[a] = used(a) + 1);
+    out[i] = { archetype: a, variant: ((n - 1) % 2) as Variant };
+  };
+  const rest: number[] = [];
+  modules.forEach((_, i) => {
+    const a = options[i].find((x) => !used(x)) ?? options[i].find((x) => used(x) < CAP);
+    if (a) take(i, a);
+    else rest.push(i);
   });
+  const largest = rest.reduce<number | null>((a, i) => (a === null || modules[i].stats.totalLines > modules[a].stats.totalLines ? i : a), null);
+  for (const i of rest) {
+    const s = modules[i].stats;
+    const stat: Archetype = i === largest ? 'hoarder' : s.todoCount >= 5 || !s.hasTests ? 'junkDrawer' : 'clerk';
+    const general = [...GENERAL].sort((a, b) => used(a) - used(b) || GENERAL.indexOf(a) - GENERAL.indexOf(b))[0];
+    take(i, used(stat) < CAP ? stat : used(general) < CAP ? general : (options[i][0] ?? stat));
+  }
+  return out;
 }
